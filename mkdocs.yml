@@ -37,6 +37,7 @@ nav:
   - Wave 4 Secure + Heal Expansion: "project/wave-4-secure-heal-expansion.md"
   - Wave 5 Plan + Create + Know: "project/wave-5-plan-create-know.md"
   - Wave 6 Acceptance + Dogfooding: "project/wave-6-acceptance-and-dogfooding.md"
+  - Wave 7 Controlled Apply Rollout: "project/wave-7-controlled-apply-rollout.md"
 
 markdown_extensions:
   - attr_list

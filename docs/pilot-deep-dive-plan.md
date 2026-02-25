@@ -411,6 +411,29 @@ Exit criteria:
 
 Status: Pending.
 
+Wave 7 progress checkpoint (2026-02-25):
+- Pilot cohort selected: `ArqonContinuum`, `ArqonCortex`.
+- `multi register --tag apply-pilot` completed for both repos.
+- Preflight `multi status --tag apply-pilot` passed (exists/git/clean).
+- Branch rollout completed:
+  - `branch create feat/pilot-wave7 --base-branch dev --dry-run`
+  - `branch create feat/pilot-wave7 --base-branch dev`
+  - `branch status --tag apply-pilot` confirmed both repos on `feat/pilot-wave7`, clean.
+- Audit and JSON report artifacts were emitted for each mutating command.
+- Secure pilot execution:
+  - `secure fix --tag apply-pilot` dry-run completed.
+  - `ArqonCortex`: dry-run actionable (`cargo update`, `cargo check` planned).
+  - `ArqonContinuum`: no supported dependency manifest for secure-fix apply path (expected current behavior).
+- Controlled apply on single pilot repo:
+  - `ArqonContinuum` tagged `apply-one`.
+  - `secure fix --tag apply-one --apply` executed (non-destructive no-op, success).
+- Rollback drill completed:
+  - In `ArqonContinuum` on `feat/pilot-wave7`, created one marker commit and reverted via `git revert`.
+  - Worktree returned clean after revert.
+  - Evidence recorded via `pilot know record` (tagged `wave7`, `rollback`, `apply-pilot`).
+
+Current status: Completed on 2026-02-25.
+
 ## Wave 8: Pilot v1 Release Readiness (3 days)
 
 Goals:
@@ -542,8 +565,8 @@ Status: Pending.
 
 ## Immediate Next Actions
 
-1. Push `main` and tag baseline `pilot-v0.6-acceptance`.
-2. Start Wave 7 controlled apply rollout on 1-2 low-risk repos.
+1. Push `main` and tag baseline `pilot-v0.7-controlled-apply`.
+2. Start Wave 8 release-readiness checklist and operator runbook finalization.
 3. Add preflight checklist command for apply-mode guardrails.
 4. Draft Wave 10 packaging design note (PyPI decision: `maturin` wrapper vs pure-Python shim).
 5. Prepare `pilot-v1-rc1` acceptance gate checklist.

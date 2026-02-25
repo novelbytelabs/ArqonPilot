@@ -53,12 +53,14 @@ pub fn fix_repo(repo_path: &Path, dry_run: bool) -> Result<Vec<SecureFixAction>>
             repo_path,
             "cargo update",
             vec!["cargo", "update"],
+            true,
             dry_run,
         ));
         actions.push(run_fix_step(
             repo_path,
             "cargo check",
             vec!["cargo", "check"],
+            false,
             dry_run,
         ));
     }
@@ -68,6 +70,7 @@ pub fn fix_repo(repo_path: &Path, dry_run: bool) -> Result<Vec<SecureFixAction>>
             repo_path,
             "pip-audit --fix -r requirements.txt",
             vec!["pip-audit", "--fix", "-r", "requirements.txt"],
+            true,
             dry_run,
         ));
     }
@@ -85,7 +88,13 @@ pub fn fix_repo(repo_path: &Path, dry_run: bool) -> Result<Vec<SecureFixAction>>
     Ok(actions)
 }
 
-fn run_fix_step(repo_path: &Path, display: &str, cmd: Vec<&str>, dry_run: bool) -> SecureFixAction {
+fn run_fix_step(
+    repo_path: &Path,
+    display: &str,
+    cmd: Vec<&str>,
+    require_clean_before_apply: bool,
+    dry_run: bool,
+) -> SecureFixAction {
     if dry_run {
         return SecureFixAction {
             repo_path: repo_path.to_path_buf(),
@@ -96,7 +105,7 @@ fn run_fix_step(repo_path: &Path, display: &str, cmd: Vec<&str>, dry_run: bool) 
         };
     }
 
-    if !git_clean(repo_path).unwrap_or(false) {
+    if require_clean_before_apply && !git_clean(repo_path).unwrap_or(false) {
         return SecureFixAction {
             repo_path: repo_path.to_path_buf(),
             command: display.to_string(),

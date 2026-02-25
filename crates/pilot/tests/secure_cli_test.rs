@@ -19,6 +19,8 @@ fn test_secure_help_surface() -> Result<(), Box<dyn std::error::Error>> {
 #[allow(deprecated)]
 fn test_secure_scan_and_fix_dry_run_single_repo() -> Result<(), Box<dyn std::error::Error>> {
     let temp = TempDir::new()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
     fs::write(
         temp.path().join("Cargo.toml"),
         "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
@@ -28,10 +30,27 @@ fn test_secure_scan_and_fix_dry_run_single_repo() -> Result<(), Box<dyn std::err
         "const AWS: &str = \"AKIAABCDEFGHIJKLMNOP\";\n",
     )?;
 
+    let mut register = Command::cargo_bin("pilot")?;
+    register
+        .env("HOME", &home)
+        .arg("multi")
+        .arg("register")
+        .arg("--path")
+        .arg(temp.path().to_string_lossy().to_string())
+        .arg("--name")
+        .arg("secure-test")
+        .arg("--tag")
+        .arg("secure-test")
+        .assert()
+        .success();
+
     let mut scan = Command::cargo_bin("pilot")?;
     scan.current_dir(temp.path())
+        .env("HOME", &home)
         .arg("secure")
         .arg("scan")
+        .arg("--tag")
+        .arg("secure-test")
         .assert()
         .success()
         .stdout(predicates::str::contains("Repo:"))
@@ -39,8 +58,11 @@ fn test_secure_scan_and_fix_dry_run_single_repo() -> Result<(), Box<dyn std::err
 
     let mut fix = Command::cargo_bin("pilot")?;
     fix.current_dir(temp.path())
+        .env("HOME", &home)
         .arg("secure")
         .arg("fix")
+        .arg("--tag")
+        .arg("secure-test")
         .assert()
         .success()
         .stdout(predicates::str::contains(
