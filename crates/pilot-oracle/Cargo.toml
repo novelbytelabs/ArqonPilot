@@ -5,22 +5,22 @@ edition.workspace = true
 
 [dependencies]
 anyhow = "1.0.100"
-arrow-array = "=51.0.0"
-arrow-schema = "=51.0.0"
-candle-core = "=0.8.1"
-candle-nn = "=0.8.1"
-candle-transformers = "=0.8.1"
+arrow-array = "51.0.0"
+arrow-schema = "51.0.0"
+candle-core = "0.8.2"
+candle-nn = "0.8.2"
+candle-transformers = "0.8.2"
 futures = "0.3"
 hf-hub = { version = "0.4.3", features = ["ureq", "rustls-tls"] }
 ignore = "0.4.22"
 indicatif = "0.18.3"
-lancedb = "=0.4.0"
+lancedb = "0.4.0"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2 = "0.10.9"
 thiserror.workspace = true
-tokenizers = "=0.22.1"
+tokenizers = "0.22.2"
 tokio = { version = "1.48.0", features = ["full"] }
 tree-sitter = "0.26.3"
 tree-sitter-python = "0.25.0"
