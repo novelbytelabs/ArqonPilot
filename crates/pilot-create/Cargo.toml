@@ -1,0 +1,8 @@
+[package]
+name = "pilot-create"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0.100"
+serde = { workspace = true, features = ["derive"] }

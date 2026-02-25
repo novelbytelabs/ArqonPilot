@@ -2,10 +2,13 @@
 mod config;
 use pilot_branch as branch;
 use pilot_core::{CommandReport, RepoContext};
+use pilot_create as create;
 use pilot_heal as heal;
+use pilot_know as know;
 use pilot_multi as multi;
 use pilot_navigate as navigate;
 use pilot_oracle as oracle;
+use pilot_plan as plan;
 use pilot_secure as secure;
 
 use clap::{Args, Parser, Subcommand};
@@ -42,6 +45,12 @@ enum Commands {
     Navigate(NavigateArgs),
     /// Security scanning and dependency maintenance
     Secure(SecureArgs),
+    /// Planning and prioritization commands
+    Plan(PlanArgs),
+    /// Feature and test scaffolding commands
+    Create(CreateArgs),
+    /// Decision record and knowledge commands
+    Know(KnowArgs),
     /// Cross-repo branch lifecycle operations
     Branch(BranchArgs),
     /// Multi-repo registry and operations
@@ -138,6 +147,141 @@ struct SecureFixArgs {
     /// Apply fixes (default behavior is dry-run preview only)
     #[arg(long)]
     apply: bool,
+}
+
+#[derive(Args)]
+struct PlanArgs {
+    #[command(subcommand)]
+    command: PlanCommands,
+}
+
+#[derive(Subcommand)]
+enum PlanCommands {
+    /// Ingest issues from JSON or GitHub into local plan cache
+    Issues(PlanIssuesArgs),
+    /// Score issues by impact/risk/effort
+    Score(PlanScoreArgs),
+    /// Generate prioritized roadmap markdown
+    Roadmap(PlanRoadmapArgs),
+}
+
+#[derive(Args, Clone)]
+struct PlanIssuesArgs {
+    /// Input JSON file with issues array
+    #[arg(long)]
+    input: Option<PathBuf>,
+
+    /// GitHub repo owner/name (e.g. novelbytelabs/ArqonPilot)
+    #[arg(long)]
+    github_repo: Option<String>,
+
+    /// Optional output file path (default: ~/.pilot/plan/issues.json)
+    #[arg(long)]
+    output: Option<PathBuf>,
+}
+
+#[derive(Args, Clone)]
+struct PlanScoreArgs {
+    /// Input issues JSON (default: ~/.pilot/plan/issues.json)
+    #[arg(long)]
+    input: Option<PathBuf>,
+
+    /// Output scored JSON (default: ~/.pilot/plan/scored.json)
+    #[arg(long)]
+    output: Option<PathBuf>,
+}
+
+#[derive(Args, Clone)]
+struct PlanRoadmapArgs {
+    /// Input scored JSON (default: ~/.pilot/plan/scored.json)
+    #[arg(long)]
+    input: Option<PathBuf>,
+
+    /// Output roadmap markdown (default: ~/.pilot/plan/roadmap.md)
+    #[arg(long)]
+    output: Option<PathBuf>,
+
+    /// Maximum roadmap items
+    #[arg(long, default_value = "10")]
+    top_n: usize,
+}
+
+#[derive(Args)]
+struct CreateArgs {
+    #[command(subcommand)]
+    command: CreateCommands,
+}
+
+#[derive(Subcommand)]
+enum CreateCommands {
+    /// Scaffold a feature module and paired test
+    Feature(CreateFeatureArgs),
+    /// Scaffold a test skeleton for an existing target
+    Tests(CreateTestsArgs),
+}
+
+#[derive(Args, Clone)]
+struct CreateFeatureArgs {
+    /// Feature name
+    name: String,
+
+    /// Root directory for scaffold output
+    #[arg(long, default_value = ".")]
+    output_dir: PathBuf,
+
+    /// Preview without writing files
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Args, Clone)]
+struct CreateTestsArgs {
+    /// Target module/component name
+    target: String,
+
+    /// Root directory for scaffold output
+    #[arg(long, default_value = ".")]
+    output_dir: PathBuf,
+
+    /// Preview without writing files
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Args)]
+struct KnowArgs {
+    #[command(subcommand)]
+    command: KnowCommands,
+}
+
+#[derive(Subcommand)]
+enum KnowCommands {
+    /// Record an ADR/decision entry
+    Record(KnowRecordArgs),
+    /// Search recorded decisions
+    Query(KnowQueryArgs),
+}
+
+#[derive(Args, Clone)]
+struct KnowRecordArgs {
+    #[arg(long)]
+    title: String,
+    #[arg(long)]
+    context: String,
+    #[arg(long)]
+    decision: String,
+    #[arg(long, default_value = "accepted")]
+    status: String,
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+}
+
+#[derive(Args, Clone)]
+struct KnowQueryArgs {
+    #[arg(long, short)]
+    query: String,
+    #[arg(long, default_value = "20")]
+    limit: usize,
 }
 
 #[derive(Args)]
@@ -599,6 +743,156 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                 ))
             }
         },
+        Commands::Plan(args) => match &args.command {
+            PlanCommands::Issues(args) => {
+                let out = args
+                    .output
+                    .clone()
+                    .unwrap_or_else(|| plan::default_plan_dir().join("issues.json"));
+
+                let issues = if let Some(input) = &args.input {
+                    plan::load_issues_from_file(input)
+                        .map_err(|e| miette::miette!("Failed loading input issues: {e}"))?
+                } else if let Some(repo) = &args.github_repo {
+                    let (owner, name) = repo.split_once('/').ok_or_else(|| {
+                        miette::miette!("--github-repo must be in owner/repo format")
+                    })?;
+                    let token = std::env::var("GITHUB_TOKEN").ok();
+                    plan::fetch_issues_from_github(owner, name, token.as_deref())
+                        .map_err(|e| miette::miette!("Failed fetching GitHub issues: {e}"))?
+                } else {
+                    return Err(miette::miette!(
+                        "Provide either --input or --github-repo for plan issues"
+                    ));
+                };
+
+                plan::write_issues(&out, &issues)
+                    .map_err(|e| miette::miette!("Failed writing issues cache: {e}"))?;
+                println!("Cached {} issues at {}", issues.len(), out.display());
+                Ok(CommandReport::ok(
+                    "plan.issues",
+                    format!("Cached {} issues", issues.len()),
+                ))
+            }
+            PlanCommands::Score(args) => {
+                let input = args
+                    .input
+                    .clone()
+                    .unwrap_or_else(|| plan::default_plan_dir().join("issues.json"));
+                let output = args
+                    .output
+                    .clone()
+                    .unwrap_or_else(|| plan::default_plan_dir().join("scored.json"));
+                let issues = plan::load_issues_from_file(&input)
+                    .map_err(|e| miette::miette!("Failed loading issues: {e}"))?;
+                let scored = plan::score_issues(issues);
+                plan::write_scored(&output, &scored)
+                    .map_err(|e| miette::miette!("Failed writing scored issues: {e}"))?;
+                println!(
+                    "Wrote {} scored items to {}",
+                    scored.len(),
+                    output.display()
+                );
+                Ok(CommandReport::ok(
+                    "plan.score",
+                    format!("Scored {} issues", scored.len()),
+                ))
+            }
+            PlanCommands::Roadmap(args) => {
+                let input = args
+                    .input
+                    .clone()
+                    .unwrap_or_else(|| plan::default_plan_dir().join("scored.json"));
+                let output = args
+                    .output
+                    .clone()
+                    .unwrap_or_else(|| plan::default_plan_dir().join("roadmap.md"));
+                let scored = plan::load_scored(&input)
+                    .map_err(|e| miette::miette!("Failed loading scored issues: {e}"))?;
+                let roadmap = plan::build_roadmap(scored, args.top_n);
+                plan::write_roadmap_markdown(&output, &roadmap)
+                    .map_err(|e| miette::miette!("Failed writing roadmap: {e}"))?;
+                println!(
+                    "Wrote roadmap with {} items to {}",
+                    roadmap.items.len(),
+                    output.display()
+                );
+                Ok(CommandReport::ok(
+                    "plan.roadmap",
+                    format!("Generated roadmap with {} items", roadmap.items.len()),
+                ))
+            }
+        },
+        Commands::Create(args) => match &args.command {
+            CreateCommands::Feature(args) => {
+                let actions = create::scaffold_feature(&args.output_dir, &args.name, args.dry_run)
+                    .map_err(|e| miette::miette!("Create feature failed: {e}"))?;
+                for action in &actions {
+                    println!(
+                        "{} | created={} | {}",
+                        action.path.display(),
+                        action.created,
+                        action.message
+                    );
+                }
+                Ok(CommandReport::ok(
+                    "create.feature",
+                    format!("Processed {} scaffold actions", actions.len()),
+                ))
+            }
+            CreateCommands::Tests(args) => {
+                let action = create::scaffold_tests(&args.output_dir, &args.target, args.dry_run)
+                    .map_err(|e| miette::miette!("Create tests failed: {e}"))?;
+                println!(
+                    "{} | created={} | {}",
+                    action.path.display(),
+                    action.created,
+                    action.message
+                );
+                Ok(CommandReport::ok("create.tests", "Generated test scaffold"))
+            }
+        },
+        Commands::Know(args) => {
+            let db_path = know::KnowStore::default_db_path();
+            let store = know::KnowStore::open(&db_path)
+                .map_err(|e| miette::miette!("Failed to open know store: {e}"))?;
+            match &args.command {
+                KnowCommands::Record(args) => {
+                    let id = store
+                        .record(
+                            &args.title,
+                            &args.context,
+                            &args.decision,
+                            &args.status,
+                            &args.tags,
+                        )
+                        .map_err(|e| miette::miette!("Failed recording decision: {e}"))?;
+                    println!("Recorded decision {} in {}", id, db_path.display());
+                    Ok(CommandReport::ok(
+                        "know.record",
+                        format!("Recorded decision {}", id),
+                    ))
+                }
+                KnowCommands::Query(args) => {
+                    let records = store
+                        .query(&args.query, args.limit)
+                        .map_err(|e| miette::miette!("Failed querying decisions: {e}"))?;
+                    for rec in &records {
+                        println!(
+                            "[{}] {} | status={} | tags={}",
+                            rec.id,
+                            rec.title,
+                            rec.status,
+                            rec.tags.join(",")
+                        );
+                    }
+                    Ok(CommandReport::ok(
+                        "know.query",
+                        format!("Returned {} decision records", records.len()),
+                    ))
+                }
+            }
+        }
         Commands::Navigate(args) => {
             if args.multi {
                 run_navigate_multi(args)
@@ -1052,6 +1346,27 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Secure(SecureArgs {
             command: SecureCommands::Fix(_),
         }) => "secure.fix",
+        Commands::Plan(PlanArgs {
+            command: PlanCommands::Issues(_),
+        }) => "plan.issues",
+        Commands::Plan(PlanArgs {
+            command: PlanCommands::Score(_),
+        }) => "plan.score",
+        Commands::Plan(PlanArgs {
+            command: PlanCommands::Roadmap(_),
+        }) => "plan.roadmap",
+        Commands::Create(CreateArgs {
+            command: CreateCommands::Feature(_),
+        }) => "create.feature",
+        Commands::Create(CreateArgs {
+            command: CreateCommands::Tests(_),
+        }) => "create.tests",
+        Commands::Know(KnowArgs {
+            command: KnowCommands::Record(_),
+        }) => "know.record",
+        Commands::Know(KnowArgs {
+            command: KnowCommands::Query(_),
+        }) => "know.query",
         Commands::Navigate(_) => "navigate",
         Commands::Branch(BranchArgs {
             command: BranchCommands::Create(_),

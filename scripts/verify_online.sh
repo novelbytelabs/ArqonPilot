@@ -18,6 +18,6 @@ cargo test -p pilot --locked
 
 echo "[5/5] CLI help smoke test"
 cargo run -p pilot -- --help >/tmp/pilot_help.txt
-rg -n "oracle|heal|navigate|branch|multi|secure|init" /tmp/pilot_help.txt >/dev/null
+rg -n "oracle|heal|navigate|branch|multi|secure|plan|create|know|init" /tmp/pilot_help.txt >/dev/null
 
 echo "Online verification passed."

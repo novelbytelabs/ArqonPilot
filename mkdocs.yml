@@ -34,6 +34,7 @@ nav:
   - Wave 2 Multi Foundation: "project/wave-2-multi-foundation.md"
   - Wave 3 Branch + Navigate Orchestration: "project/wave-3-branch-navigate-orchestration.md"
   - Wave 4 Secure + Heal Expansion: "project/wave-4-secure-heal-expansion.md"
+  - Wave 5 Plan + Create + Know: "project/wave-5-plan-create-know.md"
 
 markdown_extensions:
   - attr_list

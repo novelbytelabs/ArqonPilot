@@ -4173,10 +4173,13 @@ dependencies = [
  "miette",
  "pilot-branch",
  "pilot-core",
+ "pilot-create",
  "pilot-heal",
+ "pilot-know",
  "pilot-multi",
  "pilot-navigate",
  "pilot-oracle",
+ "pilot-plan",
  "pilot-secure",
  "predicates",
  "reqwest 0.12.28",
@@ -4204,6 +4207,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pilot-create"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+]
+
+[[package]]
 name = "pilot-heal"
 version = "0.1.0"
 dependencies = [
@@ -4217,6 +4228,16 @@ dependencies = [
  "sha2",
  "tempfile",
  "uuid",
+]
+
+[[package]]
+name = "pilot-know"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rusqlite",
+ "serde",
 ]
 
 [[package]]
@@ -4272,6 +4293,17 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "uuid",
+]
+
+[[package]]
+name = "pilot-plan"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

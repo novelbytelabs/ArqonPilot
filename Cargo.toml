@@ -8,6 +8,9 @@ members = [
     "crates/pilot-multi",
     "crates/pilot-branch",
     "crates/pilot-secure",
+    "crates/pilot-plan",
+    "crates/pilot-create",
+    "crates/pilot-know",
 ]
 resolver = "2"
 

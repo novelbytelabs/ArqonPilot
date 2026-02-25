@@ -32,4 +32,11 @@ cargo run -p pilot -- branch create release/2026-02 --base-branch main --group c
 cargo run -p pilot -- navigate --multi --dry-run --group core
 cargo run -p pilot -- secure scan --group core
 cargo run -p pilot -- secure fix --group core
+cargo run -p pilot -- plan issues --input /tmp/issues.json
+cargo run -p pilot -- plan score
+cargo run -p pilot -- plan roadmap --top-n 10
+cargo run -p pilot -- create feature checkout --dry-run
+cargo run -p pilot -- create tests checkout --dry-run
+cargo run -p pilot -- know record --title "Decision" --context "Why" --decision "What" --tag wave5
+cargo run -p pilot -- know query --query wave5
 ```

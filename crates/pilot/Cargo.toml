@@ -17,6 +17,9 @@ pilot-navigate = { path = "../pilot-navigate" }
 pilot-multi = { path = "../pilot-multi" }
 pilot-branch = { path = "../pilot-branch" }
 pilot-secure = { path = "../pilot-secure" }
+pilot-plan = { path = "../pilot-plan" }
+pilot-create = { path = "../pilot-create" }
+pilot-know = { path = "../pilot-know" }
 
 [dev-dependencies]
 assert_cmd = "2.1.1"

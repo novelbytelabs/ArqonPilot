@@ -236,6 +236,8 @@ Exit criteria:
 - `pilot --help` runs.
 - `pilot oracle scan`, `pilot heal`, `pilot navigate --dry-run` execute in a local sample repo.
 
+Status: Completed on 2026-02-25.
+
 ## Wave 1: Core Module Refactor (3 days)
 
 Goals:
@@ -251,6 +253,8 @@ Exit criteria:
 - Existing Ship capabilities preserved under Pilot command names.
 - Test suite green for migrated modules.
 
+Status: Completed on 2026-02-25.
+
 ## Wave 2: Multi-Repo Foundation (4 days)
 
 Goals:
@@ -264,6 +268,8 @@ Tasks:
 
 Exit criteria:
 - `pilot multi status` runs across at least 5 repos with per-repo output status.
+
+Status: Completed on 2026-02-25.
 
 ## Wave 3: Branch + Navigate Orchestration (4 days)
 
@@ -279,6 +285,8 @@ Tasks:
 Exit criteria:
 - One command can prepare coordinated release PRs across selected repos in dependency order.
 
+Status: Completed on 2026-02-25.
+
 ## Wave 4: Secure + Heal Expansion (3 days)
 
 Goals:
@@ -293,6 +301,8 @@ Tasks:
 Exit criteria:
 - `pilot secure scan` and `pilot secure fix --dry-run` produce actionable, auditable output across registered repos.
 
+Status: Completed on 2026-02-25.
+
 ## Wave 5: Plan/Create/Know (4 days)
 
 Goals:
@@ -306,6 +316,34 @@ Tasks:
 
 Exit criteria:
 - Full demo flow executes on your repos with persistent artifacts and logs.
+
+Status: Completed on 2026-02-25.
+
+Wave 5 implementation order (aggressive):
+1. `pilot plan` foundation
+- Add `pilot-plan` crate and CLI group:
+  - `pilot plan issues`
+  - `pilot plan roadmap`
+  - `pilot plan score`
+- Add GitHub issue ingestion with local cache DB and deterministic scoring formula.
+
+2. `pilot create` foundation
+- Add `pilot-create` crate and CLI group:
+  - `pilot create feature <name>`
+  - `pilot create tests <target>`
+- Start with template-driven scaffolding and test skeleton generation.
+
+3. `pilot know` foundation
+- Add `pilot-know` crate and CLI group:
+  - `pilot know record`
+  - `pilot know query "..."`
+- Persist ADR/decision records in SQLite with searchable fields.
+
+4. Cross-module glue
+- Connect `plan -> create` handoff:
+  - roadmap item to scaffold request.
+- Connect `create -> know` handoff:
+  - capture generated artifact metadata and decision rationale.
 
 ---
 
@@ -334,11 +372,11 @@ Exit criteria:
 
 ## Immediate Next Actions
 
-1. Create `ArqonPilot` Rust workspace and initial crate skeleton.
-2. Import current Ship code as baseline module set.
-3. Execute Wave 0 renames (`arqon` -> `pilot`, `.arqon` -> `.pilot`, `ship` command -> `navigate`).
-4. Remove HPO-specific version fallback logic.
-5. Add first-pass integration tests for `pilot oracle`, `pilot heal`, `pilot navigate`.
+1. Wave 5A: Implement `pilot-plan` crate + CLI commands and add integration tests.
+2. Wave 5B: Implement `pilot-create` scaffolding/test generation with dry-run and preview.
+3. Wave 5C: Implement `pilot-know` decision records/query with persistent storage.
+4. Add Wave 5 docs and update verification scripts for `plan|create|know` command surfaces.
+5. Run locked validation (`cargo check -p pilot --locked`, targeted CLI tests), then commit and push.
 
 ---
 

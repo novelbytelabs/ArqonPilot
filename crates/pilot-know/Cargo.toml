@@ -1,0 +1,10 @@
+[package]
+name = "pilot-know"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0.100"
+chrono = "0.4.38"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde = { workspace = true, features = ["derive"] }
