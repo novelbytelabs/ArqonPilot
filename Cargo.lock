@@ -4177,6 +4177,7 @@ dependencies = [
  "pilot-multi",
  "pilot-navigate",
  "pilot-oracle",
+ "pilot-secure",
  "predicates",
  "reqwest 0.12.28",
  "serde",
@@ -4214,6 +4215,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "uuid",
 ]
 
@@ -4270,6 +4272,18 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "uuid",
+]
+
+[[package]]
+name = "pilot-secure"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "walkdir",
 ]
 
 [[package]]

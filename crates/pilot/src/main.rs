@@ -6,6 +6,7 @@ use pilot_heal as heal;
 use pilot_multi as multi;
 use pilot_navigate as navigate;
 use pilot_oracle as oracle;
+use pilot_secure as secure;
 
 use clap::{Args, Parser, Subcommand};
 use config::Config;
@@ -39,6 +40,8 @@ enum Commands {
     Heal(HealArgs),
     /// Governed Release Pipeline
     Navigate(NavigateArgs),
+    /// Security scanning and dependency maintenance
+    Secure(SecureArgs),
     /// Cross-repo branch lifecycle operations
     Branch(BranchArgs),
     /// Multi-repo registry and operations
@@ -87,6 +90,54 @@ struct HealArgs {
     /// Enable verbose output with detailed progress
     #[arg(long, short)]
     verbose: bool,
+
+    /// Build a multi-file repair plan and exit without applying fixes
+    #[arg(long)]
+    plan_only: bool,
+
+    /// Maximum files to include in multi-file plan
+    #[arg(long, default_value = "5")]
+    max_files: usize,
+}
+
+#[derive(Args)]
+struct SecureArgs {
+    #[command(subcommand)]
+    command: SecureCommands,
+}
+
+#[derive(Subcommand)]
+enum SecureCommands {
+    /// Scan selected repos for dependency vulnerabilities and leaked secrets
+    Scan(SecureScanArgs),
+    /// Apply or preview dependency maintenance fixes
+    Fix(SecureFixArgs),
+}
+
+#[derive(Args, Clone)]
+struct SecureScanArgs {
+    /// Select only repos in this group
+    #[arg(long)]
+    group: Option<String>,
+
+    /// Select only repos that contain all given tags; repeatable
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+}
+
+#[derive(Args, Clone)]
+struct SecureFixArgs {
+    /// Select only repos in this group
+    #[arg(long)]
+    group: Option<String>,
+
+    /// Select only repos that contain all given tags; repeatable
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+
+    /// Apply fixes (default behavior is dry-run preview only)
+    #[arg(long)]
+    apply: bool,
 }
 
 #[derive(Args)]
@@ -449,6 +500,34 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
             let store = OracleStore::open(db_path.to_str().unwrap())
                 .map_err(|e| miette::miette!("{:?}", e))?;
 
+            if args.plan_only {
+                let plan = heal::plan::build_multifile_repair_plan(
+                    &ctx.root,
+                    &store,
+                    &failure,
+                    args.max_files,
+                )
+                .map_err(|e| miette::miette!("{:?}", e))?;
+                println!("Primary file: {}", plan.primary_file);
+                println!("Candidate files:");
+                for (idx, file) in plan.candidate_files.iter().enumerate() {
+                    println!("  {}. {}", idx + 1, file);
+                }
+                if !plan.related_signatures.is_empty() {
+                    println!("Related signatures:");
+                    for sig in &plan.related_signatures {
+                        println!("  - {}", sig);
+                    }
+                }
+                return Ok(CommandReport::ok(
+                    "heal.plan",
+                    format!(
+                        "Generated multi-file repair plan with {} candidates",
+                        plan.candidate_files.len()
+                    ),
+                ));
+            }
+
             let mut healing_loop = HealingLoop::new(store, ctx.root, args.max_attempts)
                 .map_err(|e| miette::miette!("{:?}", e))?;
             let outcome = healing_loop
@@ -458,6 +537,68 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
             println!("Heal outcome: {:?}", outcome);
             Ok(CommandReport::ok("heal", format!("Outcome: {:?}", outcome)))
         }
+        Commands::Secure(args) => match &args.command {
+            SecureCommands::Scan(args) => {
+                let repos = resolve_secure_targets(args.group.clone(), args.tags.clone())?;
+                let mut total_findings = 0usize;
+                for repo in &repos {
+                    let report = secure::scan_repo(repo)
+                        .map_err(|e| miette::miette!("Secure scan failed: {e}"))?;
+                    println!("Repo: {}", report.repo_path.display());
+                    if report.findings.is_empty() {
+                        println!("  - no findings");
+                    }
+                    for f in &report.findings {
+                        println!(
+                            "  - [{}:{}] {} {}",
+                            f.category, f.severity, f.rule, f.message
+                        );
+                    }
+                    total_findings += report.findings.len();
+                }
+
+                Ok(CommandReport::ok(
+                    "secure.scan",
+                    format!(
+                        "Scanned {} repos and found {} findings",
+                        repos.len(),
+                        total_findings
+                    ),
+                ))
+            }
+            SecureCommands::Fix(args) => {
+                let repos = resolve_secure_targets(args.group.clone(), args.tags.clone())?;
+                let dry_run = !args.apply;
+                let mut actions_total = 0usize;
+                let mut failures = 0usize;
+                for repo in &repos {
+                    let actions = secure::fix_repo(repo, dry_run)
+                        .map_err(|e| miette::miette!("Secure fix failed: {e}"))?;
+                    println!("Repo: {}", repo.display());
+                    for a in &actions {
+                        println!(
+                            "  - {} | applied={} | ok={} | {}",
+                            a.command, a.applied, a.success, a.message
+                        );
+                        if !a.success {
+                            failures += 1;
+                        }
+                    }
+                    actions_total += actions.len();
+                }
+
+                Ok(CommandReport::ok(
+                    "secure.fix",
+                    format!(
+                        "{} mode across {} repos: {} actions, {} failures",
+                        if dry_run { "dry-run" } else { "apply" },
+                        repos.len(),
+                        actions_total,
+                        failures
+                    ),
+                ))
+            }
+        },
         Commands::Navigate(args) => {
             if args.multi {
                 run_navigate_multi(args)
@@ -754,6 +895,29 @@ fn to_filter(group: Option<String>, tags: Vec<String>) -> multi::RepoFilter {
     multi::RepoFilter { group, tags }
 }
 
+fn resolve_secure_targets(group: Option<String>, tags: Vec<String>) -> Result<Vec<PathBuf>> {
+    let has_filter = group.is_some() || !tags.is_empty();
+    let filter = to_filter(group, tags);
+    let db_path = multi::MultiRegistry::default_db_path();
+
+    if let Ok(registry) = multi::MultiRegistry::open(&db_path) {
+        let repos = registry
+            .list_repos(&filter)
+            .map_err(|e| miette::miette!("Secure target selection failed: {e}"))?;
+        if !repos.is_empty() {
+            return Ok(repos.into_iter().map(|r| r.path).collect());
+        }
+    }
+
+    if has_filter {
+        return Err(miette::miette!(
+            "No registered repositories match the selected group/tags"
+        ));
+    }
+
+    Ok(vec![std::env::current_dir().into_diagnostic()?])
+}
+
 fn run_navigate_single(args: &NavigateArgs) -> Result<CommandReport> {
     let root = std::env::current_dir().into_diagnostic()?;
     let ctx = RepoContext::new(root.clone());
@@ -882,6 +1046,12 @@ fn command_name(command: &Commands) -> &'static str {
             command: OracleCommands::Query(_),
         }) => "oracle.query",
         Commands::Heal(_) => "heal",
+        Commands::Secure(SecureArgs {
+            command: SecureCommands::Scan(_),
+        }) => "secure.scan",
+        Commands::Secure(SecureArgs {
+            command: SecureCommands::Fix(_),
+        }) => "secure.fix",
         Commands::Navigate(_) => "navigate",
         Commands::Branch(BranchArgs {
             command: BranchCommands::Create(_),

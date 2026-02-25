@@ -33,6 +33,7 @@ nav:
   - Wave 1 Modularization: "project/wave-1-modularization.md"
   - Wave 2 Multi Foundation: "project/wave-2-multi-foundation.md"
   - Wave 3 Branch + Navigate Orchestration: "project/wave-3-branch-navigate-orchestration.md"
+  - Wave 4 Secure + Heal Expansion: "project/wave-4-secure-heal-expansion.md"
 
 markdown_extensions:
   - attr_list

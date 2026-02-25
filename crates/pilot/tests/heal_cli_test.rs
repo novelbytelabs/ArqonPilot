@@ -9,7 +9,8 @@ fn test_heal_help_surface() -> Result<(), Box<dyn std::error::Error>> {
         .assert()
         .success()
         .stdout(predicates::str::contains("--log-file"))
-        .stdout(predicates::str::contains("--max-attempts"));
+        .stdout(predicates::str::contains("--max-attempts"))
+        .stdout(predicates::str::contains("--plan-only"));
 
     Ok(())
 }
