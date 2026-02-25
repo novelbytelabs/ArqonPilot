@@ -5,8 +5,8 @@ edition.workspace = true
 
 [dependencies]
 anyhow = "1.0.100"
-arrow-array = "51.0.0"
-arrow-schema = "51.0.0"
+arrow-array = "52.0.0"
+arrow-schema = "52.0.0"
 candle-core = "0.8.2"
 candle-nn = "0.8.2"
 candle-transformers = "0.8.2"
@@ -15,7 +15,6 @@ hf-hub = { version = "0.4.3", features = ["ureq", "rustls-tls"] }
 ignore = "0.4.22"
 indicatif = "0.18.3"
 lancedb = "0.4.0"
-chrono = "0.4.38"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
