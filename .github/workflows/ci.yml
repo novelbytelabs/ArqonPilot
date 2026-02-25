@@ -29,3 +29,6 @@ jobs:
 
       - name: Test
         run: cargo test -p pilot --locked
+
+      - name: Release Readiness
+        run: ./scripts/release_readiness_check.sh

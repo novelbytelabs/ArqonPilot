@@ -448,7 +448,7 @@ Exit criteria:
 - Reproducible install and execution flow across your target environment.
 - Acceptance regression green at release candidate and final tag.
 
-Status: Pending.
+Status: Completed on 2026-02-25 (artifacts and gates prepared).
 
 ## Wave 9: Capability Completion Against Proposed Matrix (6 days)
 
@@ -500,8 +500,7 @@ Tasks:
 
 2. PyPI package strategy and implementation
 - Create Python package (`arqon-pilot`) that installs and runs the `pilot` CLI.
-- Preferred implementation: `maturin`/`pyo3` wrapper exposing CLI entrypoint and optional Python API.
-- Fallback implementation: pure-Python thin wrapper that shells out to packaged binary.
+- Implementation (locked): `maturin`/`pyo3` wrapper exposing CLI entrypoint and optional Python API.
 
 3. Build and publish pipeline
 - Add TestPyPI publish job.
@@ -518,6 +517,9 @@ Exit criteria:
 - TestPyPI and PyPI publish paths are automated and reproducible.
 
 Status: Pending.
+
+Wave 10 decision checkpoint (2026-02-25):
+- Packaging strategy selected and locked: `maturin`.
 
 ## Wave 11: Production Launch and Operations (3 days)
 
@@ -565,11 +567,11 @@ Status: Pending.
 
 ## Immediate Next Actions
 
-1. Push `main` and tag baseline `pilot-v0.7-controlled-apply`.
-2. Start Wave 8 release-readiness checklist and operator runbook finalization.
-3. Add preflight checklist command for apply-mode guardrails.
-4. Draft Wave 10 packaging design note (PyPI decision: `maturin` wrapper vs pure-Python shim).
-5. Prepare `pilot-v1-rc1` acceptance gate checklist.
+1. Push `main` and tag baseline `pilot-v0.8-readiness`.
+2. Run `./scripts/release_readiness_check.sh` in operator environment and capture output.
+3. Cut `pilot-v1-rc1` tag and run acceptance regression.
+4. Start Wave 10 implementation (`maturin` scaffolding + TestPyPI pipeline).
+5. Add preflight checklist command for apply-mode guardrails.
 
 ## Cross-Repo Acceptance Protocol
 
