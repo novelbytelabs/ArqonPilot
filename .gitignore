@@ -1,0 +1,4 @@
+/target/
+**/*.db
+**/*.lance
+.pilot/

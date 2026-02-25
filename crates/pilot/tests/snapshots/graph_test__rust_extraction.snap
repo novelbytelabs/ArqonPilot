@@ -1,0 +1,25 @@
+---
+source: crates/ship/tests/graph_test.rs
+assertion_line: 24
+expression: nodes
+---
+[
+    GraphNode {
+        path: "test.rs",
+        node_type: "struct",
+        name: "MyStruct",
+        start_line: 1,
+        end_line: 3,
+        signature_hash: "5ad25eaab6d3a2e4cee04d9f5828c5dd26ecdf534385a0055da72ecb846ec1bc",
+        docstring: None,
+    },
+    GraphNode {
+        path: "test.rs",
+        node_type: "function",
+        name: "new",
+        start_line: 6,
+        end_line: 8,
+        signature_hash: "7eeaeeddc38ace416425e84a9b58466628b9eb0555d46218b90dcac5f3b976d2",
+        docstring: None,
+    },
+]

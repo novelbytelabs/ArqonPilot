@@ -1,0 +1,15 @@
+[package]
+name = "pilot-navigate"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0.100"
+miette = { workspace = true, features = ["fancy"] }
+reqwest = { version = "0.12.26", features = ["blocking", "json"] }
+serde = { workspace = true, features = ["derive"] }
+toml = "0.9.10"
+toml_edit = "0.23.0"
+
+[dev-dependencies]
+tempfile = "3.12.0"
