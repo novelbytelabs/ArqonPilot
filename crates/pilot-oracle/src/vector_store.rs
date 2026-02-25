@@ -1,9 +1,9 @@
 use anyhow::Result;
-use arrow_array::{
+use lancedb::arrow::arrow_array::{
     ArrayRef, FixedSizeListArray, Float32Array, Int64Array, RecordBatch, RecordBatchIterator,
     StringArray,
 };
-use arrow_schema::FieldRef;
+use lancedb::arrow::arrow_schema::FieldRef;
 use futures::StreamExt;
 use lancedb::arrow::arrow_schema::{DataType, Field, Schema};
 use lancedb::query::{ExecutableQuery, QueryBase};
