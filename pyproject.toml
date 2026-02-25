@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "arqon-pilot"
+version = "0.1.0"
+description = "Arqon Pilot CLI for multi-repo automation and self-healing workflows"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [
+  { name = "NovelByte Labs" }
+]
+keywords = ["cli", "automation", "devops", "multi-repo", "release"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Topic :: Software Development :: Build Tools",
+]
+
+[project.urls]
+Homepage = "https://github.com/novelbytelabs/ArqonPilot"
+Repository = "https://github.com/novelbytelabs/ArqonPilot"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "crates/pilot/Cargo.toml"
+strip = true

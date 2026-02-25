@@ -19,13 +19,23 @@ PyPI packaging will use `maturin` as the primary build/publish path.
 
 ## Planned Artifacts
 
-1. `pyproject.toml` for maturin build backend.
-2. Python module entrypoint exposing CLI invocation.
-3. TestPyPI publish workflow.
-4. PyPI publish workflow gated by signed release tags.
+1. `pyproject.toml` for maturin build backend. ✅
+2. TestPyPI/PyPI publish workflow (`.github/workflows/pypi.yml`). ✅
+3. Local wheel smoke-check script (`scripts/pypi_smoke_check.sh`). ✅
+4. CI install smoke stage (next step).
 
 ## Compatibility Targets
 
 - Python: 3.10+
 - Platforms: linux amd64/arm64, macOS amd64/arm64 (initial)
 - Rust toolchain for build: `1.82.0`
+
+## Implementation Status
+
+Wave 10 scaffolding is implemented. Remaining execution tasks:
+
+1. Run TestPyPI publication from CI (`workflow_dispatch` target `testpypi`).
+2. Validate install in clean environment:
+- `pip install -i https://test.pypi.org/simple arqon-pilot`
+- `pilot --help`
+3. Promote to PyPI publication gate on release tag after successful smoke.

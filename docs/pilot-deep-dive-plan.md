@@ -520,6 +520,10 @@ Status: Pending.
 
 Wave 10 decision checkpoint (2026-02-25):
 - Packaging strategy selected and locked: `maturin`.
+- Scaffolding implemented:
+  - `pyproject.toml` (`maturin` binary bindings)
+  - `.github/workflows/pypi.yml`
+  - `scripts/pypi_smoke_check.sh`
 
 ## Wave 11: Production Launch and Operations (3 days)
 
@@ -568,9 +572,9 @@ Status: Pending.
 ## Immediate Next Actions
 
 1. Push `main` and tag baseline `pilot-v0.8-readiness`.
-2. Run `./scripts/release_readiness_check.sh` in operator environment and capture output.
-3. Cut `pilot-v1-rc1` tag and run acceptance regression.
-4. Start Wave 10 implementation (`maturin` scaffolding + TestPyPI pipeline).
+2. Run `workflow_dispatch` for `.github/workflows/pypi.yml` with target `testpypi`.
+3. Perform clean-env TestPyPI install smoke (`pip install ...` + `pilot --help`).
+4. Cut `pilot-v1-rc1` and run acceptance regression.
 5. Add preflight checklist command for apply-mode guardrails.
 
 ## Cross-Repo Acceptance Protocol

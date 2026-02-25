@@ -40,3 +40,16 @@ cargo run -p pilot -- create tests checkout --dry-run
 cargo run -p pilot -- know record --title "Decision" --context "Why" --decision "What" --tag wave5
 cargo run -p pilot -- know query --query wave5
 ```
+
+## Packaging (Wave 10)
+
+PyPI packaging is based on `maturin` with binary bindings.
+
+```bash
+python3 -m pip install maturin
+maturin build --release --out dist
+./scripts/pypi_smoke_check.sh
+```
+
+For CI publish flows, see:
+- `.github/workflows/pypi.yml`
