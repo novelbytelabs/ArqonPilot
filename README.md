@@ -1,55 +1,74 @@
 # ArqonPilot
 
-ArqonPilot is the standalone successor to ArqonShip.
+ArqonPilot is a standalone CLI for single-repo and cross-repo engineering operations: oracle indexing/query, healing, release navigation, branch orchestration, security scans, planning, scaffolding, and knowledge capture.
 
-## Wave 0 Status
+## Core Modules
 
-This repo now contains the extracted baseline crate at `crates/pilot` with hard-cut naming:
-
-- Binary: `pilot`
-- Config/state path: `.pilot/`
-- Release command: `pilot navigate`
-- Oracle commands: `pilot oracle scan`, `pilot oracle query --query "..."`
+- `oracle`
+- `heal`
+- `navigate`
+- `branch`
+- `multi`
+- `secure`
+- `plan`
+- `create`
+- `know`
 
 ## Quickstart
 
 ```bash
 cargo run -p pilot -- --help
 cargo run -p pilot -- init
-cargo run -p pilot -- oracle scan
-cargo run -p pilot -- oracle query --query "Where is X?"
-cargo run -p pilot -- navigate --dry-run
-cargo run -p pilot -- --report-json init
-cargo run -p pilot -- heal --log-file test_output.json --plan-only --max-files 6
-cargo run -p pilot -- multi register --path /path/to/repo --group core --tag rust
-cargo run -p pilot -- multi list --group core
+cargo run -p pilot -- multi register --path /path/to/repo --group core --tag apply-pilot
 cargo run -p pilot -- multi status --group core
-cargo run -p pilot -- multi query --query "state machine" --group core --per-repo-limit 5
-cargo run -p pilot -- multi deps set --repo repo-b --depends-on repo-a
-cargo run -p pilot -- multi order --group core
-cargo run -p pilot -- multi prs create --group core --head-branch dev --base-branch main
-cargo run -p pilot -- branch create release/2026-02 --base-branch main --group core --dry-run
-cargo run -p pilot -- navigate --multi --dry-run --group core
-cargo run -p pilot -- secure scan --group core
-cargo run -p pilot -- secure fix --group core
-cargo run -p pilot -- plan issues --input /tmp/issues.json
-cargo run -p pilot -- plan score
-cargo run -p pilot -- plan roadmap --top-n 10
-cargo run -p pilot -- create feature checkout --dry-run
-cargo run -p pilot -- create tests checkout --dry-run
-cargo run -p pilot -- know record --title "Decision" --context "Why" --decision "What" --tag wave5
-cargo run -p pilot -- know query --query wave5
+cargo run -p pilot -- branch create feat/pilot-wave --group core --dry-run
 ```
 
-## Packaging (Wave 10)
+## Testing
 
-PyPI packaging is based on `maturin` with binary bindings.
+Run the full matrix:
+
+```bash
+./scripts/test_matrix.sh all
+```
+
+Run by category:
+
+```bash
+./scripts/test_matrix.sh unit
+./scripts/test_matrix.sh integration
+./scripts/test_matrix.sh e2e
+./scripts/test_matrix.sh regression
+./scripts/test_matrix.sh adversarial
+```
+
+Release gate:
+
+```bash
+./scripts/release_readiness_check.sh
+```
+
+## Packaging
+
+PyPI packaging uses `maturin`.
 
 ```bash
 python3 -m pip install maturin
-maturin build --release --out dist
+maturin build --release --locked --out dist
 ./scripts/pypi_smoke_check.sh
 ```
 
-For CI publish flows, see:
+CI workflows:
+
+- `.github/workflows/ci.yml`
 - `.github/workflows/pypi.yml`
+
+## Documentation
+
+Primary docs are in `docs/` and published with MkDocs.
+
+- `docs/developer-guide.md`
+- `docs/testing-strategy.md`
+- `docs/operator-runbook.md`
+- `docs/branch-management-guide.md`
+- `docs/pilot-deep-dive-plan.md`

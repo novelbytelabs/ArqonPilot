@@ -694,3 +694,23 @@ These are deferred only until their planned wave, not dropped:
 - Advanced AI release-note synthesis.
 - Full SAST integrations beyond baseline scanners (scheduled in Wave 9).
 - Sophisticated planning heuristics beyond initial priority scoring (scheduled in Wave 9).
+
+## Wave 11: Test and Documentation Completion (2 days)
+
+Goals:
+- Complete explicit unit/integration/e2e/regression/adversarial coverage workflow.
+- Publish comprehensive operator/developer/testing documentation.
+
+Tasks:
+1. Add unified test matrix runner script and category commands.
+2. Add adversarial and regression CLI tests for error and cycle handling.
+3. Update CI to run matrix categories.
+4. Rewrite README with testing, packaging, and docs entry points.
+5. Add dedicated developer guide and testing strategy docs.
+
+Exit criteria:
+- `./scripts/test_matrix.sh all` passes.
+- README and docs include category test commands and release gates.
+- CI references the matrix runner.
+
+Status: In progress.

@@ -27,8 +27,8 @@ jobs:
       - name: Check
         run: cargo check -p pilot --locked
 
-      - name: Test
-        run: cargo test -p pilot --locked
+      - name: Test Matrix
+        run: ./scripts/test_matrix.sh all
 
       - name: Release Readiness
         run: ./scripts/release_readiness_check.sh
