@@ -1,11 +1,11 @@
 use anyhow::Result;
-use lancedb::arrow::arrow_array::{
+use arrow_array::{
     ArrayRef, FixedSizeListArray, Float32Array, Int64Array, RecordBatch, RecordBatchIterator,
     StringArray,
 };
-use lancedb::arrow::arrow_schema::FieldRef;
+use arrow_schema::FieldRef;
 use futures::StreamExt;
-use lancedb::arrow::arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{connect, Connection, Table};
 use std::sync::Arc;
