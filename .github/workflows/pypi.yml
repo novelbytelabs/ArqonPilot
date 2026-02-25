@@ -21,6 +21,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      RUST_BACKTRACE: "1"
+      CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
 
@@ -47,11 +50,14 @@ jobs:
       - name: Remove rust-toolchain.toml for PyPI build
         run: rm -f rust-toolchain.toml
 
+      - name: Cargo release preflight (locked)
+        run: cargo build -p pilot --release --locked -vv
+
       - name: Build wheels and sdist
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release --out dist
+          args: --release --locked --out dist -v
 
       - name: Publish to TestPyPI (manual)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
