@@ -29,6 +29,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
       # Packaging-only exception:
       # PyPI build currently resolves transitive crates (wasip2/wit-bindgen path)
       # that require Rust >=1.88. Keep repository/toolchain policy at 1.82
