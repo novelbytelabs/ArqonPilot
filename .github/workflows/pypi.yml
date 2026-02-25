@@ -33,10 +33,14 @@ jobs:
       # PyPI build currently resolves transitive crates (wasip2/wit-bindgen path)
       # that require Rust >=1.85. Keep repository/toolchain policy at 1.82
       # and scope the newer compiler only to this publish workflow.
+      # Remove rust-toolchain.toml so maturin uses the version we set below.
       - name: Setup Rust 1.85 (PyPI packaging only)
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.85.0"
+
+      - name: Remove rust-toolchain.toml for PyPI build
+        run: rm -f rust-toolchain.toml
 
       - name: Build wheels and sdist
         uses: PyO3/maturin-action@v1
