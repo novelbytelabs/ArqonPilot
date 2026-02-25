@@ -237,10 +237,18 @@ impl MultiRegistry {
             *indegree.entry(repo_id).or_insert(0) += 1;
         }
 
-        let mut queue: VecDeque<i64> = indegree
-            .iter()
-            .filter_map(|(id, deg)| if *deg == 0 { Some(*id) } else { None })
-            .collect();
+        let mut queue: VecDeque<i64> = {
+            let mut roots: Vec<i64> = indegree
+                .iter()
+                .filter_map(|(id, deg)| if *deg == 0 { Some(*id) } else { None })
+                .collect();
+            roots.sort_by(|a, b| {
+                let an = repo_by_id.get(a).map(|r| r.name.as_str()).unwrap_or("");
+                let bn = repo_by_id.get(b).map(|r| r.name.as_str()).unwrap_or("");
+                an.cmp(bn).then(a.cmp(b))
+            });
+            roots.into_iter().collect()
+        };
         let mut ordered_ids = Vec::new();
 
         while let Some(id) = queue.pop_front() {
@@ -250,7 +258,21 @@ impl MultiRegistry {
                     if let Some(deg) = indegree.get_mut(child) {
                         *deg -= 1;
                         if *deg == 0 {
-                            queue.push_back(*child);
+                            let insert_at = queue
+                                .iter()
+                                .position(|existing| {
+                                    let cn = repo_by_id
+                                        .get(child)
+                                        .map(|r| r.name.as_str())
+                                        .unwrap_or("");
+                                    let en = repo_by_id
+                                        .get(existing)
+                                        .map(|r| r.name.as_str())
+                                        .unwrap_or("");
+                                    cn < en || (cn == en && child < existing)
+                                })
+                                .unwrap_or(queue.len());
+                            queue.insert(insert_at, *child);
                         }
                     }
                 }

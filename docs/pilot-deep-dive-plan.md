@@ -345,6 +345,176 @@ Wave 5 implementation order (aggressive):
 - Connect `create -> know` handoff:
   - capture generated artifact metadata and decision rationale.
 
+Result: Delivered on 2026-02-25.
+
+## Wave 6: Cross-Repo Acceptance and Reliability Hardening (5 days)
+
+Goals:
+- Validate Pilot behavior on your real 12+ repo workspace.
+- Eliminate operational blind spots before broader apply-mode automation.
+
+Tasks:
+1. Execute cross-repo acceptance protocol on grouped cohorts (`core`, `ml`, full).
+2. Add unified audit logging for all mutating commands (`branch`, `multi`, `secure`, `create`, `know`).
+3. Add machine-readable partial-failure artifacts (JSON) for all multi-repo mutating flows.
+4. Add one E2E dry-run integration test covering dependency order -> branch -> navigate -> secure.
+5. Tag stable baseline after acceptance pass.
+
+Exit criteria:
+- Acceptance protocol passes on target repo set.
+- Every mutating command emits audit and per-repo result records.
+- Full dry-run lifecycle is deterministic and repeatable.
+
+Status: Completed on 2026-02-25.
+
+## Wave 6.5: Self-Hosting (Dogfooding) on ArqonPilot (2 days)
+
+Goals:
+- Make ArqonPilot a first-class managed repo of Arqon Pilot itself.
+- Prove commands and workflows are usable without special-casing.
+
+Tasks:
+1. Register ArqonPilot in workspace registry with dedicated tags/group.
+2. Run full dry-run lifecycle against ArqonPilot:
+- `multi status`, `multi order`, `branch create/sync/prune --dry-run`
+- `navigate --multi --dry-run`
+- `secure scan` and `secure fix` (dry-run)
+- `plan issues/score/roadmap`, `create feature/tests --dry-run`, `know record/query`
+3. Run controlled apply subset on ArqonPilot:
+- one safe branch operation
+- one safe scaffold operation in a throwaway branch
+4. Capture outcomes as a repeatable dogfooding playbook.
+
+Exit criteria:
+- ArqonPilot can be fully operated by Pilot commands end-to-end.
+- No command requires manual fallback for normal workflow.
+- Dogfooding checklist is added to release gating.
+
+Status: Completed on 2026-02-25.
+
+## Wave 7: Controlled Apply Rollout (4 days)
+
+Goals:
+- Move from dry-run confidence to safe real mutations.
+- Prove rollback and failure isolation under real repo state.
+
+Tasks:
+1. Apply-mode pilot on 1-2 low-risk repos for branch/navigate/secure flows.
+2. Expand apply-mode to one full cohort after pilot stability.
+3. Add guardrails for dirty worktrees, protected branches, and missing credentials.
+4. Add rollback runbook and automated preflight checklist command.
+
+Exit criteria:
+- Apply-mode success rate >= 95% on pilot cohort.
+- Failures produce clear remediation steps without cross-repo blast radius.
+- Rollback path is documented and tested.
+
+Status: Pending.
+
+## Wave 8: Pilot v1 Release Readiness (3 days)
+
+Goals:
+- Finalize operational docs, release packaging, and v1 checkpoint quality.
+
+Tasks:
+1. Publish operator guide for multi-repo orchestration workflows.
+2. Lock and verify CI matrix for Rust 1.82 and pinned dependencies.
+3. Cut `pilot-v1-rc1`, run acceptance regression, then promote `pilot-v1.0.0`.
+
+Exit criteria:
+- Reproducible install and execution flow across your target environment.
+- Acceptance regression green at release candidate and final tag.
+
+Status: Pending.
+
+## Wave 9: Capability Completion Against Proposed Matrix (6 days)
+
+Goals:
+- Close remaining gaps versus the original ArqonPilot capability set.
+- Ensure `Branch`, `Plan`, `Create`, `Secure`, `Multi`, and `Know` have production-grade coverage.
+
+Tasks:
+1. Branch completion
+- Add branch protection/policy checks and enforcement previews.
+- Add richer branch health/status summary output per cohort.
+
+2. Plan completion
+- Add sprint planning primitives (capacity buckets, scheduling windows).
+- Add priority scoring configuration profiles and weighting presets.
+
+3. Create completion
+- Add doc generation command (`create docs`) tied to scaffolded features.
+- Add refactor-assist planning mode with change-set previews.
+
+4. Secure completion
+- Add license compliance scan phase.
+- Add baseline SAST adapter integration and normalized finding schema.
+
+5. Multi completion
+- Add workspace sync status report with drift indicators.
+- Add linked PR execution mode (not just manifest generation).
+
+6. Know completion
+- Add reusable pattern library entries and tagging taxonomy.
+- Add lessons-learned capture command with query filters.
+
+Exit criteria:
+- Proposed capability matrix is fully represented by shipped commands and tested core behavior.
+- No placeholder-only command surfaces remain for matrix items.
+
+Status: Pending.
+
+## Wave 10: Packaging and Distribution (Cargo + PyPI) (4 days)
+
+Goals:
+- Deliver reproducible installation and upgrade paths.
+- Publish both Rust-native and Python ecosystem entry points.
+
+Tasks:
+1. Rust release packaging
+- Add reproducible release workflow for tagged binaries.
+- Publish release artifacts for Linux/macOS with checksums and signatures.
+
+2. PyPI package strategy and implementation
+- Create Python package (`arqon-pilot`) that installs and runs the `pilot` CLI.
+- Preferred implementation: `maturin`/`pyo3` wrapper exposing CLI entrypoint and optional Python API.
+- Fallback implementation: pure-Python thin wrapper that shells out to packaged binary.
+
+3. Build and publish pipeline
+- Add TestPyPI publish job.
+- Add PyPI publish on signed release tags.
+- Add smoke tests for `pip install arqon-pilot` and `pilot --help`.
+
+4. Versioning and compatibility policy
+- Define SemVer alignment across Cargo crate and PyPI package.
+- Document supported Python versions and platform matrix.
+
+Exit criteria:
+- `cargo install`-style and binary artifact installs are documented and verified.
+- `pip install arqon-pilot` installs a working `pilot` command on supported targets.
+- TestPyPI and PyPI publish paths are automated and reproducible.
+
+Status: Pending.
+
+## Wave 11: Production Launch and Operations (3 days)
+
+Goals:
+- Move from candidate build to production operating posture.
+- Lock runbooks, observability, and incident handling.
+
+Tasks:
+1. Release candidate burn-in across full repo workspace.
+2. Operational runbooks: rollback, credential rotation, degraded-mode execution.
+3. Observability pack: audit review queries, health checks, failure dashboards.
+4. Launch checklist and `pilot-v1.0.0` cut.
+
+Exit criteria:
+- End-to-end apply workflows validated on full target workspace.
+- Production runbooks tested at least once in simulation.
+- v1.0.0 release artifacts and package indexes are published.
+
+Status: Pending.
+
 ---
 
 ## Non-Negotiable Quality Gates
@@ -372,11 +542,119 @@ Wave 5 implementation order (aggressive):
 
 ## Immediate Next Actions
 
-1. Wave 5A: Implement `pilot-plan` crate + CLI commands and add integration tests.
-2. Wave 5B: Implement `pilot-create` scaffolding/test generation with dry-run and preview.
-3. Wave 5C: Implement `pilot-know` decision records/query with persistent storage.
-4. Add Wave 5 docs and update verification scripts for `plan|create|know` command surfaces.
-5. Run locked validation (`cargo check -p pilot --locked`, targeted CLI tests), then commit and push.
+1. Push `main` and tag baseline `pilot-v0.6-acceptance`.
+2. Start Wave 7 controlled apply rollout on 1-2 low-risk repos.
+3. Add preflight checklist command for apply-mode guardrails.
+4. Draft Wave 10 packaging design note (PyPI decision: `maturin` wrapper vs pure-Python shim).
+5. Prepare `pilot-v1-rc1` acceptance gate checklist.
+
+## Cross-Repo Acceptance Protocol
+
+Scope:
+- Target all production-intent repos registered in `~/.pilot/workspace.db`.
+- Run by group/tag cohorts first (for example `core`, then `ml`, then full workspace).
+
+Phase 0: Registry integrity
+1. `pilot multi list`
+2. `pilot multi status`
+Pass criteria:
+- Every expected repo appears once with correct canonical path, group, tags.
+- Missing `.pilot` or missing git repos are explicitly visible.
+
+Phase 1: Deterministic orchestration
+1. `pilot multi order [--group ...] [--tag ...]`
+2. `pilot multi prs create --dry-run [--group ...] [--tag ...]`
+Pass criteria:
+- Order is stable between repeated runs.
+- No cycle/unresolved dependency errors.
+- Manifest/dry-run ordering matches dependency intent.
+
+Phase 2: Branch lifecycle dry-run
+1. `pilot branch create <branch> --dry-run [filters]`
+2. `pilot branch sync --dry-run [filters]`
+3. `pilot branch status [filters]`
+4. `pilot branch prune --dry-run [filters]`
+Pass criteria:
+- Every repo yields explicit per-repo result.
+- No silent skips; no fail-all from single-repo issues.
+
+Phase 3: Navigate orchestration dry-run
+1. `pilot navigate --multi --dry-run [filters]`
+Pass criteria:
+- Coordinated release ordering output is valid.
+- Manifest path/output is deterministic when requested.
+
+Phase 4: Secure scan/fix dry-run
+1. `pilot secure scan [filters]`
+2. `pilot secure fix [filters]` (dry-run default)
+Pass criteria:
+- Findings are structured and attributable by repo.
+- Fix flow produces actionable commands without mutating repos in dry-run.
+
+Phase 5: Planning and knowledge loop
+1. `pilot plan issues ...`
+2. `pilot plan score ...`
+3. `pilot plan roadmap ...`
+4. `pilot create feature <name> --dry-run`
+5. `pilot know record ...`
+6. `pilot know query --query ...`
+Pass criteria:
+- Artifacts are written in expected locations.
+- Decision records are queryable and linked to execution context.
+
+Phase 6: Controlled apply pilot (small cohort)
+1. Repeat phases 2-4 with `--apply`/non-dry-run where supported on 1-2 low-risk repos.
+Pass criteria:
+- Mutations succeed with clean rollback path.
+- No unexpected cross-repo side effects.
+
+Gotchas to watch during acceptance:
+- Repo name collisions in registry break dependency-edge assignment by name.
+- Dirty worktrees will block or skew mutating flows.
+- Dependency cycles will surface only when running ordered operations.
+- Missing external tools (`cargo-audit`, `pip-audit`) should degrade gracefully but must be acknowledged in findings.
+- Environment-specific git remotes/auth can fail branch/navigate operations even when local checks pass.
+
+## Formal Branch Management Plan
+
+Canonical policy reference:
+- `docs/branch-management-guide.md`
+
+Objectives:
+- Standardize branch lifecycle across all registered repos.
+- Prevent unsafe mutations and reduce merge-order conflicts.
+
+Branch taxonomy:
+- `main`: protected production branch.
+- `dev`: default integration branch.
+- `release/*`: optional, exception-only for complex coordinated releases.
+- `feat/*`, `fix/*`, `chore/*`: short-lived work branches.
+
+Operational policy:
+1. Create branches in dependency order only (`multi order` -> `branch create`).
+2. Sync branches from base before release actions (`branch sync`).
+3. Enforce clean worktree precondition for mutating operations.
+4. Prune only merged non-protected branches (`branch prune` with exclusions).
+5. Record per-repo branch outcomes and keep failure isolation.
+
+Required command flow:
+1. `pilot multi order [filters]`
+2. `pilot branch create <branch> --dry-run [filters]`
+3. `pilot branch create <branch> [filters]` (apply mode)
+4. `pilot branch sync --branch <branch> [filters]`
+5. `pilot branch status [filters]`
+6. `pilot branch prune --dry-run [filters]` then apply when confirmed
+
+Release branch governance:
+- Default policy: release directly from `main` tags (no mandatory release branch).
+- Exception policy: use one coordinated `release/<version>` branch only when explicitly required by cross-repo risk.
+- Generate linked PR manifest before PR creation (`multi prs create`).
+- Require successful dry-run navigate orchestration before any apply-mode release mutation.
+
+Exit criteria:
+- Branch lifecycle commands execute with deterministic order and per-repo reporting.
+- Protected branches are never pruned or force-reset by automation.
+- Branch operations are included in self-hosting and acceptance gates.
 
 ---
 
@@ -385,5 +663,5 @@ Wave 5 implementation order (aggressive):
 These are deferred only until their planned wave, not dropped:
 
 - Advanced AI release-note synthesis.
-- Full SAST integrations beyond baseline scanners.
-- Sophisticated planning heuristics beyond initial priority scoring.
+- Full SAST integrations beyond baseline scanners (scheduled in Wave 9).
+- Sophisticated planning heuristics beyond initial priority scoring (scheduled in Wave 9).

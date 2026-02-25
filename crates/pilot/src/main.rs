@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 mod config;
 use pilot_branch as branch;
-use pilot_core::{CommandReport, RepoContext};
+use pilot_core::{
+    append_audit_event, write_repo_outcomes_artifact, AuditEvent, CommandReport, RepoContext,
+    RepoOutcome,
+};
 use pilot_create as create;
 use pilot_heal as heal;
 use pilot_know as know;
@@ -569,7 +572,19 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
     match &cli.command {
         Commands::Init => {
             handle_init(&cli.config)?;
-            Ok(CommandReport::ok("init", "Initialized .pilot/config.toml"))
+            let report = CommandReport::ok("init", "Initialized .pilot/config.toml");
+            persist_mutation_audit(
+                "init",
+                false,
+                &report.summary,
+                vec![RepoOutcome {
+                    repo: "current-repo".to_string(),
+                    path: cli.config.display().to_string(),
+                    success: true,
+                    message: "Config initialized".to_string(),
+                }],
+            );
+            Ok(report)
         }
         Commands::Oracle(args) => match &args.command {
             OracleCommands::Scan => {
@@ -715,10 +730,13 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                 let dry_run = !args.apply;
                 let mut actions_total = 0usize;
                 let mut failures = 0usize;
+                let mut outcomes: Vec<RepoOutcome> = Vec::new();
                 for repo in &repos {
                     let actions = secure::fix_repo(repo, dry_run)
                         .map_err(|e| miette::miette!("Secure fix failed: {e}"))?;
                     println!("Repo: {}", repo.display());
+                    let mut repo_ok = true;
+                    let mut messages = Vec::new();
                     for a in &actions {
                         println!(
                             "  - {} | applied={} | ok={} | {}",
@@ -726,12 +744,24 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                         );
                         if !a.success {
                             failures += 1;
+                            repo_ok = false;
                         }
+                        messages.push(format!("{}: {}", a.command, a.message));
                     }
                     actions_total += actions.len();
+                    outcomes.push(RepoOutcome {
+                        repo: repo
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("repo")
+                            .to_string(),
+                        path: repo.display().to_string(),
+                        success: repo_ok,
+                        message: messages.join(" | "),
+                    });
                 }
 
-                Ok(CommandReport::ok(
+                let report = CommandReport::ok(
                     "secure.fix",
                     format!(
                         "{} mode across {} repos: {} actions, {} failures",
@@ -740,7 +770,9 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                         actions_total,
                         failures
                     ),
-                ))
+                );
+                persist_mutation_audit("secure.fix", dry_run, &report.summary, outcomes);
+                Ok(report)
             }
         },
         Commands::Plan(args) => match &args.command {
@@ -769,10 +801,20 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                 plan::write_issues(&out, &issues)
                     .map_err(|e| miette::miette!("Failed writing issues cache: {e}"))?;
                 println!("Cached {} issues at {}", issues.len(), out.display());
-                Ok(CommandReport::ok(
+                let report =
+                    CommandReport::ok("plan.issues", format!("Cached {} issues", issues.len()));
+                persist_mutation_audit(
                     "plan.issues",
-                    format!("Cached {} issues", issues.len()),
-                ))
+                    false,
+                    &report.summary,
+                    vec![RepoOutcome {
+                        repo: "plan-cache".to_string(),
+                        path: out.display().to_string(),
+                        success: true,
+                        message: format!("Cached {} issues", issues.len()),
+                    }],
+                );
+                Ok(report)
             }
             PlanCommands::Score(args) => {
                 let input = args
@@ -793,10 +835,20 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                     scored.len(),
                     output.display()
                 );
-                Ok(CommandReport::ok(
+                let report =
+                    CommandReport::ok("plan.score", format!("Scored {} issues", scored.len()));
+                persist_mutation_audit(
                     "plan.score",
-                    format!("Scored {} issues", scored.len()),
-                ))
+                    false,
+                    &report.summary,
+                    vec![RepoOutcome {
+                        repo: "plan-cache".to_string(),
+                        path: output.display().to_string(),
+                        success: true,
+                        message: format!("Scored {} issues", scored.len()),
+                    }],
+                );
+                Ok(report)
             }
             PlanCommands::Roadmap(args) => {
                 let input = args
@@ -817,10 +869,22 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                     roadmap.items.len(),
                     output.display()
                 );
-                Ok(CommandReport::ok(
+                let report = CommandReport::ok(
                     "plan.roadmap",
                     format!("Generated roadmap with {} items", roadmap.items.len()),
-                ))
+                );
+                persist_mutation_audit(
+                    "plan.roadmap",
+                    false,
+                    &report.summary,
+                    vec![RepoOutcome {
+                        repo: "plan-cache".to_string(),
+                        path: output.display().to_string(),
+                        success: true,
+                        message: format!("Roadmap items {}", roadmap.items.len()),
+                    }],
+                );
+                Ok(report)
             }
         },
         Commands::Create(args) => match &args.command {
@@ -835,10 +899,23 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                         action.message
                     );
                 }
-                Ok(CommandReport::ok(
+                let report = CommandReport::ok(
                     "create.feature",
                     format!("Processed {} scaffold actions", actions.len()),
-                ))
+                );
+                let outcomes: Vec<RepoOutcome> = actions
+                    .iter()
+                    .map(|a| RepoOutcome {
+                        repo: args.name.clone(),
+                        path: a.path.display().to_string(),
+                        success: a.created
+                            || a.message.contains("DRY RUN")
+                            || a.message.contains("exists"),
+                        message: a.message.clone(),
+                    })
+                    .collect();
+                persist_mutation_audit("create.feature", args.dry_run, &report.summary, outcomes);
+                Ok(report)
             }
             CreateCommands::Tests(args) => {
                 let action = create::scaffold_tests(&args.output_dir, &args.target, args.dry_run)
@@ -849,7 +926,21 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                     action.created,
                     action.message
                 );
-                Ok(CommandReport::ok("create.tests", "Generated test scaffold"))
+                let report = CommandReport::ok("create.tests", "Generated test scaffold");
+                persist_mutation_audit(
+                    "create.tests",
+                    args.dry_run,
+                    &report.summary,
+                    vec![RepoOutcome {
+                        repo: args.target.clone(),
+                        path: action.path.display().to_string(),
+                        success: action.created
+                            || action.message.contains("DRY RUN")
+                            || action.message.contains("exists"),
+                        message: action.message,
+                    }],
+                );
+                Ok(report)
             }
         },
         Commands::Know(args) => {
@@ -868,10 +959,20 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                         )
                         .map_err(|e| miette::miette!("Failed recording decision: {e}"))?;
                     println!("Recorded decision {} in {}", id, db_path.display());
-                    Ok(CommandReport::ok(
+                    let report =
+                        CommandReport::ok("know.record", format!("Recorded decision {}", id));
+                    persist_mutation_audit(
                         "know.record",
-                        format!("Recorded decision {}", id),
-                    ))
+                        false,
+                        &report.summary,
+                        vec![RepoOutcome {
+                            repo: "pilot-know".to_string(),
+                            path: db_path.display().to_string(),
+                            success: true,
+                            message: format!("Decision {} recorded", id),
+                        }],
+                    );
+                    Ok(report)
                 }
                 KnowCommands::Query(args) => {
                     let records = store
@@ -894,11 +995,37 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
             }
         }
         Commands::Navigate(args) => {
-            if args.multi {
-                run_navigate_multi(args)
+            let report = if args.multi {
+                run_navigate_multi(args)?
             } else {
-                run_navigate_single(args)
-            }
+                run_navigate_single(args)?
+            };
+            let outcomes = if args.multi {
+                resolve_multi_outcomes(args.group.clone(), args.tags.clone())
+            } else {
+                vec![RepoOutcome {
+                    repo: std::env::current_dir()
+                        .ok()
+                        .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
+                        .unwrap_or_else(|| "current-repo".to_string()),
+                    path: std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| ".".to_string()),
+                    success: true,
+                    message: report.summary.clone(),
+                }]
+            };
+            persist_mutation_audit(
+                if args.multi {
+                    "navigate.multi"
+                } else {
+                    "navigate"
+                },
+                args.dry_run,
+                &report.summary,
+                outcomes,
+            );
+            Ok(report)
         }
         Commands::Branch(args) => {
             let db_path = multi::MultiRegistry::default_db_path();
@@ -923,10 +1050,25 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                     }
 
                     let failures = outcomes.iter().filter(|o| !o.success).count();
-                    Ok(CommandReport::ok(
+                    let report = CommandReport::ok(
                         "branch.create",
                         format!("Processed {} repos ({} failed)", outcomes.len(), failures),
-                    ))
+                    );
+                    persist_mutation_audit(
+                        "branch.create",
+                        args.dry_run,
+                        &report.summary,
+                        outcomes
+                            .iter()
+                            .map(|o| RepoOutcome {
+                                repo: o.repo.clone(),
+                                path: o.path.clone(),
+                                success: o.success,
+                                message: o.message.clone(),
+                            })
+                            .collect(),
+                    );
+                    Ok(report)
                 }
                 BranchCommands::Sync(args) => {
                     let filter = to_filter(args.group.clone(), args.tags.clone());
@@ -941,10 +1083,25 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                     }
 
                     let failures = outcomes.iter().filter(|o| !o.success).count();
-                    Ok(CommandReport::ok(
+                    let report = CommandReport::ok(
                         "branch.sync",
                         format!("Processed {} repos ({} failed)", outcomes.len(), failures),
-                    ))
+                    );
+                    persist_mutation_audit(
+                        "branch.sync",
+                        args.dry_run,
+                        &report.summary,
+                        outcomes
+                            .iter()
+                            .map(|o| RepoOutcome {
+                                repo: o.repo.clone(),
+                                path: o.path.clone(),
+                                success: o.success,
+                                message: o.message.clone(),
+                            })
+                            .collect(),
+                    );
+                    Ok(report)
                 }
                 BranchCommands::Status(args) => {
                     let filter = to_filter(args.group.clone(), args.tags.clone());
@@ -977,10 +1134,25 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                     }
 
                     let failures = outcomes.iter().filter(|o| !o.success).count();
-                    Ok(CommandReport::ok(
+                    let report = CommandReport::ok(
                         "branch.prune",
                         format!("Processed {} repos ({} failed)", outcomes.len(), failures),
-                    ))
+                    );
+                    persist_mutation_audit(
+                        "branch.prune",
+                        args.dry_run,
+                        &report.summary,
+                        outcomes
+                            .iter()
+                            .map(|o| RepoOutcome {
+                                repo: o.repo.clone(),
+                                path: o.path.clone(),
+                                success: o.success,
+                                message: o.message.clone(),
+                            })
+                            .collect(),
+                    );
+                    Ok(report)
                 }
             }
         }
@@ -1008,10 +1180,26 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                         entry.tags
                     );
 
-                    Ok(CommandReport::ok(
+                    let report = CommandReport::ok(
                         "multi.register",
                         format!("Registered {}", entry.path.display()),
-                    ))
+                    );
+                    persist_mutation_audit(
+                        "multi.register",
+                        false,
+                        &report.summary,
+                        vec![RepoOutcome {
+                            repo: entry.name.clone(),
+                            path: entry.path.display().to_string(),
+                            success: true,
+                            message: format!(
+                                "group={:?} tags={}",
+                                entry.group_name,
+                                entry.tags.join(",")
+                            ),
+                        }],
+                    );
+                    Ok(report)
                 }
                 MultiCommands::List(args) => {
                     let filter = to_filter(args.group.clone(), args.tags.clone());
@@ -1100,10 +1288,25 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                                 args.repo,
                                 args.depends_on.join(", ")
                             );
-                            return Ok(CommandReport::ok(
+                            let report = CommandReport::ok(
                                 "multi.deps.set",
                                 "Dry-run dependency update planned",
-                            ));
+                            );
+                            persist_mutation_audit(
+                                "multi.deps.set",
+                                true,
+                                &report.summary,
+                                vec![RepoOutcome {
+                                    repo: args.repo.clone(),
+                                    path: "~/.pilot/workspace.db".to_string(),
+                                    success: true,
+                                    message: format!(
+                                        "Would set dependencies => [{}]",
+                                        args.depends_on.join(", ")
+                                    ),
+                                }],
+                            );
+                            return Ok(report);
                         }
 
                         registry
@@ -1114,10 +1317,25 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                             args.repo,
                             args.depends_on.join(", ")
                         );
-                        Ok(CommandReport::ok(
+                        let report = CommandReport::ok(
                             "multi.deps.set",
                             format!("Updated dependencies for {}", args.repo),
-                        ))
+                        );
+                        persist_mutation_audit(
+                            "multi.deps.set",
+                            false,
+                            &report.summary,
+                            vec![RepoOutcome {
+                                repo: args.repo.clone(),
+                                path: "~/.pilot/workspace.db".to_string(),
+                                success: true,
+                                message: format!(
+                                    "Dependencies set => [{}]",
+                                    args.depends_on.join(", ")
+                                ),
+                            }],
+                        );
+                        Ok(report)
                     }
                 },
                 MultiCommands::Order(args) => {
@@ -1159,10 +1377,28 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                             for (idx, repo) in ordered.iter().enumerate() {
                                 println!("{}. {} | {}", idx + 1, repo.name, repo.path.display());
                             }
-                            return Ok(CommandReport::ok(
+                            let report = CommandReport::ok(
                                 "multi.prs.create",
                                 format!("Dry-run planned {} repos for linked PRs", ordered.len()),
-                            ));
+                            );
+                            persist_mutation_audit(
+                                "multi.prs.create",
+                                true,
+                                &report.summary,
+                                ordered
+                                    .iter()
+                                    .map(|r| RepoOutcome {
+                                        repo: r.name.clone(),
+                                        path: r.path.display().to_string(),
+                                        success: true,
+                                        message: format!(
+                                            "Planned linked PR head={} base={}",
+                                            args.head_branch, args.base_branch
+                                        ),
+                                    })
+                                    .collect(),
+                            );
+                            return Ok(report);
                         }
 
                         let manifest = registry
@@ -1174,10 +1410,26 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                             )
                             .map_err(|e| miette::miette!("PR plan generation failed: {e}"))?;
                         println!("Linked PR manifest: {}", manifest.display());
-                        Ok(CommandReport::ok(
+                        let report = CommandReport::ok(
                             "multi.prs.create",
                             format!("Generated linked PR manifest at {}", manifest.display()),
-                        ))
+                        );
+                        let outcomes =
+                            resolve_multi_outcomes(args.group.clone(), args.tags.clone())
+                                .into_iter()
+                                .map(|mut o| {
+                                    o.message =
+                                        format!("Linked PR manifest: {}", manifest.display());
+                                    o
+                                })
+                                .collect();
+                        persist_mutation_audit(
+                            "multi.prs.create",
+                            false,
+                            &report.summary,
+                            outcomes,
+                        );
+                        Ok(report)
                     }
                 },
             }
@@ -1210,6 +1462,56 @@ fn resolve_secure_targets(group: Option<String>, tags: Vec<String>) -> Result<Ve
     }
 
     Ok(vec![std::env::current_dir().into_diagnostic()?])
+}
+
+fn resolve_multi_outcomes(group: Option<String>, tags: Vec<String>) -> Vec<RepoOutcome> {
+    let db_path = multi::MultiRegistry::default_db_path();
+    let filter = to_filter(group, tags);
+    let repos = multi::MultiRegistry::open(&db_path)
+        .and_then(|r| r.list_repos(&filter))
+        .unwrap_or_default();
+    repos
+        .into_iter()
+        .map(|r| RepoOutcome {
+            repo: r.name,
+            path: r.path.display().to_string(),
+            success: true,
+            message: "Selected for operation".to_string(),
+        })
+        .collect()
+}
+
+fn persist_mutation_audit(command: &str, dry_run: bool, summary: &str, outcomes: Vec<RepoOutcome>) {
+    let repo_count = outcomes.len();
+    let failures = outcomes.iter().filter(|o| !o.success).count();
+    let artifact_path = write_repo_outcomes_artifact(command, &outcomes)
+        .map(|p| p.display().to_string())
+        .ok();
+
+    let event = AuditEvent {
+        timestamp: String::new(),
+        command: command.to_string(),
+        dry_run,
+        success: failures == 0,
+        summary: summary.to_string(),
+        repo_count,
+        failures,
+        artifact_path: artifact_path.clone(),
+    };
+
+    if let Ok(audit_path) = append_audit_event(event) {
+        if let Some(artifact) = artifact_path {
+            println!(
+                "Audit recorded: {} | outcomes: {}",
+                audit_path.display(),
+                artifact
+            );
+        } else {
+            println!("Audit recorded: {}", audit_path.display());
+        }
+    } else {
+        eprintln!("Warning: failed to write audit log for {}", command);
+    }
 }
 
 fn run_navigate_single(args: &NavigateArgs) -> Result<CommandReport> {
