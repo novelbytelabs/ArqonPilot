@@ -4,8 +4,8 @@ use arrow_array::{
     StringArray,
 };
 use arrow_schema::FieldRef;
-use futures::StreamExt;
 use arrow_schema::{DataType, Field, Schema};
+use futures::StreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{connect, Connection, Table};
 use std::sync::Arc;
