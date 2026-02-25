@@ -20,4 +20,13 @@ cargo run -p pilot -- oracle scan
 cargo run -p pilot -- oracle query --query "Where is X?"
 cargo run -p pilot -- navigate --dry-run
 cargo run -p pilot -- --report-json init
+cargo run -p pilot -- multi register --path /path/to/repo --group core --tag rust
+cargo run -p pilot -- multi list --group core
+cargo run -p pilot -- multi status --group core
+cargo run -p pilot -- multi query --query "state machine" --group core --per-repo-limit 5
+cargo run -p pilot -- multi deps set --repo repo-b --depends-on repo-a
+cargo run -p pilot -- multi order --group core
+cargo run -p pilot -- multi prs create --group core --head-branch dev --base-branch main
+cargo run -p pilot -- branch create release/2026-02 --base-branch main --group core --dry-run
+cargo run -p pilot -- navigate --multi --dry-run --group core
 ```

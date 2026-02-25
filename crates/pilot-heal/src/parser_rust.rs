@@ -19,21 +19,14 @@ struct CargoMessage {
 #[derive(Debug, Deserialize)]
 struct CompilerMessage {
     message: String,
-    code: Option<DiagnosticCode>,
     level: String,
     spans: Vec<Span>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DiagnosticCode {
-    code: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct Span {
     file_name: String,
     line_start: u32,
-    line_end: u32,
 }
 
 pub struct RustLogParser;

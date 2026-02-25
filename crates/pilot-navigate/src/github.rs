@@ -21,7 +21,6 @@ struct CreatePRRequest {
 #[derive(Deserialize)]
 struct CreatePRResponse {
     html_url: String,
-    number: u64,
 }
 
 impl GitHubClient {

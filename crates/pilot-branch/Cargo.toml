@@ -1,0 +1,9 @@
+[package]
+name = "pilot-branch"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0.100"
+serde = { workspace = true, features = ["derive"] }
+pilot-multi = { path = "../pilot-multi" }

@@ -1,0 +1,16 @@
+[package]
+name = "pilot-multi"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0.100"
+chrono = "0.4.38"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+pilot-core = { path = "../pilot-core" }
+pilot-oracle = { path = "../pilot-oracle" }
+
+[dev-dependencies]
+tempfile = "3.12.0"

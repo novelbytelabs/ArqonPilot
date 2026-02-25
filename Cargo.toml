@@ -5,6 +5,8 @@ members = [
     "crates/pilot-oracle",
     "crates/pilot-heal",
     "crates/pilot-navigate",
+    "crates/pilot-multi",
+    "crates/pilot-branch",
 ]
 resolver = "2"
 
