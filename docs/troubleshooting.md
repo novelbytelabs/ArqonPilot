@@ -210,7 +210,7 @@ What it does:
 2. Runs the mandatory pre-push gate.
 3. Runs push with `GIT_TRACE=1` and `GIT_CURL_VERBOSE=1`.
 4. Writes a full log to `~/.pilot/reports/push_main_<timestamp>.log` (fallback: `/tmp/pilot-reports/`).
-5. Prints likely cause buckets (divergence, auth, DNS).
+5. Prints a final compact summary: result, duration, gate/push return codes, warning/error counts, divergence state, likely cause, and full log path.
 
 Defaults:
 - Push target defaults to your current checked-out branch.
