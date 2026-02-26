@@ -123,6 +123,17 @@ Why this works:
 2. `prepush_gate.sh` validates policy + locked compile + targeted locked tests.
 3. Push proceeds only after the gate passes.
 
+If push still fails after gate success:
+- Treat it as a normal git transport/state issue first (for example non-fast-forward or auth), not a guardrail issue.
+- Run:
+
+```bash
+git status -sb
+git fetch origin
+git pull --rebase origin main
+git push origin main:main
+```
+
 Gotchas:
 1. Ambiguous package names during pinning:
 - Use exact package IDs: `name@from_version` (for example `getrandom@0.4.1`).

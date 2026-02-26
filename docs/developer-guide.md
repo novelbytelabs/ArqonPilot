@@ -104,7 +104,7 @@ If `Cargo.lock` drifts and pre-push fails with `edition2024` parser errors, run:
 ./scripts/repair_lock_182.sh
 ```
 
-This restores both lockfiles from the latest compatible commit and re-runs the gate.
+This restores a compatible core lockfile (or applies exact-version fallback transitions) and can re-run the gate.
 
 ## Pre-Check Scripts Reference
 
@@ -136,6 +136,8 @@ These scripts are the required guardrail layer before commit/push:
 3. `cargo update -p <crate>` can be ambiguous; use exact IDs like `getrandom@0.4.1`.
 4. A green local build with newer toolchain does not guarantee core-lane compatibility.
 5. `prepush_gate.sh` writes logs to `~/.pilot/reports/` and falls back to `/tmp/pilot-reports/` if needed.
+6. Some crates must be downgraded via upstream constraints first (for example `blake3` before `constant_time_eq`).
+7. If push still fails after gate passes, check for normal git remote-state errors (non-fast-forward/auth), not policy failures.
 
 ## Release Readiness
 

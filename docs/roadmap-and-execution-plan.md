@@ -101,10 +101,11 @@ Delivered in this wave (so far):
 4. `scripts/install_git_hooks.sh` + `.githooks/pre-push`
 5. `scripts/repair_lock_182.sh` initial and iterative hardening
 6. documentation updates in Developer Guide, Testing Strategy, Troubleshooting
+7. drift chain mitigation for `uuid/getrandom/wasip3/wit-bindgen` and `blake3/constant_time_eq`
 
 Open tasks:
 
-1. complete `repair_lock_182.sh` transition coverage for newly observed drift crates
+1. keep `repair_lock_182.sh` transition map updated as new drift crates appear
 2. implement Control Panel `Guardrails` tab:
 - policy check action
 - drift report action
