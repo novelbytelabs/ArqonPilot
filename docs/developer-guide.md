@@ -28,7 +28,7 @@ pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --teleme
 
 JWT auth is optional and read from `ARQONBUS_AUTH_JWT` by default.
 
-For a local operator panel (Branch, Multi, Telemetry), run:
+For a local operator panel (Oracle, Heal, Branch, Multi, Telemetry), run:
 
 ```bash
 pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788
@@ -128,6 +128,14 @@ These scripts are the required guardrail layer before commit/push:
 5. `./scripts/repair_lock_182.sh`
 - Recovery script for lockfile drift in Rust `1.82.0` lane.
 - Attempts compatible lock restore from git history; falls back to exact-version pin transitions.
+
+## Guardrail Gotchas
+
+1. If `git push` fails before upload, the pre-push hook blocked it intentionally for safety.
+2. `edition2024` parser errors indicate lockfile drift for Rust `1.82.0`, not necessarily source-code regressions.
+3. `cargo update -p <crate>` can be ambiguous; use exact IDs like `getrandom@0.4.1`.
+4. A green local build with newer toolchain does not guarantee core-lane compatibility.
+5. `prepush_gate.sh` writes logs to `~/.pilot/reports/` and falls back to `/tmp/pilot-reports/` if needed.
 
 ## Release Readiness
 
