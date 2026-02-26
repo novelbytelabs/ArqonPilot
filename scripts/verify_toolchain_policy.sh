@@ -4,6 +4,29 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+JSON_MODE=0
+if [[ "${1:-}" == "--json" ]]; then
+  JSON_MODE=1
+fi
+
+FAILED_CHECKS=()
+
+log() {
+  if [[ "$JSON_MODE" -eq 0 ]]; then
+    echo "$@"
+  fi
+}
+
+run_check() {
+  local check_id="$1"
+  shift
+  if ! "$@"; then
+    FAILED_CHECKS+=("$check_id")
+    return 1
+  fi
+  return 0
+}
+
 search_pattern() {
   local pattern="$1"
   local file="$2"
@@ -74,41 +97,57 @@ check_lock_compat() {
   ' "$file"
 }
 
-echo "[policy] rust-toolchain pin"
-search_pattern '^channel = "1\.82\.0"$' rust-toolchain.toml
+log "[policy] rust-toolchain pin"
+run_check "rust_toolchain_pin" search_pattern '^channel = "1\.82\.0"$' rust-toolchain.toml || true
 
-echo "[policy] CI lane pin"
-search_pattern 'toolchain:\s*"1\.82\.0"' .github/workflows/ci.yml
+log "[policy] CI lane pin"
+run_check "ci_lane_pin" search_pattern 'toolchain:\s*"1\.82\.0"' .github/workflows/ci.yml || true
 
-echo "[policy] packaging lane pin"
-search_pattern 'toolchain:\s*"1\.88\.0"' .github/workflows/pypi.yml
+log "[policy] packaging lane pin"
+run_check "packaging_lane_pin" search_pattern 'toolchain:\s*"1\.88\.0"' .github/workflows/pypi.yml || true
 
-echo "[policy] packaging lockfile policy"
-search_pattern 'Cargo\.lock\.packaging' .github/workflows/pypi.yml
-search_pattern '\--locked' .github/workflows/pypi.yml
+log "[policy] packaging lockfile policy"
+run_check "packaging_lockfile_reference" search_pattern 'Cargo\.lock\.packaging' .github/workflows/pypi.yml || true
+run_check "packaging_locked_flag" search_pattern '\--locked' .github/workflows/pypi.yml || true
 if contains_pattern 'cargo\s+update' .github/workflows/pypi.yml; then
   echo "ERROR: pypi.yml must not run cargo update in CI" >&2
-  exit 1
+  FAILED_CHECKS+=("packaging_no_cargo_update")
 fi
 
-echo "[policy] lockfiles exist"
-test -f Cargo.lock
-test -f Cargo.lock.packaging
+log "[policy] lockfiles exist"
+run_check "core_lock_exists" test -f Cargo.lock || true
+run_check "packaging_lock_exists" test -f Cargo.lock.packaging || true
 
-echo "[policy] lockfile compatibility for Rust 1.82 core lane"
-check_lock_compat Cargo.lock
+log "[policy] lockfile compatibility for Rust 1.82 core lane"
+run_check "core_lock_compatibility" check_lock_compat Cargo.lock || true
 
 if [[ "${VERIFY_PACKAGING_LOCK_182:-0}" == "1" ]]; then
-  echo "[policy] optional packaging lock compatibility check for Rust 1.82"
-  check_lock_compat Cargo.lock.packaging
+  log "[policy] optional packaging lock compatibility check for Rust 1.82"
+  run_check "packaging_lock_compatibility" check_lock_compat Cargo.lock.packaging || true
 fi
 
-echo "[policy] python and cargo versions aligned"
+log "[policy] python and cargo versions aligned"
 PY_VER="$(sed -n 's/^version = \"\([0-9][0-9.]*\)\"$/\1/p' pyproject.toml | head -n1)"
 CARGO_VER="$(sed -n 's/^version = \"\([0-9][0-9.]*\)\"$/\1/p' Cargo.toml | head -n1)"
 if [[ "$PY_VER" != "$CARGO_VER" ]]; then
   echo "ERROR: version mismatch pyproject.toml=$PY_VER Cargo.toml=$CARGO_VER" >&2
+  FAILED_CHECKS+=("version_alignment")
+fi
+
+if [[ "${#FAILED_CHECKS[@]}" -gt 0 ]]; then
+  if [[ "$JSON_MODE" -eq 1 ]]; then
+    printf '{"ok":false,"failed_checks":['
+    for i in "${!FAILED_CHECKS[@]}"; do
+      if [[ "$i" -gt 0 ]]; then printf ','; fi
+      printf '"%s"' "${FAILED_CHECKS[$i]}"
+    done
+    printf ']}\n'
+  fi
   exit 1
 fi
 
-echo "Toolchain policy checks passed."
+if [[ "$JSON_MODE" -eq 1 ]]; then
+  printf '{"ok":true,"failed_checks":[]}\n'
+else
+  echo "Toolchain policy checks passed."
+fi

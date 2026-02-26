@@ -45,6 +45,8 @@ UI endpoints:
 - `GET /api/history` recent audit history
 - `GET /api/reports` list recent `~/.pilot/reports` artifacts
 - `GET /api/report?path=...` read one report file (bounded, path-validated)
+- `POST /api/dependencies/run` run dependency guardrail actions (`policy`, `hook-policy`, `gate`, `repair`)
+- `GET /api/dependencies/logs` read recent pre-push gate logs
 - `GET /api/stream` live telemetry stream (SSE)
 
 The Telemetry tab includes:
@@ -64,6 +66,14 @@ The Oracle tab includes:
 The Heal tab includes:
 - `pilot.heal.run` controls (`log_file`, `max_attempts`, `target`, `verbose`, `plan_only`, `max_files`)
 - safe default behavior in read-only UI mode (`plan_only=true` is enforced)
+
+The Dependencies tab includes:
+- policy check trigger
+- hook policy check trigger
+- pre-push gate trigger
+- lock repair trigger (`repair_lock_182.sh --no-gate`, mutations required)
+- recent gate-log viewer
+- status cards powered by script `--json` outputs for policy/hook checks
 
 Run one message and exit:
 

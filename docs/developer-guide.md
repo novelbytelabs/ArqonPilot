@@ -28,7 +28,7 @@ pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --teleme
 
 JWT auth is optional and read from `ARQONBUS_AUTH_JWT` by default.
 
-For a local operator panel (Oracle, Heal, Branch, Multi, Telemetry), run:
+For a local operator panel (Oracle, Heal, Dependencies, Branch, Multi, Telemetry), run:
 
 ```bash
 pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788
@@ -117,10 +117,12 @@ These scripts are the required guardrail layer before commit/push:
 2. `./scripts/verify_toolchain_policy.sh`
 - Verifies Rust lane pins (`1.82.0` core, `1.88.0` packaging), lockfile policy wiring, and lockfile compatibility checks for core lane.
 - Fails fast with explicit incompatible dependencies (for example `time 0.3.47`, `wit-bindgen 0.51.0`).
+- Supports machine-readable mode: `./scripts/verify_toolchain_policy.sh --json`
 
 3. `./scripts/verify_git_hook_policy.sh`
 - Ensures `.githooks/pre-push` exists and calls `./scripts/prepush_gate.sh`.
 - Ensures hook installer and mandatory locked compile gate are in place.
+- Supports machine-readable mode: `./scripts/verify_git_hook_policy.sh --json`
 
 4. `./scripts/install_git_hooks.sh`
 - Sets `core.hooksPath=.githooks` so pushes run the gate automatically.

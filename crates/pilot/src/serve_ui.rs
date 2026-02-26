@@ -14,6 +14,7 @@ use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::process::Command as TokioCommand;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -58,6 +59,13 @@ struct ReportPathQuery {
     max_bytes: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct DependencyActionRequest {
+    action: String,
+    #[serde(default)]
+    json: bool,
+}
+
 pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
     let (event_tx, _) = broadcast::channel(512);
     spawn_bus_telemetry_listener(cfg.bus.clone(), event_tx.clone());
@@ -74,6 +82,8 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/history", get(get_history))
         .route("/api/reports", get(get_reports))
         .route("/api/report", get(get_report_content))
+        .route("/api/dependencies/run", post(run_dependency_action))
+        .route("/api/dependencies/logs", get(get_dependency_logs))
         .route("/api/stream", get(stream_events))
         .with_state(state);
 
@@ -170,6 +180,59 @@ async fn get_report_content(Query(q): Query<ReportPathQuery>) -> Response {
             Json(json!({"ok": true, "path": q.path, "content": content})).into_response()
         }
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn run_dependency_action(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<DependencyActionRequest>,
+) -> Response {
+    let action = req.action.trim();
+    if action.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "action is required");
+    }
+    if action == "repair" && !state.allow_mutations {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "repair action blocked in read-only UI mode",
+        );
+    }
+    let cmd = match (action, req.json) {
+        ("policy", true) => "./scripts/verify_toolchain_policy.sh --json",
+        ("policy", false) => "./scripts/verify_toolchain_policy.sh",
+        ("hook-policy", true) => "./scripts/verify_git_hook_policy.sh --json",
+        ("hook-policy", false) => "./scripts/verify_git_hook_policy.sh",
+        ("gate", _) => "./scripts/prepush_gate.sh",
+        ("repair", _) => "./scripts/repair_lock_182.sh --no-gate",
+        _ => return error_response(StatusCode::BAD_REQUEST, "unsupported action"),
+    };
+
+    match run_local_script(cmd).await {
+        Ok((status, out, err)) => {
+            let ok = status == 0;
+            let body = json!({
+                "ok": ok,
+                "action": action,
+                "exit_code": status,
+                "stdout": out,
+                "stderr": err
+            });
+            let _ = state.events.send(json!({
+                "source": "dependency_action",
+                "action": action,
+                "success": ok,
+                "exit_code": status
+            }));
+            Json(body).into_response()
+        }
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn get_dependency_logs() -> Response {
+    match read_recent_gate_logs(4, 20_000) {
+        Ok(logs) => Json(json!({"ok": true, "logs": logs})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     }
 }
 
@@ -279,6 +342,59 @@ fn read_report_file(path: &str, max_bytes: usize) -> std::io::Result<String> {
         bytes
     };
     Ok(String::from_utf8_lossy(&clipped).to_string())
+}
+
+async fn run_local_script(cmd: &str) -> std::io::Result<(i32, String, String)> {
+    let child = TokioCommand::new("bash")
+        .arg("-lc")
+        .arg(cmd)
+        .output()
+        .await?;
+    let code = child.status.code().unwrap_or(-1);
+    let out = String::from_utf8_lossy(&child.stdout).to_string();
+    let err = String::from_utf8_lossy(&child.stderr).to_string();
+    Ok((code, out, err))
+}
+
+fn read_recent_gate_logs(limit: usize, tail_bytes: usize) -> std::io::Result<Vec<Value>> {
+    let mut roots = Vec::new();
+    roots.push(reports_root());
+    roots.push(PathBuf::from("/tmp/pilot-reports"));
+
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for root in roots {
+        if !root.exists() {
+            continue;
+        }
+        for entry in std::fs::read_dir(root)? {
+            let entry = entry?;
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("prepush_gate_") || !name.ends_with(".log") {
+                continue;
+            }
+            let md = entry.metadata()?;
+            files.push((
+                md.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                path,
+            ));
+        }
+    }
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut out = Vec::new();
+    for (_, path) in files.into_iter().take(limit) {
+        let content = std::fs::read(&path)?;
+        let start = content.len().saturating_sub(tail_bytes);
+        let tail = String::from_utf8_lossy(&content[start..]).to_string();
+        out.push(json!({
+            "path": path.display().to_string(),
+            "tail": tail
+        }));
+    }
+    Ok(out)
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response {
@@ -654,6 +770,23 @@ const INDEX_HTML: &str = r#"<!doctype html>
       padding: 10px;
       text-align: center;
     }
+    .dep-status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .dep-status-card {
+      border: 1px solid #2f436f;
+      border-radius: 10px;
+      padding: 10px;
+      background: #0a1321;
+    }
+    .dep-status-card h4 {
+      margin: 0 0 8px;
+      font-size: 0.9rem;
+    }
+    .dep-ok { color: #b6f7cb; }
+    .dep-fail { color: #ffb2b2; }
     .muted { color: var(--muted); margin-top: 7px; }
     @media (max-width: 980px) {
       .grid, .status { grid-template-columns: 1fr; }
@@ -665,7 +798,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 <div class="wrap">
   <div class="hero">
     <h1>Arqon Pilot Control Panel</h1>
-    <h2 class="muted">Oracle + Heal + Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</h2>
+    <h2 class="muted">Oracle + Heal + Dependencies + Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</h2>
     <div class="bus-status-row">
       ArqonBus:
       <span id="bus-status-chip" class="bus-chip disconnected">DISCONNECTED</span>
@@ -675,6 +808,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
   <div class="tabs">
     <button class="tab" data-tab="oracle">Oracle</button>
     <button class="tab" data-tab="heal">Heal</button>
+    <button class="tab" data-tab="dependencies">Dependencies</button>
     <button class="tab active" data-tab="branch">Branch</button>
     <button class="tab" data-tab="multi">Multi</button>
     <button class="tab" data-tab="telemetry">Telemetry</button>
@@ -729,6 +863,38 @@ Recommended flow:
 1) Plan Only
 2) Review output + timeline
 3) Run Heal (when safe)</pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="dependencies">
+    <div class="grid">
+      <div class="card">
+        <h3>Checks and Recovery</h3>
+        <div id="dep-status-grid" class="dep-status-grid">
+          <div class="dep-status-card">
+            <h4>Policy</h4>
+            <div id="dep-policy-status" class="muted">unknown</div>
+          </div>
+          <div class="dep-status-card">
+            <h4>Hook Policy</h4>
+            <div id="dep-hook-status" class="muted">unknown</div>
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn secondary" onclick="depRun('policy')">Policy Check</button>
+          <button class="btn secondary" onclick="depRun('hook-policy')">Hook Policy</button>
+        </div>
+        <div class="row">
+          <button class="btn secondary" onclick="depRun('gate')">Run Gate</button>
+          <button class="btn" onclick="depRun('repair')">Repair Lock (No Gate)</button>
+        </div>
+        <pre id="dep-action-out">No dependency action run yet.</pre>
+      </div>
+      <div class="card">
+        <h3>Recent Gate Logs</h3>
+        <button class="btn secondary" onclick="depLoadLogs()">Refresh Logs</button>
+        <pre id="dep-logs">[]</pre>
       </div>
     </div>
   </section>
@@ -835,6 +1001,10 @@ const timelineTextFilter = document.getElementById('timeline-text-filter');
 const streamToggleBtn = document.getElementById('stream-toggle');
 const oracleReportSelect = document.getElementById('oracle-report-select');
 const oracleReportContent = document.getElementById('oracle-report-content');
+const depActionOut = document.getElementById('dep-action-out');
+const depLogs = document.getElementById('dep-logs');
+const depPolicyStatus = document.getElementById('dep-policy-status');
+const depHookStatus = document.getElementById('dep-hook-status');
 const timelineState = new Map();
 let selectedOperationId = null;
 let auditCache = [];
@@ -1169,6 +1339,47 @@ async function oracleViewReport() {
   oracleReportContent.textContent = data.content || '';
 }
 
+async function depRun(action) {
+  const isJsonAction = action === 'policy' || action === 'hook-policy';
+  const res = await fetch('/api/dependencies/run', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ action, json: isJsonAction })
+  });
+  const data = await res.json();
+  if (isJsonAction) {
+    try {
+      const parsed = JSON.parse(data.stdout || '{}');
+      if (action === 'policy') setDepStatus(depPolicyStatus, parsed);
+      if (action === 'hook-policy') setDepStatus(depHookStatus, parsed);
+    } catch (_) {}
+  }
+  depActionOut.textContent = JSON.stringify(data, null, 2);
+  depLoadLogs();
+}
+
+function setDepStatus(el, parsed) {
+  if (!parsed || typeof parsed !== 'object') {
+    el.textContent = 'invalid response';
+    el.className = 'dep-fail';
+    return;
+  }
+  if (parsed.ok) {
+    el.textContent = 'PASS';
+    el.className = 'dep-ok';
+    return;
+  }
+  const failed = Array.isArray(parsed.failed_checks) ? parsed.failed_checks.join(', ') : 'unknown';
+  el.textContent = 'FAIL: ' + failed;
+  el.className = 'dep-fail';
+}
+
+async function depLoadLogs() {
+  const res = await fetch('/api/dependencies/logs');
+  const data = await res.json();
+  depLogs.textContent = JSON.stringify(data, null, 2);
+}
+
 function multiRegister() {
   run('pilot.multi.register', {
     path: document.getElementById('repo-path').value,
@@ -1237,6 +1448,7 @@ function toggleStream() {
 attachStream();
 loadHistory();
 oracleLoadReports();
+depLoadLogs();
 setInterval(loadHistory, 30000);
 </script>
 </body>
