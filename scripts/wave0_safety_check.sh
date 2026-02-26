@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 check_absent() {
   local pattern="$1"
-  if rg -F -n "$pattern" "$ROOT/crates/pilot" >/tmp/wave0_rg.txt 2>&1; then
+  if grep -F -R -n "$pattern" "$ROOT/crates/pilot" >/tmp/wave0_rg.txt 2>&1; then
     echo "[FAIL] Found forbidden pattern: $pattern"
     cat /tmp/wave0_rg.txt
     exit 1
@@ -16,8 +16,9 @@ check_absent() {
 check_present() {
   local pattern="$1"
   local file="$2"
-  if ! rg -F -n "$pattern" "$file" >/tmp/wave0_rg.txt 2>&1; then
+  if ! grep -F -n "$pattern" "$file" >/tmp/wave0_rg.txt 2>&1; then
     echo "[FAIL] Missing required pattern '$pattern' in $file"
+    cat /tmp/wave0_rg.txt
     exit 1
   fi
   echo "[OK] Present: $pattern in $file"

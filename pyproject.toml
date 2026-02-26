@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "arqon-pilot"
-version = "0.1.4"
+version = "0.1.5"
 description = "Arqon Pilot CLI for multi-repo automation and self-healing workflows"
 readme = "README.md"
 requires-python = ">=3.10"
