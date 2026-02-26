@@ -77,19 +77,23 @@ h2 {
 .pilot-hero::before {
   content: "";
   position: absolute;
-  inset: -20px 15%;
+  top: -36px;
+  left: 20%;
+  width: 60%;
+  height: 260px;
   background: radial-gradient(circle, rgba(124, 58, 237, 0.35), rgba(124, 58, 237, 0.0) 70%);
-  filter: blur(26px);
+  filter: blur(30px);
   z-index: -1;
 }
 
 .pilot-hero-title {
-  font-size: clamp(3rem, 9vw, 6rem);
-  line-height: 0.95;
-  margin: 0 0 1.2rem;
+  font-family: "Rajdhani", sans-serif;
+  font-size: clamp(4.2rem, 12vw, 7.4rem);
+  line-height: 0.88;
+  margin: 0 0 1rem;
   font-weight: 800;
   color: #d8dbff;
-  text-shadow: 0 0 26px rgba(120, 121, 255, 0.36);
+  text-shadow: 0 0 32px rgba(120, 121, 255, 0.42);
 }
 
 .pilot-hero-subtitle {
@@ -168,3 +172,4 @@ h2 {
   background: rgba(8, 17, 41, 0.55);
   border-color: rgba(100, 132, 255, 0.38);
 }
+@import url("https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700;800&display=swap");

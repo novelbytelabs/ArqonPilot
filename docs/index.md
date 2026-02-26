@@ -1,5 +1,3 @@
-# Arqon Pilot
-
 <div class="pilot-hero">
   <h1 class="pilot-hero-title">Arqon Pilot</h1>
   <p class="pilot-hero-subtitle">Autonomy isn't a workflow anymore.<br/>It's an operating loop.</p>
