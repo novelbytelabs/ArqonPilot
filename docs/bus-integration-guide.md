@@ -45,11 +45,15 @@ UI endpoints:
 - `GET /api/history` recent audit history
 - `GET /api/reports` list recent `~/.pilot/reports` artifacts
 - `GET /api/report?path=...` read one report file (bounded, path-validated)
-- `POST /api/dependencies/run` run dependency guardrail actions (`policy`, `hook-policy`, `gate`, `repair`)
+- `POST /api/dependencies/run` run dependency guardrail actions (`policy`, `hook-policy`, `gate`, `repair`, `push`)
 - `GET /api/dependencies/logs` read recent pre-push gate logs
 - `GET /api/stream` live telemetry stream (SSE)
 
-The Telemetry tab includes:
+Control model:
+- Dashboard is central command and can run Oracle/Heal/Dependencies/Branch/Multi actions.
+- Specialist tabs provide deep controls, but day-to-day operations can be executed from Dashboard.
+
+Dashboard telemetry includes:
 - raw live event stream
 - operations timeline grouped by `operation_id`
 - timeline filters: failed-only, command contains, and text search (op id/summary)
@@ -57,6 +61,9 @@ The Telemetry tab includes:
 - export: filtered timeline JSON
 - bus status chip: connected/disconnected
 - operation detail drill-down: click timeline item for full payload and artifact hint
+
+Telemetry tab includes:
+- mirrored tail view for quick telemetry inspection
 
 The Oracle tab includes:
 - `pilot.oracle.scan` trigger
@@ -72,6 +79,7 @@ The Dependencies tab includes:
 - hook policy check trigger
 - pre-push gate trigger
 - lock repair trigger (`repair_lock_182.sh --no-gate`, mutations required)
+- safe push trigger (`push_main.sh <branch> <remote>`)
 - recent gate-log viewer
 - status cards powered by script `--json` outputs for policy/hook checks
 

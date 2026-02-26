@@ -69,7 +69,7 @@ ArqonPilot becomes a centralized control system:
 ## Wave 0 to Wave 8 (Completed Baseline)
 Completed foundational extraction, modularization, multi-repo core, branch/navigate, secure/heal, plan/create/know, rollout, and release readiness.
 
-## Wave 9 (Control Panel Maturation) - In Progress
+## Wave 9 (Control Panel Maturation) - Completed
 Deliverables:
 1. Dashboard as default central command.
 2. Tab parity for high-frequency operations.
@@ -79,7 +79,12 @@ Exit criteria:
 1. All key actions invokable from Dashboard.
 2. Live operation statuses are visible without opening logs.
 
-## Wave 10 (Packaging and Runtime Reliability) - In Progress
+Completion notes:
+1. Dashboard now acts as central command for Oracle/Heal/Dependencies/Branch/Multi operations.
+2. Dependencies actions are executable from Dashboard, including safe push via `push_main.sh`.
+3. Timeline, operation detail, status chips, and telemetry stream are centralized in Dashboard.
+
+## Wave 10 (Packaging and Runtime Reliability) - Current Focus
 Deliverables:
 1. Deterministic packaging lane (`1.88.0`, `Cargo.lock.packaging`).
 2. Conda/Linux runtime guidance and fixes.

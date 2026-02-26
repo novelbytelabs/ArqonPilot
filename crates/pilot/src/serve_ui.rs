@@ -64,6 +64,8 @@ struct DependencyActionRequest {
     action: String,
     #[serde(default)]
     json: bool,
+    branch: Option<String>,
+    remote: Option<String>,
 }
 
 pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
@@ -197,17 +199,30 @@ async fn run_dependency_action(
             "repair action blocked in read-only UI mode",
         );
     }
-    let cmd = match (action, req.json) {
-        ("policy", true) => "./scripts/verify_toolchain_policy.sh --json",
-        ("policy", false) => "./scripts/verify_toolchain_policy.sh",
-        ("hook-policy", true) => "./scripts/verify_git_hook_policy.sh --json",
-        ("hook-policy", false) => "./scripts/verify_git_hook_policy.sh",
-        ("gate", _) => "./scripts/prepush_gate.sh",
-        ("repair", _) => "./scripts/repair_lock_182.sh --no-gate",
+    let result = match (action, req.json) {
+        ("policy", true) => run_local_script("./scripts/verify_toolchain_policy.sh --json").await,
+        ("policy", false) => run_local_script("./scripts/verify_toolchain_policy.sh").await,
+        ("hook-policy", true) => {
+            run_local_script("./scripts/verify_git_hook_policy.sh --json").await
+        }
+        ("hook-policy", false) => run_local_script("./scripts/verify_git_hook_policy.sh").await,
+        ("gate", _) => run_local_script("./scripts/prepush_gate.sh").await,
+        ("repair", _) => run_local_script("./scripts/repair_lock_182.sh --no-gate").await,
+        ("push", _) => {
+            let branch = req.branch.as_deref().unwrap_or("main");
+            let remote = req.remote.as_deref().unwrap_or("origin");
+            if !is_safe_cli_token(branch) || !is_safe_cli_token(remote) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "branch/remote contains unsupported characters",
+                );
+            }
+            run_local_script(&format!("./scripts/push_main.sh {branch} {remote}")).await
+        }
         _ => return error_response(StatusCode::BAD_REQUEST, "unsupported action"),
     };
 
-    match run_local_script(cmd).await {
+    match result {
         Ok((status, out, err)) => {
             let ok = status == 0;
             let body = json!({
@@ -221,11 +236,36 @@ async fn run_dependency_action(
                 "source": "dependency_action",
                 "action": action,
                 "success": ok,
-                "exit_code": status
+                "exit_code": status,
+                "branch": req.branch,
+                "remote": req.remote
             }));
             Json(body).into_response()
         }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+fn is_safe_cli_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_safe_cli_token;
+
+    #[test]
+    fn test_safe_cli_token() {
+        assert!(is_safe_cli_token("main"));
+        assert!(is_safe_cli_token("origin"));
+        assert!(is_safe_cli_token("feat/pilot-wave9"));
+        assert!(is_safe_cli_token("release/v1.0.0"));
+        assert!(!is_safe_cli_token(""));
+        assert!(!is_safe_cli_token("main;rm -rf /"));
+        assert!(!is_safe_cli_token("origin && whoami"));
+        assert!(!is_safe_cli_token("bad token"));
     }
 }
 
@@ -785,6 +825,25 @@ const INDEX_HTML: &str = r#"<!doctype html>
       margin: 0 0 8px;
       font-size: 0.9rem;
     }
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .chip {
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 4px 10px;
+      border: 1px solid #3a578a;
+      background: #152845;
+      color: #d5e4ff;
+    }
+    .chip.ok { border-color: #2d8a52; background: #102d1f; color: #b6f7cb; }
+    .chip.fail { border-color: #9e3f3f; background: #341616; color: #ffb2b2; }
+    .chip.warn { border-color: #997a33; background: #2f2610; color: #ffe6a6; }
+    .chip.neutral { border-color: #3a578a; background: #152845; color: #d5e4ff; }
     .dep-ok { color: #b6f7cb; }
     .dep-fail { color: #ffb2b2; }
     .muted { color: var(--muted); margin-top: 7px; }
@@ -806,13 +865,112 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </div>
 
   <div class="tabs">
+    <button class="tab active" data-tab="dashboard">Dashboard</button>
     <button class="tab" data-tab="oracle">Oracle</button>
     <button class="tab" data-tab="heal">Heal</button>
     <button class="tab" data-tab="dependencies">Dependencies</button>
-    <button class="tab active" data-tab="branch">Branch</button>
+    <button class="tab" data-tab="branch">Branch</button>
     <button class="tab" data-tab="multi">Multi</button>
     <button class="tab" data-tab="telemetry">Telemetry</button>
   </div>
+
+  <section class="panel active" id="dashboard">
+    <div class="grid">
+      <div class="card">
+        <h3>System Status</h3>
+        <div class="chip-row">
+          <span id="dash-policy-chip" class="chip neutral">Policy: unknown</span>
+          <span id="dash-hook-chip" class="chip neutral">Hook: unknown</span>
+          <span id="dash-gate-chip" class="chip neutral">Gate: unknown</span>
+          <span id="dash-push-chip" class="chip neutral">Push: unknown</span>
+        </div>
+        <div class="row">
+          <button class="btn secondary" onclick="dashRunPolicy()">Policy</button>
+          <button class="btn secondary" onclick="dashRunHookPolicy()">Hook Policy</button>
+          <button class="btn secondary" onclick="dashRunGate()">Gate</button>
+          <button class="btn" onclick="dashRunRepair()">Repair</button>
+        </div>
+        <div class="row">
+          <input id="dash-push-branch" placeholder="main" value="main" />
+          <input id="dash-push-remote" placeholder="origin" value="origin" />
+          <button class="btn" onclick="dashRunPush()">Push Safe</button>
+        </div>
+        <pre id="dash-status-out">ready</pre>
+      </div>
+
+      <div class="card">
+        <h3>Oracle + Heal Quick Ops</h3>
+        <input id="dash-oracle-query" placeholder="where is branch sync implemented?" />
+        <div class="row">
+          <button class="btn secondary" onclick="oracleScan()">Oracle Scan</button>
+          <button class="btn secondary" onclick="dashOracleQuery()">Oracle Query</button>
+        </div>
+        <div class="row">
+          <input id="dash-heal-log-file" placeholder="test_output.json" value="test_output.json" />
+          <input id="dash-heal-target" placeholder="optional target" />
+        </div>
+        <div class="row">
+          <input id="dash-heal-max-attempts" placeholder="2" value="2" />
+          <input id="dash-heal-max-files" placeholder="5" value="5" />
+        </div>
+        <div class="row">
+          <button class="btn secondary" onclick="dashHealPlan()">Heal Plan</button>
+          <button class="btn" onclick="dashHealRun()">Heal Run</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Branch + Multi Quick Ops</h3>
+        <div class="row">
+          <input id="dash-branch-name" placeholder="feat/pilot-wave9" />
+          <input id="dash-branch-base" placeholder="main" value="main" />
+        </div>
+        <div class="row">
+          <input id="dash-branch-group" placeholder="core" />
+          <input id="dash-branch-tags" placeholder="apply-pilot,wave9" />
+        </div>
+        <div class="row">
+          <button class="btn secondary" onclick="dashBranchCreate()">Branch Create</button>
+          <button class="btn secondary" onclick="branchStatus()">Branch Status</button>
+          <button class="btn secondary" onclick="multiStatus()">Multi Status</button>
+          <button class="btn secondary" onclick="multiOrder()">Multi Order</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Live Event Stream</h3>
+        <div class="row">
+          <button id="stream-toggle" class="btn secondary" onclick="toggleStream()">Pause Stream</button>
+          <button class="btn secondary" onclick="clearLive()">Clear</button>
+        </div>
+        <pre id="live-stream">[]</pre>
+      </div>
+    </div>
+
+    <div class="status">
+      <div class="card">
+        <h3>Operations Timeline</h3>
+        <div class="row">
+          <label style="font-size:0.82rem;color:#a8b9e3;">
+            <input id="failed-only" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
+            failed only
+          </label>
+          <button class="btn secondary" onclick="exportTimeline()">Export Filtered JSON</button>
+        </div>
+        <input id="timeline-command-filter" placeholder="filter command (e.g. pilot.branch)" />
+        <input id="timeline-text-filter" placeholder="filter op id or summary text" />
+        <div id="timeline" class="timeline">
+          <div class="tl-empty">No operations yet</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Operation Detail</h3>
+        <div id="op-detail-meta" class="muted">Select a timeline item</div>
+        <div id="op-detail-artifact" class="muted"></div>
+        <pre id="op-detail">[]</pre>
+      </div>
+    </div>
+  </section>
 
   <section class="panel" id="oracle">
     <div class="grid">
@@ -899,7 +1057,7 @@ Recommended flow:
     </div>
   </section>
 
-  <section class="panel active" id="branch">
+  <section class="panel" id="branch">
     <div class="grid">
       <div class="card">
         <h3>Create Branch</h3>
@@ -949,27 +1107,15 @@ Recommended flow:
   <section class="panel" id="telemetry">
     <div class="grid">
       <div class="card">
-        <h3>Live Event Stream</h3>
+        <h3>Telemetry Mirror</h3>
         <div class="row">
-          <button id="stream-toggle" class="btn secondary" onclick="toggleStream()">Pause Stream</button>
-          <button class="btn secondary" onclick="clearLive()">Clear</button>
+          <button class="btn secondary" onclick="syncTelemetryMirror()">Refresh Mirror</button>
         </div>
-        <pre id="live-stream">[]</pre>
+        <pre id="telemetry-mirror">[]</pre>
       </div>
       <div class="card">
-        <h3>Operations Timeline</h3>
-        <div class="row">
-          <label style="font-size:0.82rem;color:#a8b9e3;">
-            <input id="failed-only" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
-            failed only
-          </label>
-          <button class="btn secondary" onclick="exportTimeline()">Export Filtered JSON</button>
-        </div>
-        <input id="timeline-command-filter" placeholder="filter command (e.g. pilot.branch)" />
-        <input id="timeline-text-filter" placeholder="filter op id or summary text" />
-        <div id="timeline" class="timeline">
-          <div class="tl-empty">No operations yet</div>
-        </div>
+        <h3>Telemetry Mode</h3>
+        <pre id="telemetry-mode">Dashboard stream is active. Use this tab for mirrored view and quick inspection.</pre>
       </div>
     </div>
   </section>
@@ -980,10 +1126,8 @@ Recommended flow:
       <pre id="out">ready</pre>
     </div>
     <div class="card">
-      <h3>Operation Detail</h3>
-      <div id="op-detail-meta" class="muted">Select a timeline item</div>
-      <div id="op-detail-artifact" class="muted"></div>
-      <pre id="op-detail">[]</pre>
+      <h3>Dependencies Action Output</h3>
+      <pre id="dep-action-out-global">No dependency action run yet.</pre>
     </div>
   </div>
 </div>
@@ -1002,9 +1146,16 @@ const streamToggleBtn = document.getElementById('stream-toggle');
 const oracleReportSelect = document.getElementById('oracle-report-select');
 const oracleReportContent = document.getElementById('oracle-report-content');
 const depActionOut = document.getElementById('dep-action-out');
+const depActionOutGlobal = document.getElementById('dep-action-out-global');
 const depLogs = document.getElementById('dep-logs');
 const depPolicyStatus = document.getElementById('dep-policy-status');
 const depHookStatus = document.getElementById('dep-hook-status');
+const telemetryMirror = document.getElementById('telemetry-mirror');
+const dashStatusOut = document.getElementById('dash-status-out');
+const dashPolicyChip = document.getElementById('dash-policy-chip');
+const dashHookChip = document.getElementById('dash-hook-chip');
+const dashGateChip = document.getElementById('dash-gate-chip');
+const dashPushChip = document.getElementById('dash-push-chip');
 const timelineState = new Map();
 let selectedOperationId = null;
 let auditCache = [];
@@ -1029,6 +1180,9 @@ async function run(command, payload) {
   });
   const data = await res.json();
   out.textContent = JSON.stringify(data, null, 2);
+  if (dashStatusOut) {
+    dashStatusOut.textContent = JSON.stringify(data, null, 2);
+  }
   loadHistory();
 }
 
@@ -1041,11 +1195,28 @@ function appendLive(eventObj) {
   arr.push(eventObj);
   if (arr.length > 120) arr = arr.slice(arr.length - 120);
   liveStream.textContent = JSON.stringify(arr, null, 2);
+  if (telemetryMirror) {
+    const tail = arr.slice(Math.max(0, arr.length - 20));
+    telemetryMirror.textContent = JSON.stringify(tail, null, 2);
+  }
   ingestTimeline(eventObj);
 }
 
 function clearLive() {
   liveStream.textContent = '[]';
+  if (telemetryMirror) telemetryMirror.textContent = '[]';
+}
+
+function syncTelemetryMirror() {
+  if (!telemetryMirror) return;
+  const current = liveStream.textContent.trim();
+  try {
+    const arr = current ? JSON.parse(current) : [];
+    const tail = Array.isArray(arr) ? arr.slice(Math.max(0, arr.length - 20)) : [];
+    telemetryMirror.textContent = JSON.stringify(tail, null, 2);
+  } catch (_) {
+    telemetryMirror.textContent = current || '[]';
+  }
 }
 
 function setBusStatus(connected, note) {
@@ -1279,6 +1450,13 @@ function oracleQuery() {
   });
 }
 
+function dashOracleQuery() {
+  run('pilot.oracle.query', {
+    query: document.getElementById('dash-oracle-query').value,
+    cli: true
+  });
+}
+
 function healPayload(planOnly) {
   const maxAttemptsRaw = document.getElementById('heal-max-attempts').value;
   const maxFilesRaw = document.getElementById('heal-max-files').value;
@@ -1300,6 +1478,29 @@ function healPlan() {
 
 function healRun() {
   run('pilot.heal.run', healPayload(false));
+}
+
+function dashHealPayload(planOnly) {
+  const maxAttemptsRaw = document.getElementById('dash-heal-max-attempts').value;
+  const maxFilesRaw = document.getElementById('dash-heal-max-files').value;
+  const maxAttempts = parseInt(maxAttemptsRaw || '2', 10);
+  const maxFiles = parseInt(maxFilesRaw || '5', 10);
+  return {
+    log_file: document.getElementById('dash-heal-log-file').value || 'test_output.json',
+    target: document.getElementById('dash-heal-target').value || null,
+    max_attempts: Number.isFinite(maxAttempts) ? maxAttempts : 2,
+    max_files: Number.isFinite(maxFiles) ? maxFiles : 5,
+    verbose: false,
+    plan_only: !!planOnly
+  };
+}
+
+function dashHealPlan() {
+  run('pilot.heal.run', dashHealPayload(true));
+}
+
+function dashHealRun() {
+  run('pilot.heal.run', dashHealPayload(false));
 }
 
 async function oracleLoadReports() {
@@ -1341,10 +1542,15 @@ async function oracleViewReport() {
 
 async function depRun(action) {
   const isJsonAction = action === 'policy' || action === 'hook-policy';
+  const req = { action, json: isJsonAction };
+  if (action === 'push') {
+    req.branch = document.getElementById('dash-push-branch').value || 'main';
+    req.remote = document.getElementById('dash-push-remote').value || 'origin';
+  }
   const res = await fetch('/api/dependencies/run', {
     method: 'POST',
     headers: {'content-type':'application/json'},
-    body: JSON.stringify({ action, json: isJsonAction })
+    body: JSON.stringify(req)
   });
   const data = await res.json();
   if (isJsonAction) {
@@ -1355,7 +1561,29 @@ async function depRun(action) {
     } catch (_) {}
   }
   depActionOut.textContent = JSON.stringify(data, null, 2);
+  if (depActionOutGlobal) {
+    depActionOutGlobal.textContent = JSON.stringify(data, null, 2);
+  }
+  updateDashChip(action, !!data.ok, data);
   depLoadLogs();
+}
+
+function setChip(el, label, level) {
+  if (!el) return;
+  el.textContent = label;
+  el.className = 'chip ' + level;
+}
+
+function updateDashChip(action, ok, data) {
+  const suffix = ok ? 'PASS' : 'FAIL';
+  const level = ok ? 'ok' : 'fail';
+  if (action === 'policy') setChip(dashPolicyChip, 'Policy: ' + suffix, level);
+  if (action === 'hook-policy') setChip(dashHookChip, 'Hook: ' + suffix, level);
+  if (action === 'gate') setChip(dashGateChip, 'Gate: ' + suffix, level);
+  if (action === 'push') setChip(dashPushChip, 'Push: ' + suffix, level);
+  if (!ok && data && data.error) {
+    appendLive({ source: 'dashboard', action, error: data.error });
+  }
 }
 
 function setDepStatus(el, parsed) {
@@ -1407,6 +1635,22 @@ function multiPrsCreate() {
   });
 }
 
+function dashBranchCreate() {
+  run('pilot.branch.create', {
+    branch: document.getElementById('dash-branch-name').value,
+    base_branch: document.getElementById('dash-branch-base').value || 'main',
+    group: document.getElementById('dash-branch-group').value || null,
+    tags: tags(document.getElementById('dash-branch-tags').value),
+    dry_run: true
+  });
+}
+
+function dashRunPolicy() { depRun('policy'); }
+function dashRunHookPolicy() { depRun('hook-policy'); }
+function dashRunGate() { depRun('gate'); }
+function dashRunRepair() { depRun('repair'); }
+function dashRunPush() { depRun('push'); }
+
 async function loadHistory() {
   const res = await fetch('/api/history');
   const data = await res.json();
@@ -1449,6 +1693,8 @@ attachStream();
 loadHistory();
 oracleLoadReports();
 depLoadLogs();
+depRun('policy');
+depRun('hook-policy');
 setInterval(loadHistory, 30000);
 </script>
 </body>
