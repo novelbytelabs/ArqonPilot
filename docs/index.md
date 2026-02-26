@@ -73,6 +73,7 @@ pilot navigate --multi --group core --dry-run
 
 ## Documentation
 
+- [Roadmap & Execution Plan](roadmap-and-execution-plan.md)
 - [Developer Guide](developer-guide.md)
 - [Troubleshooting](troubleshooting.md)
 - [Testing Strategy](testing-strategy.md)

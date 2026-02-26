@@ -129,6 +129,8 @@ Gotchas:
 
 2. Transitive chain issues:
 - A crate can reintroduce Rust-2024 dependencies indirectly (`uuid -> getrandom -> wasip3 -> wit-bindgen`).
+- Another known drift source is `constant_time_eq 0.4.x` (also requires `edition2024`).
+- `constant_time_eq` cannot always be pinned directly; in some lock states it is constrained by `blake3` (`^0.4.2`), so `blake3` must be downgraded first.
 
 3. Logging location:
 - Gate log is written to `~/.pilot/reports/`.

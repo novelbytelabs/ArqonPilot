@@ -44,6 +44,10 @@ check_lock_compat() {
         printf("ERROR: %s has wit-bindgen %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
         bad = 1;
       }
+      if (name == "constant_time_eq" && version ~ /^0\.4\./) {
+        printf("ERROR: %s has constant_time_eq %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
     }
 
     /^\[\[package\]\]/ {

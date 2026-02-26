@@ -39,6 +39,7 @@ theme:
 
 nav:
   - Home: "index.md"
+  - Roadmap & Plan: "roadmap-and-execution-plan.md"
   - Developer Guide: "developer-guide.md"
   - Arqon Bus Integration: "bus-integration-guide.md"
   - Troubleshooting: "troubleshooting.md"
