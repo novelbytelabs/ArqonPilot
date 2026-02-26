@@ -77,6 +77,27 @@ pilot --help
 ./scripts/test_matrix.sh all
 ```
 
+## Mandatory Pre-Push Gate
+
+Run this before every commit/push:
+
+```bash
+./scripts/prepush_gate.sh
+```
+
+This gate includes `cargo check -p pilot --locked` and targeted locked CLI tests.
+To enforce it automatically on every `git push`, run once per clone:
+
+```bash
+./scripts/install_git_hooks.sh
+```
+
+CI validates the hook/gate contract with:
+
+```bash
+./scripts/verify_git_hook_policy.sh
+```
+
 ## Release Readiness
 
 ```bash

@@ -80,6 +80,20 @@ Release gate:
 ./scripts/release_readiness_check.sh
 ```
 
+Mandatory pre-push gate (run before every commit/push):
+
+```bash
+./scripts/prepush_gate.sh
+```
+
+Automate this with a git hook (recommended, one-time per clone):
+
+```bash
+./scripts/install_git_hooks.sh
+```
+
+CI also enforces this policy via `./scripts/verify_git_hook_policy.sh`.
+
 ## Packaging
 
 PyPI packaging uses `maturin`.

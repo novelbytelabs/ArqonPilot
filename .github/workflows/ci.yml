@@ -27,6 +27,9 @@ jobs:
       - name: Toolchain and Lockfile Policy
         run: ./scripts/verify_toolchain_policy.sh
 
+      - name: Git Hook Policy
+        run: ./scripts/verify_git_hook_policy.sh
+
       - name: Check
         run: cargo check -p pilot --locked
 

@@ -357,6 +357,32 @@ const INDEX_HTML: &str = r#"<!doctype html>
       margin-bottom: 18px;
       box-shadow: 0 16px 42px rgba(0, 0, 0, 0.28);
     }
+    .bus-status-row {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.86rem;
+      color: #b8c8ef;
+    }
+    .bus-chip {
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-weight: 700;
+      border: 1px solid;
+      font-size: 0.74rem;
+      letter-spacing: 0.02em;
+    }
+    .bus-chip.connected {
+      color: #b7f7ca;
+      border-color: #2f965d;
+      background: #113022;
+    }
+    .bus-chip.disconnected {
+      color: #ffb9b9;
+      border-color: #aa4c4c;
+      background: #351919;
+    }
     h1 { margin: 0; font-size: 2rem; line-height: 1.1; letter-spacing: 0.01em; }
     h2 { margin: 0; font-size: 1rem; color: var(--muted); font-weight: 500; }
     h3 { margin: 0 0 10px; font-size: 1.05rem; }
@@ -471,6 +497,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
       border-radius: 10px;
       background: #0a1321;
       padding: 10px;
+      cursor: pointer;
+    }
+    .tl-card.selected {
+      border-color: #6a7dff;
+      box-shadow: inset 0 0 0 1px rgba(109, 125, 255, 0.55);
     }
     .tl-head {
       display: flex;
@@ -527,6 +558,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
   <div class="hero">
     <h1>Arqon Pilot Control Panel</h1>
     <h2 class="muted">Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</h2>
+    <div class="bus-status-row">
+      ArqonBus:
+      <span id="bus-status-chip" class="bus-chip disconnected">DISCONNECTED</span>
+    </div>
   </div>
 
   <div class="tabs">
@@ -616,21 +651,28 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <pre id="out">ready</pre>
     </div>
     <div class="card">
-      <h3>Recent Audit Events</h3>
-      <pre id="history-mirror">[]</pre>
+      <h3>Operation Detail</h3>
+      <div id="op-detail-meta" class="muted">Select a timeline item</div>
+      <div id="op-detail-artifact" class="muted"></div>
+      <pre id="op-detail">[]</pre>
     </div>
   </div>
 </div>
 <script>
 const out = document.getElementById('out');
 const liveStream = document.getElementById('live-stream');
-const historyMirror = document.getElementById('history-mirror');
+const busStatusChip = document.getElementById('bus-status-chip');
+const opDetailMeta = document.getElementById('op-detail-meta');
+const opDetailArtifact = document.getElementById('op-detail-artifact');
+const opDetail = document.getElementById('op-detail');
 const timelineEl = document.getElementById('timeline');
 const failedOnlyToggle = document.getElementById('failed-only');
 const timelineCommandFilter = document.getElementById('timeline-command-filter');
 const timelineTextFilter = document.getElementById('timeline-text-filter');
 const streamToggleBtn = document.getElementById('stream-toggle');
 const timelineState = new Map();
+let selectedOperationId = null;
+let auditCache = [];
 let streamPaused = false;
 let streamHandle = null;
 
@@ -669,6 +711,15 @@ function appendLive(eventObj) {
 
 function clearLive() {
   liveStream.textContent = '[]';
+}
+
+function setBusStatus(connected, note) {
+  busStatusChip.textContent = connected ? 'CONNECTED' : 'DISCONNECTED';
+  busStatusChip.classList.toggle('connected', connected);
+  busStatusChip.classList.toggle('disconnected', !connected);
+  if (note) {
+    opDetailMeta.textContent = note;
+  }
 }
 
 function filteredTimelineItems() {
@@ -748,7 +799,8 @@ function ingestTimeline(evt) {
     command: rec.command,
     phase: 'started',
     updatedAt: rec.at,
-    steps: []
+    steps: [],
+    rawEvents: []
   };
 
   current.command = rec.command || current.command;
@@ -759,10 +811,14 @@ function ingestTimeline(evt) {
     summary: rec.summary || '',
     at: rec.at || new Date().toISOString()
   });
+  current.rawEvents.push(evt);
   if (current.steps.length > 10) current.steps = current.steps.slice(current.steps.length - 10);
+  if (current.rawEvents.length > 20) current.rawEvents = current.rawEvents.slice(current.rawEvents.length - 20);
 
   timelineState.set(rec.opId, current);
+  if (!selectedOperationId) selectedOperationId = rec.opId;
   renderTimeline();
+  renderOperationDetail();
 }
 
 function renderTimeline() {
@@ -780,6 +836,14 @@ function renderTimeline() {
   for (const item of items) {
     const card = document.createElement('div');
     card.className = 'tl-card';
+    if (item.opId === selectedOperationId) {
+      card.classList.add('selected');
+    }
+    card.addEventListener('click', () => {
+      selectedOperationId = item.opId;
+      renderTimeline();
+      renderOperationDetail();
+    });
 
     const head = document.createElement('div');
     head.className = 'tl-head';
@@ -809,6 +873,36 @@ function renderTimeline() {
 
     timelineEl.appendChild(card);
   }
+}
+
+function shortCommand(cmd) {
+  if (!cmd) return '';
+  return cmd.startsWith('pilot.') ? cmd.slice(6) : cmd;
+}
+
+function inferArtifactPath(item) {
+  const cmd = shortCommand(item.command);
+  for (let i = auditCache.length - 1; i >= 0; i--) {
+    const ev = auditCache[i] || {};
+    if (ev.command === cmd && ev.artifact_path) {
+      return ev.artifact_path;
+    }
+  }
+  return '';
+}
+
+function renderOperationDetail() {
+  const item = selectedOperationId ? timelineState.get(selectedOperationId) : null;
+  if (!item) {
+    opDetailMeta.textContent = 'Select a timeline item';
+    opDetailArtifact.textContent = '';
+    opDetail.textContent = '[]';
+    return;
+  }
+  opDetailMeta.textContent = item.command + ' | ' + item.opId + ' | phase=' + item.phase;
+  const artifact = inferArtifactPath(item);
+  opDetailArtifact.textContent = artifact ? ('Artifact: ' + artifact) : 'Artifact: (not resolved)';
+  opDetail.textContent = JSON.stringify(item.rawEvents || [], null, 2);
 }
 
 failedOnlyToggle.addEventListener('change', renderTimeline);
@@ -869,20 +963,31 @@ function multiPrsCreate() {
 async function loadHistory() {
   const res = await fetch('/api/history');
   const data = await res.json();
-  historyMirror.textContent = JSON.stringify(data, null, 2);
+  auditCache = (data && data.events) ? data.events : [];
+  renderOperationDetail();
 }
 
 function attachStream() {
   streamHandle = new EventSource('/api/stream');
+  streamHandle.onopen = () => {
+    setBusStatus(true);
+  };
   streamHandle.addEventListener('pilot_event', (evt) => {
     if (streamPaused) return;
     try {
-      appendLive(JSON.parse(evt.data));
+      const parsed = JSON.parse(evt.data);
+      if (parsed && parsed.source === 'bus_listener' && parsed.error) {
+        setBusStatus(false, parsed.error);
+      } else {
+        setBusStatus(true);
+      }
+      appendLive(parsed);
     } catch (_) {
       appendLive({ raw: evt.data });
     }
   });
   streamHandle.onerror = () => {
+    setBusStatus(false, 'stream disconnected, retrying...');
     appendLive({ source: 'ui', warning: 'stream disconnected, retrying...' });
   };
 }

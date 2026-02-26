@@ -14,6 +14,12 @@ If you only want the shortest safe path, run this first:
 ./scripts/test_matrix.sh all
 ```
 
+Before every commit/push, run the mandatory pre-push gate:
+
+```bash
+./scripts/prepush_gate.sh
+```
+
 This runs all five layers in order. If this command passes, your change has passed the full local gate.
 
 If you are preparing a release, run the release gate right after:
@@ -112,6 +118,7 @@ For everyday development:
 1. Run `unit` while coding.
 2. Run `integration` before opening a PR.
 3. Run `all` before merge.
+4. Run `prepush_gate.sh` before every commit/push.
 
 For release prep:
 

@@ -51,6 +51,8 @@ The Telemetry tab includes:
 - timeline filters: failed-only, command contains, and text search (op id/summary)
 - stream controls: pause/resume
 - export: filtered timeline JSON
+- bus status chip: connected/disconnected
+- operation detail drill-down: click timeline item for full payload and artifact hint
 
 Run one message and exit:
 
