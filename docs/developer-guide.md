@@ -10,6 +10,13 @@
   - packaging lane Rust: `1.88.0`
   - protobuf: `4.25.8` (`protoc` `25.8`)
 
+## Memory Anchors (Immutable for this project)
+
+- Core lane is permanently frozen: Rust `1.82.0`.
+- Packaging lane is permanently frozen: Rust `1.88.0`.
+- Protobuf/protoc are permanently frozen: `4.25.8` / `25.8`.
+- Never "fix" CI by bumping these pins. Repair lockfiles and lane parity instead.
+
 ## Build
 
 ```bash
@@ -109,6 +116,11 @@ If `Cargo.lock` drifts and pre-push fails with `edition2024` parser errors, run:
 ```
 
 This restores a compatible core lockfile (or applies exact-version fallback transitions) and can re-run the gate.
+After lock repair, always run lane parity:
+
+```bash
+./scripts/ci_parity_check.sh
+```
 
 If VS Code shows only a generic push failure message, run:
 
@@ -145,6 +157,14 @@ These scripts are the required guardrail layer before commit/push:
 
 5. `./scripts/repair_lock_182.sh`
 - Recovery script for lockfile drift in Rust `1.82.0` lane.
+
+6. `./scripts/packaging_lane_check.sh`
+- Runs packaging-lane validation using Rust `1.88.0` and `Cargo.lock.packaging`.
+- Temporarily swaps `Cargo.lock` with `Cargo.lock.packaging` and restores it automatically.
+
+7. `./scripts/ci_parity_check.sh`
+- Runs full lane parity checks locally (`1.82.0` core + `1.88.0` packaging).
+- Use before merge when touching CI, lockfiles, or packaging logic.
 - Attempts compatible lock restore from git history; falls back to exact-version pin transitions.
 
 ## Guardrail Gotchas

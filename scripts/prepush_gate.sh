@@ -84,8 +84,9 @@ finish() {
     echo "[pre-push] status: FAIL"
     echo "[pre-push] remediation:"
     echo "  1) Inspect log: $LOG_FILE"
-    echo "  2) Run: ./scripts/repair_lock_182.sh"
+    echo "  2) Run: ./scripts/repair_lock_182.sh --no-gate"
     echo "  3) Re-run: ./scripts/prepush_gate.sh"
+    echo "  4) Confirm lane parity: ./scripts/ci_parity_check.sh"
   fi
 }
 trap 'finish $?' EXIT

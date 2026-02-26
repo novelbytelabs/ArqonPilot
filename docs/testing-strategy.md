@@ -159,6 +159,10 @@ Frozen versions are enforced by guardrail scripts:
 - packaging Rust `1.88.0`
 - protobuf `4.25.8` (`protoc` `25.8`)
 
+CI parity is enforced by:
+- `./scripts/packaging_lane_check.sh` (packaging lane local/CI check)
+- `./scripts/ci_parity_check.sh` (combined core + packaging lane validation)
+
 Release and packaging paths use locked dependency resolution. In practice, this means `Cargo.lock` must be present and up to date. If `Cargo.lock` drifts, CI failures are expected and should be fixed before release.
 
 ## How to Read Failures

@@ -84,7 +84,7 @@ Completion notes:
 2. Dependencies actions are executable from Dashboard, including safe push via `push_main.sh`.
 3. Timeline, operation detail, status chips, and telemetry stream are centralized in Dashboard.
 
-## Wave 10 (Packaging and Runtime Reliability) - Current Focus
+## Wave 10 (Packaging and Runtime Reliability) - Completed
 Deliverables:
 1. Deterministic packaging lane (`1.88.0`, `Cargo.lock.packaging`).
 2. Conda/Linux runtime guidance and fixes.
@@ -93,6 +93,12 @@ Deliverables:
 Exit criteria:
 1. Packaging workflow is reproducible.
 2. Install + `pilot --help` smoke documented and repeatable.
+
+Completion notes:
+1. Added packaging-lane check script (`scripts/packaging_lane_check.sh`) using Rust `1.88.0` + `Cargo.lock.packaging`.
+2. Added CI parity script (`scripts/ci_parity_check.sh`) for deterministic local validation of both lanes.
+3. Added CI `packaging-parity` job in `.github/workflows/ci.yml` to catch packaging drift before publish.
+4. Strengthened policy checks so CI must retain both lane pins and packaging check step.
 
 ## Wave 11 (Guardrails and Dependencies System) - In Progress
 Deliverables:

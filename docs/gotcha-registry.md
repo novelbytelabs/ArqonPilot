@@ -56,6 +56,34 @@ Keep this file current whenever a new failure class appears.
   2. Read final summary block:
      - `result`, `prepush_gate_rc`, `git_push_rc`, `likely_cause`, `full_log`.
 
+## G-005: Local pass but CI fail (lane mismatch)
+
+- Signature:
+  - local `cargo check -p pilot --locked` passes
+  - CI fails in core or packaging job with dependency/toolchain mismatch
+- Cause:
+  - lane drift (core `1.82.0` vs packaging `1.88.0`)
+  - lockfile mismatch (`Cargo.lock` vs `Cargo.lock.packaging`)
+  - CI workflow changes not validated locally
+- Prevention:
+  1. `./scripts/ci_parity_check.sh`
+  2. `./scripts/push_main.sh`
+- Recovery:
+  1. `./scripts/verify_toolchain_policy.sh`
+  2. `./scripts/repair_lock_182.sh --no-gate`
+  3. `./scripts/packaging_lane_check.sh`
+  4. `./scripts/prepush_gate.sh`
+
+## G-006: Packaging lane toolchain missing locally
+
+- Signature:
+  - `toolchain '1.88.0-x86_64-unknown-linux-gnu' is not installed`
+  - failure from `./scripts/packaging_lane_check.sh` or `./scripts/ci_parity_check.sh`
+- Recovery:
+  1. `rustup toolchain install 1.88.0-x86_64-unknown-linux-gnu`
+  2. `./scripts/packaging_lane_check.sh`
+  3. `./scripts/ci_parity_check.sh`
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`

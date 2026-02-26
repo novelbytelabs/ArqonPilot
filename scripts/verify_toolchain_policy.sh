@@ -142,6 +142,8 @@ run_check "core_toolchain_installed" toolchain_installed "$PILOT_CORE_RUST_VERSI
 
 log "[policy] CI lane pin"
 run_check "ci_lane_pin" search_pattern "toolchain:\\s*\"${PILOT_CORE_RUST_VERSION//./\\.}\"" .github/workflows/ci.yml || true
+run_check "ci_packaging_lane_pin" search_pattern "toolchain:\\s*\"${PILOT_PACKAGING_RUST_VERSION//./\\.}\"" .github/workflows/ci.yml || true
+run_check "ci_packaging_lane_check_step" search_pattern 'scripts/packaging_lane_check\.sh' .github/workflows/ci.yml || true
 
 log "[policy] packaging lane pin"
 run_check "packaging_lane_pin" search_pattern "toolchain:\\s*\"${PILOT_PACKAGING_RUST_VERSION//./\\.}\"" .github/workflows/pypi.yml || true

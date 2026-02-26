@@ -38,3 +38,19 @@ jobs:
 
       - name: Release Readiness
         run: ./scripts/release_readiness_check.sh
+
+  packaging-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust (Packaging Lane)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"
+
+      - name: Toolchain and Lockfile Policy
+        run: ./scripts/verify_toolchain_policy.sh
+
+      - name: Packaging Lane Check
+        run: ./scripts/packaging_lane_check.sh
