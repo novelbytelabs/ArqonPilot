@@ -43,16 +43,6 @@ nav:
   - Testing Strategy: "testing-strategy.md"
   - Operator Runbook: "operator-runbook.md"
   - Branch Management Guide: "branch-management-guide.md"
-  - Wave 0.5 Validation: "project/wave-0_5-validation.md"
-  - Wave 1 Modularization: "project/wave-1-modularization.md"
-  - Wave 2 Multi Foundation: "project/wave-2-multi-foundation.md"
-  - Wave 3 Branch + Navigate Orchestration: "project/wave-3-branch-navigate-orchestration.md"
-  - Wave 4 Secure + Heal Expansion: "project/wave-4-secure-heal-expansion.md"
-  - Wave 5 Plan + Create + Know: "project/wave-5-plan-create-know.md"
-  - Wave 6 Acceptance + Dogfooding: "project/wave-6-acceptance-and-dogfooding.md"
-  - Wave 7 Controlled Apply Rollout: "project/wave-7-controlled-apply-rollout.md"
-  - Wave 8 Release Readiness: "project/wave-8-release-readiness.md"
-  - Wave 10 Packaging Design: "project/wave-10-packaging-design.md"
 
 markdown_extensions:
   - attr_list
