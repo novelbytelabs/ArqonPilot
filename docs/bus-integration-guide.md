@@ -43,6 +43,8 @@ UI endpoints:
 - `GET /` control panel
 - `POST /api/command` execute `pilot.*` command over ArqonBus
 - `GET /api/history` recent audit history
+- `GET /api/reports` list recent `~/.pilot/reports` artifacts
+- `GET /api/report?path=...` read one report file (bounded, path-validated)
 - `GET /api/stream` live telemetry stream (SSE)
 
 The Telemetry tab includes:
@@ -53,6 +55,11 @@ The Telemetry tab includes:
 - export: filtered timeline JSON
 - bus status chip: connected/disconnected
 - operation detail drill-down: click timeline item for full payload and artifact hint
+
+The Oracle tab includes:
+- `pilot.oracle.scan` trigger
+- `pilot.oracle.query` interactive query
+- report browser/viewer for `~/.pilot/reports`
 
 Run one message and exit:
 
@@ -98,6 +105,8 @@ Do not put this in global `.bashrc`; keep it scoped to the target conda environm
 - `pilot.multi.status`
 - `pilot.multi.order`
 - `pilot.multi.prs.create`
+- `pilot.oracle.scan`
+- `pilot.oracle.query`
 
 ## Contract Rules (Strict v1)
 

@@ -1,5 +1,5 @@
 use crate::bus::{send_command_once, BusBridgeConfig};
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
@@ -47,6 +47,17 @@ struct UiCommandResponse {
     response: Value,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReportsQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReportPathQuery {
+    path: String,
+    max_bytes: Option<usize>,
+}
+
 pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
     let (event_tx, _) = broadcast::channel(512);
     spawn_bus_telemetry_listener(cfg.bus.clone(), event_tx.clone());
@@ -61,6 +72,8 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/", get(index))
         .route("/api/command", post(run_command))
         .route("/api/history", get(get_history))
+        .route("/api/reports", get(get_reports))
+        .route("/api/report", get(get_report_content))
         .route("/api/stream", get(stream_events))
         .with_state(state);
 
@@ -139,6 +152,27 @@ async fn get_history() -> Response {
     }
 }
 
+async fn get_reports(Query(q): Query<ReportsQuery>) -> Response {
+    let limit = q.limit.unwrap_or(200).min(2000);
+    match list_report_files(limit) {
+        Ok(items) => Json(json!({"ok": true, "reports": items})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn get_report_content(Query(q): Query<ReportPathQuery>) -> Response {
+    let max_bytes = q
+        .max_bytes
+        .unwrap_or(512 * 1024)
+        .clamp(1024, 2 * 1024 * 1024);
+    match read_report_file(&q.path, max_bytes) {
+        Ok(content) => {
+            Json(json!({"ok": true, "path": q.path, "content": content})).into_response()
+        }
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
 async fn stream_events(
     State(state): State<Arc<UiState>>,
 ) -> Sse<impl tokio_stream::Stream<Item = std::result::Result<Event, Infallible>>> {
@@ -175,6 +209,76 @@ fn read_recent_audit_events(limit: usize) -> std::io::Result<Vec<Value>> {
 fn audit_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".pilot").join("audit.jsonl")
+}
+
+fn reports_root() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".pilot").join("reports")
+}
+
+fn list_report_files(limit: usize) -> std::io::Result<Vec<Value>> {
+    let root = reports_root();
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut rows: Vec<(std::time::SystemTime, Value)> = Vec::new();
+    for entry in std::fs::read_dir(&root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let md = entry.metadata()?;
+        let modified = md.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .to_string();
+        rows.push((
+            modified,
+            json!({
+                "path": rel,
+                "size_bytes": md.len(),
+                "modified_unix": modified
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            }),
+        ));
+    }
+
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(rows.into_iter().take(limit).map(|(_, v)| v).collect())
+}
+
+fn read_report_file(path: &str, max_bytes: usize) -> std::io::Result<String> {
+    let root = reports_root();
+    if !root.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "reports directory does not exist",
+        ));
+    }
+
+    let root_canon = root.canonicalize()?;
+    let requested = root.join(path);
+    let requested_canon = requested.canonicalize()?;
+    if !requested_canon.starts_with(&root_canon) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "report path must stay within ~/.pilot/reports",
+        ));
+    }
+
+    let bytes = std::fs::read(requested_canon)?;
+    let clipped = if bytes.len() > max_bytes {
+        bytes[..max_bytes].to_vec()
+    } else {
+        bytes
+    };
+    Ok(String::from_utf8_lossy(&clipped).to_string())
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response {
@@ -303,6 +407,7 @@ fn is_mutating_command(command: &str) -> bool {
             | "pilot.branch.prune"
             | "pilot.multi.register"
             | "pilot.multi.prs.create"
+            | "pilot.heal.run"
     )
 }
 
@@ -315,6 +420,9 @@ fn enforce_dry_run(command: &str, payload: &mut Value) {
             | "pilot.multi.prs.create"
     ) {
         payload["dry_run"] = json!(true);
+    }
+    if command == "pilot.heal.run" {
+        payload["plan_only"] = json!(true);
     }
 }
 
@@ -431,7 +539,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       flex-direction: column;
       gap: 10px;
     }
-    input {
+    input, select {
       width: 100%;
       background: #0d1526;
       color: #ebf1ff;
@@ -441,7 +549,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       font-size: 0.95rem;
     }
     input::placeholder { color: #7f94c6; }
-    input:focus {
+    input:focus, select:focus {
       outline: none;
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(48, 199, 244, 0.18);
@@ -557,7 +665,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 <div class="wrap">
   <div class="hero">
     <h1>Arqon Pilot Control Panel</h1>
-    <h2 class="muted">Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</h2>
+    <h2 class="muted">Oracle + Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</h2>
     <div class="bus-status-row">
       ArqonBus:
       <span id="bus-status-chip" class="bus-chip disconnected">DISCONNECTED</span>
@@ -565,10 +673,31 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </div>
 
   <div class="tabs">
+    <button class="tab" data-tab="oracle">Oracle</button>
     <button class="tab active" data-tab="branch">Branch</button>
     <button class="tab" data-tab="multi">Multi</button>
     <button class="tab" data-tab="telemetry">Telemetry</button>
   </div>
+
+  <section class="panel" id="oracle">
+    <div class="grid">
+      <div class="card">
+        <h3>Oracle Scan / Query</h3>
+        <button class="btn" onclick="oracleScan()">Scan Index</button>
+        <input id="oracle-query" placeholder="where is branch sync implemented?" />
+        <button class="btn secondary" onclick="oracleQuery()">Run Query</button>
+      </div>
+      <div class="card">
+        <h3>Oracle Reports</h3>
+        <div class="row">
+          <button class="btn secondary" onclick="oracleLoadReports()">Refresh</button>
+          <button class="btn secondary" onclick="oracleViewReport()">View</button>
+        </div>
+        <select id="oracle-report-select"></select>
+        <pre id="oracle-report-content">No report selected.</pre>
+      </div>
+    </div>
+  </section>
 
   <section class="panel active" id="branch">
     <div class="grid">
@@ -670,6 +799,8 @@ const failedOnlyToggle = document.getElementById('failed-only');
 const timelineCommandFilter = document.getElementById('timeline-command-filter');
 const timelineTextFilter = document.getElementById('timeline-text-filter');
 const streamToggleBtn = document.getElementById('stream-toggle');
+const oracleReportSelect = document.getElementById('oracle-report-select');
+const oracleReportContent = document.getElementById('oracle-report-content');
 const timelineState = new Map();
 let selectedOperationId = null;
 let auditCache = [];
@@ -933,6 +1064,54 @@ function branchPrune() {
 }
 function branchStatus() { run('pilot.branch.status', { group: null, tags: [] }); }
 
+function oracleScan() {
+  run('pilot.oracle.scan', {});
+}
+
+function oracleQuery() {
+  run('pilot.oracle.query', {
+    query: document.getElementById('oracle-query').value,
+    cli: true
+  });
+}
+
+async function oracleLoadReports() {
+  const res = await fetch('/api/reports?limit=200');
+  const data = await res.json();
+  const rows = (data && data.reports) ? data.reports : [];
+  oracleReportSelect.innerHTML = '';
+  if (!rows.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No report files found in ~/.pilot/reports';
+    oracleReportSelect.appendChild(opt);
+    oracleReportContent.textContent = 'No report files found.';
+    return;
+  }
+  for (const row of rows) {
+    const opt = document.createElement('option');
+    opt.value = row.path;
+    const kb = Math.max(1, Math.round((row.size_bytes || 0) / 1024));
+    opt.textContent = row.path + ' (' + kb + ' KB)';
+    oracleReportSelect.appendChild(opt);
+  }
+}
+
+async function oracleViewReport() {
+  const path = oracleReportSelect.value;
+  if (!path) {
+    oracleReportContent.textContent = 'No report selected.';
+    return;
+  }
+  const res = await fetch('/api/report?path=' + encodeURIComponent(path) + '&max_bytes=524288');
+  const data = await res.json();
+  if (!data || !data.ok) {
+    oracleReportContent.textContent = JSON.stringify(data, null, 2);
+    return;
+  }
+  oracleReportContent.textContent = data.content || '';
+}
+
 function multiRegister() {
   run('pilot.multi.register', {
     path: document.getElementById('repo-path').value,
@@ -1000,6 +1179,7 @@ function toggleStream() {
 
 attachStream();
 loadHistory();
+oracleLoadReports();
 setInterval(loadHistory, 30000);
 </script>
 </body>

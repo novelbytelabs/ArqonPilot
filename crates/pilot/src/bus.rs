@@ -115,6 +115,39 @@ struct MultiPrsCreatePayload {
     dry_run: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleScanPayload {
+    schema_version: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleQueryPayload {
+    schema_version: u32,
+    query: String,
+    #[serde(default)]
+    cli: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HealRunPayload {
+    schema_version: u32,
+    #[serde(default)]
+    log_file: Option<String>,
+    #[serde(default)]
+    max_attempts: Option<u32>,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    verbose: Option<bool>,
+    #[serde(default)]
+    plan_only: Option<bool>,
+    #[serde(default)]
+    max_files: Option<usize>,
+}
+
 pub async fn run_bridge(cfg: &BusBridgeConfig) -> Result<()> {
     let (ws_stream, _) = connect_async(&cfg.ws_url)
         .await
@@ -517,6 +550,44 @@ fn map_bus_command_to_args(
                 args.push("--dry-run".to_string());
             }
         }
+        "pilot.oracle.scan" => {
+            let _req: OracleScanPayload = parse_contract(command, payload)?;
+            args.extend(["oracle".to_string(), "scan".to_string()]);
+        }
+        "pilot.oracle.query" => {
+            let req: OracleQueryPayload = parse_contract(command, payload)?;
+            args.extend([
+                "oracle".to_string(),
+                "query".to_string(),
+                "--query".to_string(),
+                req.query,
+            ]);
+            if req.cli.unwrap_or(true) {
+                args.push("--cli".to_string());
+            }
+        }
+        "pilot.heal.run" => {
+            let req: HealRunPayload = parse_contract(command, payload)?;
+            args.push("heal".to_string());
+            if let Some(log) = req.log_file {
+                args.extend(["--log-file".to_string(), log]);
+            }
+            if let Some(attempts) = req.max_attempts {
+                args.extend(["--max-attempts".to_string(), attempts.to_string()]);
+            }
+            if let Some(target) = req.target {
+                args.extend(["--target".to_string(), target]);
+            }
+            if req.verbose.unwrap_or(false) {
+                args.push("--verbose".to_string());
+            }
+            if req.plan_only.unwrap_or(false) {
+                args.push("--plan-only".to_string());
+            }
+            if let Some(max_files) = req.max_files {
+                args.extend(["--max-files".to_string(), max_files.to_string()]);
+            }
+        }
         other => {
             return Err(format!("Unsupported pilot bus command: {}", other));
         }
@@ -647,7 +718,39 @@ mod tests {
     #[test]
     fn unsupported_command_is_rejected() {
         let payload = json!({"schema_version": 1});
-        let err = map_bus_command_to_args("pilot.oracle.scan", &payload).unwrap_err();
+        let err = map_bus_command_to_args("pilot.unknown.command", &payload).unwrap_err();
         assert!(err.contains("Unsupported"));
+    }
+
+    #[test]
+    fn map_oracle_query_supported() {
+        let payload = json!({
+            "schema_version": 1,
+            "query": "where does branch sync live?",
+            "cli": true
+        });
+        let args = map_bus_command_to_args("pilot.oracle.query", &payload).unwrap();
+        assert_eq!(args[0], "oracle");
+        assert_eq!(args[1], "query");
+        assert!(args.contains(&"--query".to_string()));
+        assert!(args.contains(&"--cli".to_string()));
+    }
+
+    #[test]
+    fn map_heal_run_supported() {
+        let payload = json!({
+            "schema_version": 1,
+            "log_file": "test_output.json",
+            "max_attempts": 2,
+            "target": "crates/pilot/src/main.rs",
+            "verbose": true,
+            "plan_only": true,
+            "max_files": 6
+        });
+        let args = map_bus_command_to_args("pilot.heal.run", &payload).unwrap();
+        assert_eq!(args[0], "heal");
+        assert!(args.contains(&"--log-file".to_string()));
+        assert!(args.contains(&"--plan-only".to_string()));
+        assert!(args.contains(&"--max-files".to_string()));
     }
 }

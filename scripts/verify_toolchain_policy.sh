@@ -24,6 +24,52 @@ contains_pattern() {
   fi
 }
 
+check_lock_compat() {
+  local file="$1"
+  awk -v f="$file" '
+    function check_one(name, version) {
+      if (name == "comfy-table" && version ~ /^7\.(2|3|4|5|6|7|8|9)/) {
+        printf("ERROR: %s has comfy-table %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
+      if (name == "time" && version ~ /^0\.3\.(4[7-9]|[5-9][0-9])/) {
+        printf("ERROR: %s has time %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
+      if (name == "time-core" && version ~ /^0\.1\.(8|9|[1-9][0-9])/) {
+        printf("ERROR: %s has time-core %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
+      if (name == "wit-bindgen" && version ~ /^0\.5[1-9]\./) {
+        printf("ERROR: %s has wit-bindgen %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
+    }
+
+    /^\[\[package\]\]/ {
+      if (n != "" && v != "") check_one(n, v);
+      n = ""; v = "";
+      next;
+    }
+    /^name = "/ {
+      n = $0;
+      sub(/^name = "/, "", n);
+      sub(/"$/, "", n);
+      next;
+    }
+    /^version = "/ {
+      v = $0;
+      sub(/^version = "/, "", v);
+      sub(/"$/, "", v);
+      next;
+    }
+    END {
+      if (n != "" && v != "") check_one(n, v);
+      if (bad == 1) exit 1;
+    }
+  ' "$file"
+}
+
 echo "[policy] rust-toolchain pin"
 search_pattern '^channel = "1\.82\.0"$' rust-toolchain.toml
 
@@ -44,6 +90,14 @@ fi
 echo "[policy] lockfiles exist"
 test -f Cargo.lock
 test -f Cargo.lock.packaging
+
+echo "[policy] lockfile compatibility for Rust 1.82 core lane"
+check_lock_compat Cargo.lock
+
+if [[ "${VERIFY_PACKAGING_LOCK_182:-0}" == "1" ]]; then
+  echo "[policy] optional packaging lock compatibility check for Rust 1.82"
+  check_lock_compat Cargo.lock.packaging
+fi
 
 echo "[policy] python and cargo versions aligned"
 PY_VER="$(sed -n 's/^version = \"\([0-9][0-9.]*\)\"$/\1/p' pyproject.toml | head -n1)"

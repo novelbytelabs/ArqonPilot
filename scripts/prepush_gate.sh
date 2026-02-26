@@ -4,6 +4,34 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+REPORT_DIR="${PILOT_REPORT_DIR:-$HOME/.pilot/reports}"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+LOG_FILE="$REPORT_DIR/prepush_gate_${STAMP}.log"
+mkdir -p "$REPORT_DIR" 2>/dev/null || true
+if ! touch "$LOG_FILE" 2>/dev/null; then
+  REPORT_DIR="/tmp/pilot-reports"
+  mkdir -p "$REPORT_DIR"
+  LOG_FILE="$REPORT_DIR/prepush_gate_${STAMP}.log"
+  touch "$LOG_FILE"
+fi
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+echo "[pre-push] log file: $LOG_FILE"
+
+finish() {
+  local code="$1"
+  if [[ "$code" -eq 0 ]]; then
+    echo "[pre-push] status: PASS"
+  else
+    echo "[pre-push] status: FAIL"
+    echo "[pre-push] remediation:"
+    echo "  1) Inspect log: $LOG_FILE"
+    echo "  2) Run: ./scripts/repair_lock_182.sh"
+    echo "  3) Re-run: ./scripts/prepush_gate.sh"
+  fi
+}
+trap 'finish $?' EXIT
+
 echo "[1/4] Toolchain policy"
 ./scripts/verify_toolchain_policy.sh
 

@@ -92,3 +92,48 @@ The bridge currently only accepts namespaced `pilot.*` commands and strict contr
 
 Unknown fields and wrong schema versions are rejected by design.
 
+## 5) Pre-push fails with `edition2024` dependency errors
+
+Symptom (examples):
+
+```text
+feature `edition2024` is required
+The package requires the Cargo feature called `edition2024`
+```
+
+or
+
+```text
+error: failed to parse manifest ... comfy-table-7.2.2/Cargo.toml
+```
+
+Cause:
+- `Cargo.lock` drifted to dependencies requiring Rust 1.85+ while core lane is pinned to Rust/Cargo `1.82.0`.
+
+Canonical recovery flow:
+
+```bash
+./scripts/repair_lock_182.sh --no-gate
+./scripts/prepush_gate.sh
+git push origin main
+```
+
+Why this works:
+1. `repair_lock_182.sh` restores or force-pins Rust-1.82-compatible lock state.
+2. `prepush_gate.sh` validates policy + locked compile + targeted locked tests.
+3. Push proceeds only after the gate passes.
+
+Gotchas:
+1. Ambiguous package names during pinning:
+- Use exact package IDs: `name@from_version` (for example `getrandom@0.4.1`).
+
+2. Transitive chain issues:
+- A crate can reintroduce Rust-2024 dependencies indirectly (`uuid -> getrandom -> wasip3 -> wit-bindgen`).
+
+3. Logging location:
+- Gate log is written to `~/.pilot/reports/`.
+- If that directory is not writable, gate falls back to `/tmp/pilot-reports/`.
+
+4. Packaging lane is separate:
+- PyPI packaging lane can use newer toolchain and `Cargo.lock.packaging`.
+- Core lane still must satisfy Rust `1.82.0` with `Cargo.lock`.

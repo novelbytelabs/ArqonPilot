@@ -28,6 +28,30 @@ If you are preparing a release, run the release gate right after:
 ./scripts/release_readiness_check.sh
 ```
 
+## Guardrail Script Map
+
+Use these scripts as the standard pre-check stack:
+
+1. `./scripts/install_git_hooks.sh`
+- One-time per clone.
+- Installs `.githooks/pre-push` so push automatically runs the gate.
+
+2. `./scripts/prepush_gate.sh`
+- Mandatory before commit/push (or automatically on push via hook).
+- Runs policy checks, locked compile, targeted locked CLI tests, and help-surface smoke.
+- Writes a timestamped log to `~/.pilot/reports/` (fallback: `/tmp/pilot-reports/`).
+
+3. `./scripts/verify_toolchain_policy.sh`
+- Verifies dual-lane policy wiring and lockfile compatibility for Rust `1.82.0` core lane.
+- Fails early with explicit incompatible crate/version entries.
+
+4. `./scripts/verify_git_hook_policy.sh`
+- Ensures hook wiring and pre-push gate contract do not drift.
+
+5. `./scripts/repair_lock_182.sh`
+- Recovery path when lockfiles drift to `edition2024` dependencies.
+- Attempts compatible lock restore from history; falls back to exact-version transitions.
+
 ## Why There Are Multiple Test Layers
 
 A single huge test suite is hard to debug. When one command fails, you still do not know whether the bug is in a small function, a CLI surface, or a cross-repo workflow.
@@ -148,6 +172,9 @@ When a test suite fails, do not rerun everything immediately. Start by understan
 2. Some tests expect `git` to be available locally.
 3. Packaging can fail even if core tests pass, so packaging validation is still required.
 4. Adversarial failures should produce clear `--report-json` output for machine-readable triage.
+5. `edition2024` parser failures in Rust `1.82.0` usually mean lockfile drift, not source-code breakage.
+6. `cargo update -p <name>` can be ambiguous when multiple versions exist; pin with `name@from_version`.
+7. A passing local `cargo check` with a newer toolchain does not guarantee core-lane `1.82.0` compatibility.
 
 ## One-Line Reference
 

@@ -94,6 +94,12 @@ Automate this with a git hook (recommended, one-time per clone):
 
 CI also enforces this policy via `./scripts/verify_git_hook_policy.sh`.
 
+If lockfiles drift to Rust-2024-only dependencies and pushes fail on Rust 1.82:
+
+```bash
+./scripts/repair_lock_182.sh
+```
+
 ## Packaging
 
 PyPI packaging uses `maturin`.

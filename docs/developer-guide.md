@@ -98,6 +98,37 @@ CI validates the hook/gate contract with:
 ./scripts/verify_git_hook_policy.sh
 ```
 
+If `Cargo.lock` drifts and pre-push fails with `edition2024` parser errors, run:
+
+```bash
+./scripts/repair_lock_182.sh
+```
+
+This restores both lockfiles from the latest compatible commit and re-runs the gate.
+
+## Pre-Check Scripts Reference
+
+These scripts are the required guardrail layer before commit/push:
+
+1. `./scripts/prepush_gate.sh`
+- Runs policy checks, locked compile, targeted locked CLI tests, and help-surface smoke check.
+- Writes a timestamped log file to `~/.pilot/reports/` (or `/tmp/pilot-reports/` fallback).
+
+2. `./scripts/verify_toolchain_policy.sh`
+- Verifies Rust lane pins (`1.82.0` core, `1.88.0` packaging), lockfile policy wiring, and lockfile compatibility checks for core lane.
+- Fails fast with explicit incompatible dependencies (for example `time 0.3.47`, `wit-bindgen 0.51.0`).
+
+3. `./scripts/verify_git_hook_policy.sh`
+- Ensures `.githooks/pre-push` exists and calls `./scripts/prepush_gate.sh`.
+- Ensures hook installer and mandatory locked compile gate are in place.
+
+4. `./scripts/install_git_hooks.sh`
+- Sets `core.hooksPath=.githooks` so pushes run the gate automatically.
+
+5. `./scripts/repair_lock_182.sh`
+- Recovery script for lockfile drift in Rust `1.82.0` lane.
+- Attempts compatible lock restore from git history; falls back to exact-version pin transitions.
+
 ## Release Readiness
 
 ```bash
