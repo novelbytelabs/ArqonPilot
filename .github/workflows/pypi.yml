@@ -56,7 +56,8 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release --locked --out dist -v
+          manylinux: "2014"
+          args: --release --locked --compatibility manylinux2014 --sdist --out dist -v
 
       - name: Publish to TestPyPI (manual)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
