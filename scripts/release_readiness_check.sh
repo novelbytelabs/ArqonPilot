@@ -28,10 +28,18 @@ core_cargo test -p pilot --locked \
 
 echo "[3/4] Command surface smoke check"
 core_cargo run -q -p pilot -- --help >/tmp/pilot_help.txt
-rg -n "oracle|heal|navigate|branch|multi|secure|plan|create|know|init" /tmp/pilot_help.txt >/dev/null
+if command -v rg >/dev/null 2>&1; then
+  rg -n "oracle|heal|navigate|branch|multi|secure|plan|create|know|init" /tmp/pilot_help.txt >/dev/null
+else
+  grep -En "oracle|heal|navigate|branch|multi|secure|plan|create|know|init" /tmp/pilot_help.txt >/dev/null
+fi
 
 echo "[4/4] Rust toolchain pin check"
-rg -n "^channel = \"${PILOT_CORE_RUST_VERSION//./\\.}\"$" rust-toolchain.toml >/dev/null
+if command -v rg >/dev/null 2>&1; then
+  rg -n "^channel = \"${PILOT_CORE_RUST_VERSION//./\\.}\"$" rust-toolchain.toml >/dev/null
+else
+  grep -En "^channel = \"${PILOT_CORE_RUST_VERSION//./\\.}\"$" rust-toolchain.toml >/dev/null
+fi
 
 echo "[policy] Toolchain and lockfile policy checks"
 ./scripts/verify_toolchain_policy.sh
