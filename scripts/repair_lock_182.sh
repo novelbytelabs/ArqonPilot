@@ -207,6 +207,8 @@ fallback_force_pin() {
   pin_exact_transition "blake3" "1.8.3" "1.5.5" || ok=1
   pin_exact_transition "constant_time_eq" "0.4.2" "0.3.1" || ok=1
   pin_exact_transition "constant_time_eq" "0.4.1" "0.3.1" || ok=1
+  pin_exact_transition "globset" "0.4.18" "0.4.15" || ok=1
+  pin_exact_transition "globset" "0.4.19" "0.4.15" || ok=1
   pin_exact_transition "time" "0.3.47" "0.3.36" || ok=1
   pin_exact_transition "time-core" "0.1.8" "0.1.2" || ok=1
   pin_exact_transition "time-macros" "0.2.27" "0.2.18" || ok=1

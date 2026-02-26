@@ -71,6 +71,10 @@ check_lock_compat() {
         printf("ERROR: %s has constant_time_eq %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
         bad = 1;
       }
+      if (name == "globset" && version ~ /^0\.4\.1[8-9]/) {
+        printf("ERROR: %s has globset %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
     }
 
     /^\[\[package\]\]/ {

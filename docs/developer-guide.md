@@ -112,6 +112,7 @@ These scripts are the required guardrail layer before commit/push:
 
 1. `./scripts/prepush_gate.sh`
 - Runs policy checks, locked compile, targeted locked CLI tests, and help-surface smoke check.
+- Includes automatic retries for transient crates.io/DNS failures on cargo steps.
 - Writes a timestamped log file to `~/.pilot/reports/` (or `/tmp/pilot-reports/` fallback).
 
 2. `./scripts/verify_toolchain_policy.sh`

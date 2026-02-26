@@ -142,6 +142,7 @@ Gotchas:
 - A crate can reintroduce Rust-2024 dependencies indirectly (`uuid -> getrandom -> wasip3 -> wit-bindgen`).
 - Another known drift source is `constant_time_eq 0.4.x` (also requires `edition2024`).
 - `constant_time_eq` cannot always be pinned directly; in some lock states it is constrained by `blake3` (`^0.4.2`), so `blake3` must be downgraded first.
+- Another known drift source is `globset 0.4.18+` (requires `edition2024`).
 
 3. Logging location:
 - Gate log is written to `~/.pilot/reports/`.
@@ -150,3 +151,37 @@ Gotchas:
 4. Packaging lane is separate:
 - PyPI packaging lane can use newer toolchain and `Cargo.lock.packaging`.
 - Core lane still must satisfy Rust `1.82.0` with `Cargo.lock`.
+
+## 6) Pre-push fails due transient DNS/crates.io access
+
+Symptoms (examples):
+
+```text
+Could not resolve host: index.crates.io
+Temporary failure in name resolution
+failed to download from https://index.crates.io
+```
+
+What ArqonPilot now does:
+1. `prepush_gate.sh` retries `cargo check`, `cargo test`, and help-surface checks up to 3 times.
+2. It prints DNS diagnostics (`getent hosts index.crates.io` and `static.crates.io`) in the gate log on transient network failures.
+
+Manual checks:
+
+```bash
+getent hosts index.crates.io
+getent hosts static.crates.io
+```
+
+If DNS checks fail locally, fix network/DNS first and rerun:
+
+```bash
+./scripts/prepush_gate.sh
+```
+
+If DNS checks pass but policy fails, run lock recovery:
+
+```bash
+./scripts/repair_lock_182.sh --no-gate
+./scripts/prepush_gate.sh
+```
