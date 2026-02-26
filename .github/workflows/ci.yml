@@ -18,6 +18,12 @@ jobs:
           toolchain: "1.82.0"
           components: rustfmt, clippy
 
+      - name: Install pinned protoc (25.8)
+        run: |
+          curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v25.8/protoc-25.8-linux-x86_64.zip
+          sudo unzip -o /tmp/protoc.zip -d /usr/local
+          protoc --version | grep -F "25.8"
+
       - name: Format
         run: cargo fmt --all -- --check
 
@@ -48,6 +54,15 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.88.0"
+
+      - name: Install core lane toolchain for policy check
+        run: rustup toolchain install 1.82.0
+
+      - name: Install pinned protoc (25.8)
+        run: |
+          curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v25.8/protoc-25.8-linux-x86_64.zip
+          sudo unzip -o /tmp/protoc.zip -d /usr/local
+          protoc --version | grep -F "25.8"
 
       - name: Toolchain and Lockfile Policy
         run: ./scripts/verify_toolchain_policy.sh

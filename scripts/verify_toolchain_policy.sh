@@ -144,6 +144,12 @@ log "[policy] CI lane pin"
 run_check "ci_lane_pin" search_pattern "toolchain:\\s*\"${PILOT_CORE_RUST_VERSION//./\\.}\"" .github/workflows/ci.yml || true
 run_check "ci_packaging_lane_pin" search_pattern "toolchain:\\s*\"${PILOT_PACKAGING_RUST_VERSION//./\\.}\"" .github/workflows/ci.yml || true
 run_check "ci_packaging_lane_check_step" search_pattern 'scripts/packaging_lane_check\.sh' .github/workflows/ci.yml || true
+run_check "ci_protoc_pin" search_pattern "protoc-${PILOT_PROTOC_VERSION//./\\.}-linux-x86_64\\.zip" .github/workflows/ci.yml || true
+run_check "ci_protoc_release_pin" search_pattern "releases/download/v${PILOT_PROTOC_VERSION//./\\.}/protoc-${PILOT_PROTOC_VERSION//./\\.}-linux-x86_64\\.zip" .github/workflows/ci.yml || true
+if contains_pattern 'apt-get\s+install\s+-y\s+protobuf-compiler' .github/workflows/ci.yml; then
+  echo "ERROR: ci.yml must not use unpinned protobuf-compiler apt package; use protoc ${PILOT_PROTOC_VERSION} archive" >&2
+  FAILED_CHECKS+=("ci_no_unpinned_protobuf_apt")
+fi
 
 log "[policy] packaging lane pin"
 run_check "packaging_lane_pin" search_pattern "toolchain:\\s*\"${PILOT_PACKAGING_RUST_VERSION//./\\.}\"" .github/workflows/pypi.yml || true
