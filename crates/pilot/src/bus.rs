@@ -348,7 +348,10 @@ pub async fn send_command_once(
         return Ok(value);
     }
 
-    Err(miette::miette!("No command response received for {}", command))
+    Err(miette::miette!(
+        "No command response received for {}",
+        command
+    ))
 }
 
 async fn emit_event(
@@ -586,12 +589,19 @@ mod tests {
 
     #[test]
     fn map_multi_status_with_filters() {
-        let payload = json!({"schema_version": 1, "group": "core", "tags": ["apply-pilot", "wave7"]});
+        let payload =
+            json!({"schema_version": 1, "group": "core", "tags": ["apply-pilot", "wave7"]});
         let args = map_bus_command_to_args("pilot.multi.status", &payload).unwrap();
         assert_eq!(
             args,
             vec![
-                "multi", "status", "--group", "core", "--tag", "apply-pilot", "--tag",
+                "multi",
+                "status",
+                "--group",
+                "core",
+                "--tag",
+                "apply-pilot",
+                "--tag",
                 "wave7"
             ]
         );
