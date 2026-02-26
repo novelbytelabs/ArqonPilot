@@ -71,17 +71,19 @@ summarize_result() {
   read -r _ before_behind before_ahead <<<"$before_state"
   read -r _ after_behind after_ahead <<<"$after_state"
 
-  if grep -Eiq "non-fast-forward|fetch first|failed to push some refs" "$LOG_FILE"; then
-    likely_cause="remote_divergence_or_hook_reject"
-  fi
-  if grep -Eiq "Authentication failed|403|401|denied to" "$LOG_FILE"; then
-    likely_cause="auth_or_token"
-  fi
-  if grep -Eiq "Could not resolve host|Temporary failure in name resolution" "$LOG_FILE"; then
-    likely_cause="dns_or_network"
-  fi
-  if [[ "$gate_rc" -ne 0 ]]; then
-    likely_cause="prepush_gate_failed"
+  if [[ "$result" != "SUCCESS" ]]; then
+    if grep -Eiq "non-fast-forward|fetch first|failed to push some refs" "$LOG_FILE"; then
+      likely_cause="remote_divergence_or_hook_reject"
+    fi
+    if grep -Eiq "Authentication failed|403|401|denied to" "$LOG_FILE"; then
+      likely_cause="auth_or_token"
+    fi
+    if grep -Eiq "Could not resolve host|Temporary failure in name resolution" "$LOG_FILE"; then
+      likely_cause="dns_or_network"
+    fi
+    if [[ "$gate_rc" -ne 0 ]]; then
+      likely_cause="prepush_gate_failed"
+    fi
   fi
 
   echo ""

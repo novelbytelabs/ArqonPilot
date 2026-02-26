@@ -149,6 +149,8 @@ These scripts are the required guardrail layer before commit/push:
 
 ## Guardrail Gotchas
 
+Canonical registry: `docs/gotcha-registry.md`
+
 1. If `git push` fails before upload, the pre-push hook blocked it intentionally for safety.
 2. `edition2024` parser errors indicate lockfile drift for Rust `1.82.0`, not necessarily source-code regressions.
 3. `cargo update -p <crate>` can be ambiguous; use exact IDs like `getrandom@0.4.1`.

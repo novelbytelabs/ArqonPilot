@@ -47,6 +47,7 @@ This section is the full continuity handoff context for future sessions.
 4. `scripts/repair_lock_182.sh`
 5. `scripts/push_main.sh`
 6. `scripts/frozen_versions.sh`
+7. `docs/gotcha-registry.md`
 
 ## Known Failure Classes
 

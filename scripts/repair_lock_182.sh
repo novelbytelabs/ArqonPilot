@@ -68,6 +68,13 @@ is_lockfile_182_compatible() {
       if (name == "time" && version ~ /^0\.3\.(4[7-9]|[5-9][0-9])/) return 1;
       if (name == "time-core" && version ~ /^0\.1\.(8|9|[1-9][0-9])/) return 1;
       if (name == "wit-bindgen" && version ~ /^0\.5[1-9]\./) return 1;
+      if (name == "icu_collections" && version ~ /^2\.1\./) return 1;
+      if (name == "icu_locale_core" && version ~ /^2\.1\./) return 1;
+      if (name == "icu_normalizer" && version ~ /^2\.1\./) return 1;
+      if (name == "icu_normalizer_data" && version ~ /^2\.1\./) return 1;
+      if (name == "icu_properties" && version ~ /^2\.1\./) return 1;
+      if (name == "icu_properties_data" && version ~ /^2\.1\./) return 1;
+      if (name == "icu_provider" && version ~ /^2\.1\./) return 1;
       return 0;
     }
 
@@ -219,6 +226,15 @@ fallback_force_pin() {
   pin_exact_transition "wit-bindgen-rust" "0.51.0" "0.50.0" || ok=1
   pin_exact_transition "wit-bindgen-rust-macro" "0.51.0" "0.50.0" || ok=1
   pin_optional "wit-bindgen-rt" "0.50.0"
+
+  # Keep ICU chain Rust-1.82 compatible.
+  pin_exact_transition "icu_collections" "2.1.1" "2.0.0" || ok=1
+  pin_exact_transition "icu_locale_core" "2.1.1" "2.0.0" || ok=1
+  pin_exact_transition "icu_normalizer" "2.1.1" "2.0.0" || ok=1
+  pin_exact_transition "icu_normalizer_data" "2.1.1" "2.0.0" || ok=1
+  pin_exact_transition "icu_properties" "2.1.2" "2.0.0" || ok=1
+  pin_exact_transition "icu_properties_data" "2.1.2" "2.0.0" || ok=1
+  pin_exact_transition "icu_provider" "2.1.1" "2.0.0" || ok=1
 
   if [[ "$ok" -ne 0 ]]; then
     echo "ERROR: force-pin fallback did not fully succeed." >&2

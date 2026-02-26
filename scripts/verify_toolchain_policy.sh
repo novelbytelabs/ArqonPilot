@@ -81,6 +81,34 @@ check_lock_compat() {
         printf("ERROR: %s has globset %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
         bad = 1;
       }
+      if (name == "icu_collections" && version ~ /^2\.1\./) {
+        printf("ERROR: %s has icu_collections %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
+      if (name == "icu_locale_core" && version ~ /^2\.1\./) {
+        printf("ERROR: %s has icu_locale_core %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
+      if (name == "icu_normalizer" && version ~ /^2\.1\./) {
+        printf("ERROR: %s has icu_normalizer %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
+      if (name == "icu_normalizer_data" && version ~ /^2\.1\./) {
+        printf("ERROR: %s has icu_normalizer_data %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
+      if (name == "icu_properties" && version ~ /^2\.1\./) {
+        printf("ERROR: %s has icu_properties %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
+      if (name == "icu_properties_data" && version ~ /^2\.1\./) {
+        printf("ERROR: %s has icu_properties_data %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
+      if (name == "icu_provider" && version ~ /^2\.1\./) {
+        printf("ERROR: %s has icu_provider %s (Rust 1.82 incompatible)\n", f, version) > "/dev/stderr";
+        bad = 1;
+      }
     }
 
     /^\[\[package\]\]/ {
