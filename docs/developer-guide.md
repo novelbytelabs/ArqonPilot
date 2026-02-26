@@ -83,6 +83,18 @@ pilot --help
 ./scripts/release_readiness_check.sh
 ```
 
+## Toolchain Drift Prevention
+
+Arqon Pilot enforces a dual-lane policy:
+- core dev/test lane: Rust `1.82.0` + `Cargo.lock`
+- packaging lane: Rust `1.88.0` + `Cargo.lock.packaging`
+
+Validate policy locally:
+
+```bash
+./scripts/verify_toolchain_policy.sh
+```
+
 ## Packaging Smoke
 
 ```bash

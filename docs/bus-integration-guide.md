@@ -48,6 +48,7 @@ UI endpoints:
 The Telemetry tab includes:
 - raw live event stream
 - operations timeline grouped by `operation_id`
+- timeline filters: failed-only, command contains, and text search (op id/summary)
 
 Run one message and exit:
 

@@ -28,4 +28,7 @@ rg -n "oracle|heal|navigate|branch|multi|secure|plan|create|know|init" /tmp/pilo
 echo "[4/4] Rust toolchain pin check"
 rg -n 'channel = "1\.82\.0"' rust-toolchain.toml >/dev/null
 
+echo "[policy] Toolchain and lockfile policy checks"
+./scripts/verify_toolchain_policy.sh
+
 echo "Release readiness check passed."

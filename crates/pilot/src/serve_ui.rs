@@ -589,6 +589,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
             failed only
           </label>
         </div>
+        <input id="timeline-command-filter" placeholder="filter command (e.g. pilot.branch)" />
+        <input id="timeline-text-filter" placeholder="filter op id or summary text" />
         <div id="timeline" class="timeline">
           <div class="tl-empty">No operations yet</div>
         </div>
@@ -613,6 +615,8 @@ const liveStream = document.getElementById('live-stream');
 const historyMirror = document.getElementById('history-mirror');
 const timelineEl = document.getElementById('timeline');
 const failedOnlyToggle = document.getElementById('failed-only');
+const timelineCommandFilter = document.getElementById('timeline-command-filter');
+const timelineTextFilter = document.getElementById('timeline-text-filter');
 const timelineState = new Map();
 
 for (const btn of document.querySelectorAll('.tab')) {
@@ -710,9 +714,21 @@ function ingestTimeline(evt) {
 
 function renderTimeline() {
   timelineEl.innerHTML = '';
+  const cmdNeedle = String(timelineCommandFilter.value || '').trim().toLowerCase();
+  const textNeedle = String(timelineTextFilter.value || '').trim().toLowerCase();
   const items = Array.from(timelineState.values())
     .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
     .filter((x) => !failedOnlyToggle.checked || x.phase === 'failed')
+    .filter((x) => !cmdNeedle || String(x.command || '').toLowerCase().includes(cmdNeedle))
+    .filter((x) => {
+      if (!textNeedle) return true;
+      const hay = [
+        x.opId || '',
+        x.command || '',
+        ...(x.steps || []).map((s) => s.summary || '')
+      ].join(' ').toLowerCase();
+      return hay.includes(textNeedle);
+    })
     .slice(0, 40);
 
   if (!items.length) {
@@ -758,6 +774,8 @@ function renderTimeline() {
 }
 
 failedOnlyToggle.addEventListener('change', renderTimeline);
+timelineCommandFilter.addEventListener('input', renderTimeline);
+timelineTextFilter.addEventListener('input', renderTimeline);
 
 function branchCreate() {
   run('pilot.branch.create', {

@@ -24,6 +24,9 @@ jobs:
       - name: Wave 0 Safety Invariants
         run: ./scripts/wave0_safety_check.sh
 
+      - name: Toolchain and Lockfile Policy
+        run: ./scripts/verify_toolchain_policy.sh
+
       - name: Check
         run: cargo check -p pilot --locked
 

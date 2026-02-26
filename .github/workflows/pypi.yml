@@ -37,9 +37,9 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       # Packaging-only exception:
-      # PyPI build currently resolves transitive crates (wasip2/wit-bindgen path)
-      # that require Rust >=1.88. Keep repository/toolchain policy at 1.82
-      # and scope the newer compiler only to this publish workflow.
+      # PyPI build resolves dependencies that require Rust >=1.88 (time crate).
+      # Keep repository/toolchain policy at 1.82 for core dev/test lanes.
+      # This packaging lane uses 1.88 explicitly to handle transitive deps.
       # Remove rust-toolchain.toml so maturin uses the version we set below.
       - name: Setup Rust 1.88 (PyPI packaging only)
         uses: dtolnay/rust-toolchain@master
@@ -49,9 +49,10 @@ jobs:
       - name: Remove rust-toolchain.toml for PyPI build
         run: rm -f rust-toolchain.toml
 
-      # Ensure Cargo.lock is up-to-date with current Cargo.toml versions
-      - name: Update Cargo.lock
-        run: cargo update
+      - name: Use packaging lockfile (deterministic)
+        run: |
+          test -f Cargo.lock.packaging
+          cp Cargo.lock.packaging Cargo.lock
 
       # Note: Removed preflight cargo build - maturin does its own build anyway
       # The preflight was redundant and took 15+ minutes
@@ -61,7 +62,7 @@ jobs:
         with:
           command: build
           manylinux: "2_28"
-          args: --release --sdist --out dist -v
+          args: --release --sdist --locked --out dist -v
           before-script-linux: yum install -y openssl-devel unzip perl-core make && curl -L https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-linux-x86_64.zip -o protoc.zip && unzip -o protoc.zip -d /usr/local && rm protoc.zip
 
       - name: Publish to TestPyPI (manual)
