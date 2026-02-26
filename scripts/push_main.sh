@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-BRANCH="${1:-main}"
+BRANCH="${1:-dev}"
 REMOTE="${2:-origin}"
 REPORT_DIR="${PILOT_REPORT_DIR:-$HOME/.pilot/reports}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"

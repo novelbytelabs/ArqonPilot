@@ -109,10 +109,12 @@ This restores a compatible core lockfile (or applies exact-version fallback tran
 If VS Code shows only a generic push failure message, run:
 
 ```bash
-./scripts/push_main_safe.sh
+./scripts/push_main.sh
 ```
 
 This captures verbose git transport diagnostics and writes a timestamped push log.
+By default it pushes `dev`; pass `main` explicitly when needed:
+`./scripts/push_main.sh main`.
 
 ## Pre-Check Scripts Reference
 

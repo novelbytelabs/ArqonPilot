@@ -198,7 +198,7 @@ error: failed to push some refs to 'https://github.com/...'
 Use the diagnostic wrapper instead of raw push:
 
 ```bash
-./scripts/push_main_safe.sh
+./scripts/push_main.sh
 ```
 
 What it does:
@@ -207,3 +207,7 @@ What it does:
 3. Runs push with `GIT_TRACE=1` and `GIT_CURL_VERBOSE=1`.
 4. Writes a full log to `~/.pilot/reports/push_main_<timestamp>.log` (fallback: `/tmp/pilot-reports/`).
 5. Prints likely cause buckets (divergence, auth, DNS).
+
+Defaults:
+- Push target defaults to `dev`.
+- To push `main` explicitly: `./scripts/push_main.sh main`.
