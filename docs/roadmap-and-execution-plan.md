@@ -1,201 +1,186 @@
-# ArqonPilot Roadmap and Execution Plan
+# ArqonPilot Unified Master Plan
 
-This is the active execution plan for ArqonPilot. It is the canonical status reference for what is complete, what is in progress, and what remains before production-complete operations.
+This is the canonical execution plan for ArqonPilot. It merges product delivery, guardrails, testing, and documentation into one system plan so work does not fragment across sessions.
 
-## Why This Document Exists
+## Frozen Policy (Non-Negotiable)
 
-We are operating with a long-running, multi-wave delivery. Context can be lost across sessions, so this plan is designed to be:
+1. Core lane Rust/Cargo: `1.82.0`
+2. Packaging lane Rust: `1.88.0`
+3. Protobuf: `4.25.8` (`protoc` `25.8`)
+4. Source of truth: `scripts/frozen_versions.sh`
 
-1. operationally precise
-2. current-state explicit
-3. recovery-oriented
-4. easy to resume from at any point
+## System Vision
 
-## Current State Snapshot
+ArqonPilot becomes a centralized control system:
 
-As of now:
+1. `Dashboard` is central command and catches everything.
+2. Specialist tabs (`Oracle`, `Heal`, `Dependencies`, `Branch`, `Multi`, `Telemetry`, `Know`) provide deep controls.
+3. Codex is integrated as an auditable operator with `preview -> execute -> verify -> record` flow.
+4. All operations are policy-aware, dependency-aware, and telemetry-backed.
 
-1. Core modules are implemented (`oracle`, `heal`, `navigate`, `branch`, `multi`, `secure`, `plan`, `create`, `know`).
-2. Bus bridge and Control Panel are active with Oracle/Heal/Branch/Multi/Telemetry surfaces.
-3. Guardrail scripts and pre-push enforcement are active.
-4. Main risk area is dependency/toolchain drift in the Rust `1.82.0` core lane.
+## Current State (Authoritative Snapshot)
 
-## Detailed Continuity Snapshot (2026-02-26)
+1. Core modules exist: `oracle`, `heal`, `navigate`, `branch`, `multi`, `secure`, `plan`, `create`, `know`.
+2. Bus bridge and Control Panel exist and are operational.
+3. Guardrail scripts exist:
+   - `scripts/prepush_gate.sh`
+   - `scripts/verify_toolchain_policy.sh`
+   - `scripts/verify_git_hook_policy.sh`
+   - `scripts/repair_lock_182.sh`
+   - `scripts/push_main.sh`
+4. Gotcha tracking exists:
+   - `docs/gotcha-registry.md`
+5. Active risk: lockfile drift families (now including ICU `2.1.x`) and transient DNS failures.
 
-This section is the full continuity handoff context for future sessions.
+## Program Tracks (Run In Parallel)
 
-## Canonical Invariants
+### Track A: Product (Control System)
+1. Dashboard-first workflows.
+2. Deep specialist tabs.
+3. Codex action planner/executor.
+4. Cross-repo dependency/branch orchestration.
 
-1. Core lane is pinned to Rust/Cargo `1.82.0`.
-2. Packaging lane is pinned to Rust `1.88.0` and uses `Cargo.lock.packaging`.
-3. Protobuf is pinned to `4.25.8` (`protoc` `25.8`) in packaging workflow.
-4. Pushes must pass `./scripts/prepush_gate.sh` via `.githooks/pre-push`.
-5. Primary push path is `./scripts/push_main.sh` (defaults to current branch).
+### Track B: Guardrails and Drift Immunity
+1. Frozen policy enforcement.
+2. Deterministic pre-push gates.
+3. One-shot lock drift recovery path.
+4. Explicit push and CI diagnostics.
 
-## Current Branching State
+### Track C: Testing (All Levels)
+1. Unit tests
+2. Integration tests
+3. End-to-end tests
+4. Regression suite
+5. Adversarial/chaos tests
+6. CI parity tests (local vs CI lane comparison)
 
-1. `main` and `dev` both exist on remote and are currently synchronized.
-2. Recommended operating flow:
-- feature -> `dev` -> `main`
-- run `./scripts/push_main.sh` on current branch after commit.
+### Track D: Documentation (Comprehensive)
+1. Main README
+2. Operator runbook
+3. Developer guide
+4. Testing strategy
+5. Troubleshooting
+6. Gotcha registry
+7. API/event schema docs
+8. Incident response and recovery runbooks
 
-## Guardrail Artifacts (Authoritative)
+## Wave Plan (Unified)
 
-1. `scripts/prepush_gate.sh`
-2. `scripts/verify_toolchain_policy.sh`
-3. `scripts/verify_git_hook_policy.sh`
-4. `scripts/repair_lock_182.sh`
-5. `scripts/push_main.sh`
-6. `scripts/frozen_versions.sh`
-7. `docs/gotcha-registry.md`
+## Wave 0 to Wave 8 (Completed Baseline)
+Completed foundational extraction, modularization, multi-repo core, branch/navigate, secure/heal, plan/create/know, rollout, and release readiness.
 
-## Known Failure Classes
+## Wave 9 (Control Panel Maturation) - In Progress
+Deliverables:
+1. Dashboard as default central command.
+2. Tab parity for high-frequency operations.
+3. Unified operation timeline with status chips.
 
-1. Lockfile drift to Rust-incompatible crates (`edition2024` and post-1.82 minimums).
-2. Transient DNS/index failures against crates.io.
-3. CI false negatives from policy checks that were too strict to script format changes.
-4. Toolchain mismatch risk when local shell uses non-rustup `cargo/rustc` binaries.
+Exit criteria:
+1. All key actions invokable from Dashboard.
+2. Live operation statuses are visible without opening logs.
 
-## Confirmed Recent Fixes
+## Wave 10 (Packaging and Runtime Reliability) - In Progress
+Deliverables:
+1. Deterministic packaging lane (`1.88.0`, `Cargo.lock.packaging`).
+2. Conda/Linux runtime guidance and fixes.
+3. Stable PyPI release process.
 
-1. Push diagnostics are now explicit via `push_main.sh` (trace + log file path).
-2. Pre-push gate has retry logic and DNS diagnostics for transient network failures.
-3. Git-hook policy check was updated to match retry-wrapped locked compile command.
+Exit criteria:
+1. Packaging workflow is reproducible.
+2. Install + `pilot --help` smoke documented and repeatable.
 
-## Open Critical Hardening (Next)
+## Wave 11 (Guardrails and Dependencies System) - In Progress
+Deliverables:
+1. Dependencies/Guardrails tab in UI.
+2. Actions:
+   - policy check
+   - drift report
+   - lock repair
+   - pre-push gate
+   - push-safe with summary
+3. Lock drift map includes known families:
+   - `time/comfy-table/wit-bindgen`
+   - `blake3/constant_time_eq`
+   - `globset`
+   - `icu_* 2.1.x`
 
-1. Extend lock compatibility and repair map for ICU drift chain (`icu_* 2.1.x`) and related transitive dependencies.
-2. Keep docs synchronized immediately whenever guardrail behavior changes.
+Exit criteria:
+1. Local-pass/CI-fail has one-click diagnosis path.
+2. Push failure always prints root cause + next action.
 
-## One-Page Recovery Flow
+## Wave 12 (Codex Ops Integration)
+Deliverables:
+1. Codex action contract:
+   - intent
+   - dry-run plan
+   - execution steps
+   - expected effect
+   - rollback strategy
+2. Dashboard Codex controls:
+   - preview
+   - approve
+   - execute
+   - reconcile
+3. Audit + telemetry for every Codex action.
+
+Exit criteria:
+1. No opaque AI actions; every action is auditable.
+2. Operator can replay and resume failed operations.
+
+## Wave 13 (Cross-Repo Orchestration)
+Deliverables:
+1. Cross-repo dependency DAG.
+2. Dependency-aware branch/PR sequencing.
+3. Cohort apply with staged execution.
+
+Exit criteria:
+1. Multi-repo feature flow works end-to-end from Dashboard.
+2. Merge/release ordering is validated against dependency graph.
+
+## Wave 14 (Documentation and Testing Closure)
+Deliverables:
+1. Complete documentation set (all Track D artifacts).
+2. Complete test pyramid and automation (all Track C levels).
+3. Regression and adversarial suites integrated in CI.
+
+Exit criteria:
+1. New operator can run system from docs only.
+2. Test matrix covers unit/integration/e2e/regression/adversarial.
+3. CI parity checks prevent recurrence of lane mismatch confusion.
+
+## Wave 15 (Production Release Gate)
+Deliverables:
+1. Final release checklist with hard gates.
+2. Versioned release evidence archive.
+3. Production rollout runbook.
+
+Exit criteria:
+1. Deterministic release with reproducible artifacts.
+2. Install/runbook validated in clean environment.
+
+## Operational Rules
+
+1. Never bypass frozen policy constants.
+2. Every guardrail change must update docs in the same PR/commit.
+3. Every new failure class must be added to `docs/gotcha-registry.md`.
+4. Push via `./scripts/push_main.sh` for actionable summary output.
+5. If DNS/index is down, treat as environment incident first, not code failure.
+
+## Resume Checklist
+
+When resuming after interruption:
 
 1. `./scripts/verify_toolchain_policy.sh`
-2. If fail: `./scripts/repair_lock_182.sh --no-gate`
+2. If policy fails: `./scripts/repair_lock_182.sh --no-gate`
 3. `./scripts/prepush_gate.sh`
 4. `./scripts/push_main.sh`
-5. If CI fails: inspect failing step first, then update guardrail script + docs in same change.
+5. Check latest logs in `~/.pilot/reports/` (fallback `/tmp/pilot-reports/`)
+6. Update `docs/gotcha-registry.md` if a new signature appeared.
 
-## Wave Ledger
+## What Success Looks Like
 
-## Wave 0 to Wave 8 (Completed Foundations)
-
-Completed and archived in `archive/wave-history/`:
-
-1. Wave 0 / 0.5: extraction baseline, validation, and dependency strategy
-2. Wave 1: modularization
-3. Wave 2: multi-repo foundation
-4. Wave 3: branch + navigate orchestration
-5. Wave 4: secure + heal expansion
-6. Wave 5: plan/create/know
-7. Wave 6 / 6.5: acceptance + dogfooding
-8. Wave 7: controlled rollout
-9. Wave 8: release readiness
-
-## Wave 9 (Capability Completion Hardening)
-
-Status: `In Progress`
-
-Goals:
-
-1. complete missing production hardening edges for module surfaces
-2. tighten operational observability and failure diagnostics
-3. ensure GUI and CLI parity where practical
-
-Current focus:
-
-1. Heal and Oracle interaction surfaces in Control Panel
-2. robust error surfacing with actionable remediation
-
-## Wave 10 (Packaging and Distribution Reliability)
-
-Status: `In Progress`
-
-Goals:
-
-1. deterministic, reproducible publish path
-2. stable Linux runtime behavior in conda environments
-3. reliable PyPI install and immediate CLI usability
-
-Known gotchas integrated into process:
-
-1. split toolchain lanes (`1.82.0` core, `1.88.0` packaging)
-2. lockfile drift to `edition2024` dependencies
-3. protobuf/protoc freeze (`4.25.8` / `25.8`) must remain pinned in workflow
-4. pre-push gate must pass before remote push
-
-## Wave 11 (Production Operations and Documentation Closure)
-
-Status: `In Progress`
-
-Goals:
-
-1. full operator-grade docs and troubleshooting completeness
-2. clear runbooks for multi-repo apply workflows
-3. sustained dogfooding and self-host usage
-
-## Wave 12 (Guardrails and Drift Immunity) NEW
-
-Status: `In Progress`
-
-Objective:
-
-Make toolchain/dependency drift failures detectable, repairable, and auditable by default, both CLI-first and GUI-assisted.
-
-Scope:
-
-1. pre-push hard gate on policy + locked compile + targeted tests
-2. precise incompatibility detection in policy checks
-3. lock drift recovery automation with exact-version transitions
-4. structured logs and operator-facing remediation hints
-5. planned GUI `Guardrails` surface for checks and recovery actions
-
-Delivered in this wave (so far):
-
-1. `scripts/prepush_gate.sh` with timestamped logs and remediation output
-2. `scripts/verify_toolchain_policy.sh` compatibility checks
-3. `scripts/verify_git_hook_policy.sh`
-4. `scripts/install_git_hooks.sh` + `.githooks/pre-push`
-5. `scripts/repair_lock_182.sh` initial and iterative hardening
-6. documentation updates in Developer Guide, Testing Strategy, Troubleshooting
-7. drift chain mitigation for `uuid/getrandom/wasip3/wit-bindgen` and `blake3/constant_time_eq`
-8. centralized frozen policy constants in `scripts/frozen_versions.sh`
-9. enforced core-lane execution via `rustup run 1.82.0` in gate/readiness scripts
-10. enforced protobuf/protoc pin validation in `verify_toolchain_policy.sh`
-
-Open tasks:
-
-1. keep `repair_lock_182.sh` transition map updated as new drift crates appear
-2. implement Control Panel `Guardrails` tab (or `Dependencies` tab naming if retained):
-- policy check action
-- drift report action
-- repair action
-- pre-push gate action
-- last-run log viewer
-3. add/maintain structured JSON output mode for guardrail scripts to improve UI integration
-4. enforce actual runtime toolchain in guardrail commands (not only file pin checks)
-
-Acceptance criteria:
-
-1. push failures always include explicit root cause and next action
-2. lock drift is recoverable with one documented command path
-3. guardrail checks are available via both CLI and GUI
-4. docs remain synchronized with scripts and real-world incident learnings
-
-## Immediate Next Execution Steps
-
-1. finalize `repair_lock_182.sh` for repeatable one-shot recovery across observed drift variants
-2. add `Guardrails` tab and backend API endpoints in `pilot serve` UI
-3. emit guardrail outcomes into telemetry and audit trail for historical visibility
-4. continue module GUI expansion only after guardrail lane is stable
-
-## Resume Checklist (Low-Context Recovery)
-
-When resuming after interruption, run these in order:
-
-1. `./scripts/verify_toolchain_policy.sh`
-2. `./scripts/repair_lock_182.sh --no-gate` (if policy fails)
-3. `./scripts/prepush_gate.sh`
-4. `cargo check -p pilot --locked`
-5. inspect latest `~/.pilot/reports/prepush_gate_*.log`
-
-If all pass, continue planned wave implementation.
+1. Dashboard is the real control center.
+2. Tabs are specialist tools, not separate systems.
+3. Codex is integrated with auditable, deterministic operations.
+4. Guardrails prevent drift before CI surprises.
+5. Documentation and testing are complete enough for production use.
