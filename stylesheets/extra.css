@@ -1,0 +1,97 @@
+@import url("https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap");
+
+:root,
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #001f3f !important; /* Navy */
+  --md-primary-fg-color--light: #003366 !important;
+  --md-primary-fg-color--dark: #00121f !important;
+}
+
+/* Sidebar category headings: bold, white, and balanced size */
+.md-nav__link--index,
+.md-nav__item--nested > .md-nav__link {
+  font-weight: bold !important;
+  font-size: 1rem !important; /* Reduced from 1.1rem */
+  color: white !important;
+}
+
+/* Futuristic "Arqon Reflex" title styling */
+.md-nav__title,
+.md-header__title,
+.md-content h1 {
+  /* Added .md-content h1 for homepage title */
+  font-family: "Rajdhani", sans-serif !important;
+  font-size: 1.5rem !important;
+  font-weight: 600 !important;
+  color: white !important;
+  /* Gradient & Glow Removed per request */
+}
+
+/* Specific styling for the homepage main title to be even larger */
+.md-content h1 {
+  font-size: 3rem !important;
+  text-align: center;
+  margin-top: 1rem !important;
+  margin-bottom: 0rem !important; /* Remove bottom margin to close gap */
+}
+
+/* Adjust the tagline spacing */
+.md-content h2 {
+  margin-top: -0.5rem !important; /* Pull up closer to the H1 */
+  text-align: center;
+  font-weight: 300;
+  opacity: 0.8;
+}
+
+.md-content h1 a {
+  color: inherit !important;
+  text-decoration: none !important;
+}
+
+/* Center Mermaid diagrams */
+.mermaid {
+  display: flex !important;
+  justify-content: center !important;
+}
+
+/* Typographic Logo 'A' styling */
+.logo-a {
+  display: inline-block !important;
+  height: 3.2rem !important; /* Slightly taller than the 3rem text */
+  width: auto !important;
+  vertical-align: middle !important;
+  margin: 0 !important;
+  margin-right: 0.05rem !important; /* Neutral spacing to match 'RQON' tracking */
+  margin-bottom: 0.3rem !important; /* Visual lift to match font baseline */
+}
+
+/* Active/Selected nav link - make it bright and visible */
+.md-nav__link--active,
+.md-nav__item--active > .md-nav__link {
+  color: #64b5f6 !important; /* Light blue for active items */
+  font-weight: bold !important;
+  border-left: 3px solid #64b5f6; /* Glowing marker */
+  padding-left: 8px; /* Offset for marker */
+  transition: all 0.2s ease;
+}
+
+/* Hover state for nav links */
+.md-nav__link:hover {
+  color: #90caf9 !important; /* Even lighter blue on hover */
+}
+
+/* Regular nav links - ensure they're visible */
+.md-nav__link {
+  color: #b0bec5 !important; /* Light gray for inactive items */
+}
+
+/* Fleet Link Aesthetics - Vibrant Purple */
+a {
+    color: #a361ff !important;
+}
+a:visited {
+    color: #c9a3ff !important;
+}
+a:hover, a:focus {
+    color: #d8b4fe !important;
+}
