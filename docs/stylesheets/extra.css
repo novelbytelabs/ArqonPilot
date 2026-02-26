@@ -89,7 +89,7 @@ h2 {
 
 .md-typeset .pilot-hero-title {
   font-family: "Rajdhani", sans-serif;
-  font-size: clamp(4.6rem, 12vw, 7rem) !important;
+  font-size: clamp(4.2rem, 11vw, 6.4rem) !important;
   line-height: 0.86 !important;
   margin: 0 0 1.15rem !important;
   font-weight: 800 !important;
