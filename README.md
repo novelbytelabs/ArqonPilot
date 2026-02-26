@@ -72,3 +72,11 @@ Primary docs are in `docs/` and published with MkDocs.
 - `docs/operator-runbook.md`
 - `docs/branch-management-guide.md`
 - `docs/pilot-deep-dive-plan.md`
+
+## Publish Docs to GitHub Pages
+
+Docs deploy via `.github/workflows/docs.yml`.
+
+1. In GitHub: `Settings -> Pages -> Build and deployment`.
+2. Set `Source` to `GitHub Actions`.
+3. Push to `main` (or run the `Docs (MkDocs)` workflow manually).
