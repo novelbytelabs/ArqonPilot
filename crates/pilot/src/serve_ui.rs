@@ -189,12 +189,22 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 
 fn spawn_bus_telemetry_listener(bus: BusBridgeConfig, tx: broadcast::Sender<Value>) {
     tokio::spawn(async move {
+        let mut last_error = String::new();
+        let mut last_emit = std::time::Instant::now() - Duration::from_secs(60);
         loop {
             if let Err(err) = consume_bus_telemetry(&bus, &tx).await {
-                let _ = tx.send(json!({
-                    "source": "bus_listener",
-                    "error": err.to_string(),
-                }));
+                let msg = err.to_string();
+                let should_emit =
+                    msg != last_error || last_emit.elapsed() >= Duration::from_secs(30);
+                if should_emit {
+                    let _ = tx.send(json!({
+                        "source": "bus_listener",
+                        "error": msg,
+                        "hint": "Verify ArqonBus is running and reachable at configured --ws-url"
+                    }));
+                    last_error = err.to_string();
+                    last_emit = std::time::Instant::now();
+                }
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
@@ -577,6 +587,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <div class="card">
         <h3>Live Event Stream</h3>
         <div class="row">
+          <button id="stream-toggle" class="btn secondary" onclick="toggleStream()">Pause Stream</button>
           <button class="btn secondary" onclick="clearLive()">Clear</button>
         </div>
         <pre id="live-stream">[]</pre>
@@ -588,6 +599,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <input id="failed-only" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
             failed only
           </label>
+          <button class="btn secondary" onclick="exportTimeline()">Export Filtered JSON</button>
         </div>
         <input id="timeline-command-filter" placeholder="filter command (e.g. pilot.branch)" />
         <input id="timeline-text-filter" placeholder="filter op id or summary text" />
@@ -617,7 +629,10 @@ const timelineEl = document.getElementById('timeline');
 const failedOnlyToggle = document.getElementById('failed-only');
 const timelineCommandFilter = document.getElementById('timeline-command-filter');
 const timelineTextFilter = document.getElementById('timeline-text-filter');
+const streamToggleBtn = document.getElementById('stream-toggle');
 const timelineState = new Map();
+let streamPaused = false;
+let streamHandle = null;
 
 for (const btn of document.querySelectorAll('.tab')) {
   btn.addEventListener('click', () => {
@@ -654,6 +669,44 @@ function appendLive(eventObj) {
 
 function clearLive() {
   liveStream.textContent = '[]';
+}
+
+function filteredTimelineItems() {
+  const cmdNeedle = String(timelineCommandFilter.value || '').trim().toLowerCase();
+  const textNeedle = String(timelineTextFilter.value || '').trim().toLowerCase();
+  return Array.from(timelineState.values())
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    .filter((x) => !failedOnlyToggle.checked || x.phase === 'failed')
+    .filter((x) => !cmdNeedle || String(x.command || '').toLowerCase().includes(cmdNeedle))
+    .filter((x) => {
+      if (!textNeedle) return true;
+      const hay = [
+        x.opId || '',
+        x.command || '',
+        ...(x.steps || []).map((s) => s.summary || '')
+      ].join(' ').toLowerCase();
+      return hay.includes(textNeedle);
+    });
+}
+
+function exportTimeline() {
+  const items = filteredTimelineItems();
+  const payload = {
+    exported_at: new Date().toISOString(),
+    filters: {
+      failed_only: !!failedOnlyToggle.checked,
+      command_contains: timelineCommandFilter.value || '',
+      text_contains: timelineTextFilter.value || ''
+    },
+    items
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'pilot_timeline_export.json';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function extractTimelineRecord(evt) {
@@ -714,22 +767,7 @@ function ingestTimeline(evt) {
 
 function renderTimeline() {
   timelineEl.innerHTML = '';
-  const cmdNeedle = String(timelineCommandFilter.value || '').trim().toLowerCase();
-  const textNeedle = String(timelineTextFilter.value || '').trim().toLowerCase();
-  const items = Array.from(timelineState.values())
-    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
-    .filter((x) => !failedOnlyToggle.checked || x.phase === 'failed')
-    .filter((x) => !cmdNeedle || String(x.command || '').toLowerCase().includes(cmdNeedle))
-    .filter((x) => {
-      if (!textNeedle) return true;
-      const hay = [
-        x.opId || '',
-        x.command || '',
-        ...(x.steps || []).map((s) => s.summary || '')
-      ].join(' ').toLowerCase();
-      return hay.includes(textNeedle);
-    })
-    .slice(0, 40);
+  const items = filteredTimelineItems().slice(0, 40);
 
   if (!items.length) {
     const empty = document.createElement('div');
@@ -835,17 +873,24 @@ async function loadHistory() {
 }
 
 function attachStream() {
-  const es = new EventSource('/api/stream');
-  es.addEventListener('pilot_event', (evt) => {
+  streamHandle = new EventSource('/api/stream');
+  streamHandle.addEventListener('pilot_event', (evt) => {
+    if (streamPaused) return;
     try {
       appendLive(JSON.parse(evt.data));
     } catch (_) {
       appendLive({ raw: evt.data });
     }
   });
-  es.onerror = () => {
+  streamHandle.onerror = () => {
     appendLive({ source: 'ui', warning: 'stream disconnected, retrying...' });
   };
+}
+
+function toggleStream() {
+  streamPaused = !streamPaused;
+  streamToggleBtn.textContent = streamPaused ? 'Resume Stream' : 'Pause Stream';
+  appendLive({ source: 'ui', info: streamPaused ? 'stream paused' : 'stream resumed' });
 }
 
 attachStream();

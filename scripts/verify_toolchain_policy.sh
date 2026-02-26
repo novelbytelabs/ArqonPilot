@@ -4,19 +4,39 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+search_pattern() {
+  local pattern="$1"
+  local file="$2"
+  if command -v rg >/dev/null 2>&1; then
+    rg -n "$pattern" "$file" >/dev/null
+  else
+    grep -En "$pattern" "$file" >/dev/null
+  fi
+}
+
+contains_pattern() {
+  local pattern="$1"
+  local file="$2"
+  if command -v rg >/dev/null 2>&1; then
+    rg -n "$pattern" "$file" >/dev/null
+  else
+    grep -En "$pattern" "$file" >/dev/null
+  fi
+}
+
 echo "[policy] rust-toolchain pin"
-rg -n '^channel = "1\.82\.0"$' rust-toolchain.toml >/dev/null
+search_pattern '^channel = "1\.82\.0"$' rust-toolchain.toml
 
 echo "[policy] CI lane pin"
-rg -n 'toolchain:\s*"1\.82\.0"' .github/workflows/ci.yml >/dev/null
+search_pattern 'toolchain:\s*"1\.82\.0"' .github/workflows/ci.yml
 
 echo "[policy] packaging lane pin"
-rg -n 'toolchain:\s*"1\.88\.0"' .github/workflows/pypi.yml >/dev/null
+search_pattern 'toolchain:\s*"1\.88\.0"' .github/workflows/pypi.yml
 
 echo "[policy] packaging lockfile policy"
-rg -n 'Cargo\.lock\.packaging' .github/workflows/pypi.yml >/dev/null
-rg -n '\--locked' .github/workflows/pypi.yml >/dev/null
-if rg -n 'cargo\s+update' .github/workflows/pypi.yml >/dev/null; then
+search_pattern 'Cargo\.lock\.packaging' .github/workflows/pypi.yml
+search_pattern '\--locked' .github/workflows/pypi.yml
+if contains_pattern 'cargo\s+update' .github/workflows/pypi.yml; then
   echo "ERROR: pypi.yml must not run cargo update in CI" >&2
   exit 1
 fi
