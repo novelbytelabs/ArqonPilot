@@ -1,5 +1,5 @@
 <div class="pilot-hero">
-  <h1 class="pilot-hero-title">Arqon Pilot</h1>
+  <div class="pilot-hero-title">Arqon Pilot</div>
   <p class="pilot-hero-subtitle">Autonomy isn't a workflow anymore.<br/>It's an operating loop.</p>
   <p class="pilot-hero-copy">Safe multi-repo orchestration, self-healing, and release control<br/>with deterministic governance and auditable execution.</p>
 

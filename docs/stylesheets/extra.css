@@ -87,17 +87,18 @@ h2 {
   z-index: -1;
 }
 
-.pilot-hero-title {
+.md-typeset .pilot-hero-title {
   font-family: "Rajdhani", sans-serif;
-  font-size: clamp(5.2rem, 14vw, 8.6rem);
-  line-height: 0.84;
-  margin: 0 0 1.1rem;
-  font-weight: 800;
+  font-size: clamp(6rem, 16vw, 10rem) !important;
+  line-height: 0.82 !important;
+  margin: 0 0 1.15rem !important;
+  font-weight: 800 !important;
   letter-spacing: 0.01em;
-  color: #e5e8ff;
+  color: #e5e8ff !important;
   text-shadow:
     0 0 38px rgba(120, 121, 255, 0.48),
     0 0 10px rgba(120, 121, 255, 0.32);
+  text-align: center !important;
 }
 
 .pilot-hero-subtitle {
