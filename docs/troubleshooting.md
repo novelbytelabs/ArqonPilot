@@ -156,6 +156,20 @@ Gotchas:
   - packaging Rust `1.88.0`
   - protobuf `4.25.8` (`protoc` `25.8`)
 
+5. Packaging lock drift:
+- If CI fails with `Cargo.lock needs to be updated but --locked was passed` in `packaging-parity`,
+  `Cargo.lock.packaging` is stale versus current manifests.
+- Fix by re-syncing packaging lock after dependency changes:
+
+```bash
+cp Cargo.lock Cargo.lock.packaging
+./scripts/packaging_lane_check.sh
+```
+
+6. Missing `rg` on CI runner:
+- If `release_readiness_check.sh` fails with `rg: command not found`, use scripts that include
+  `grep` fallback (current default). Do not assume `rg` exists on every runner image.
+
 ## 6) Pre-push fails due transient DNS/crates.io access
 
 Symptoms (examples):
