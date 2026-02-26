@@ -15,7 +15,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 
 [workspace.dependencies]
@@ -25,3 +25,4 @@ thiserror = "2.0"
 miette = { version = "7.0", features = ["fancy"] }
 clap = { version = "4.4", features = ["derive", "env"] }
 chrono = "=0.4.38"
+openssl = { version = "0.10", features = ["vendored"] }

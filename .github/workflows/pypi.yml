@@ -56,9 +56,9 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          manylinux: "2014"
+          manylinux: "2_28"
           args: --release --locked --sdist --out dist -v
-          before-script-linux: yum install -y openssl-devel unzip && curl -L https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-linux-x86_64.zip -o protoc.zip && unzip -o protoc.zip -d /usr/local && rm protoc.zip
+          before-script-linux: yum install -y openssl-devel unzip perl-core make && curl -L https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-linux-x86_64.zip -o protoc.zip && unzip -o protoc.zip -d /usr/local && rm protoc.zip
 
       - name: Publish to TestPyPI (manual)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
