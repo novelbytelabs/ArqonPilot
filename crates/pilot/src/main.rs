@@ -19,6 +19,7 @@ use pilot_secure as secure;
 use clap::{Args, Parser, Subcommand};
 use config::Config;
 use miette::{Context, IntoDiagnostic, Result};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -580,6 +581,14 @@ struct ServeArgs {
     /// Start local UI control panel on this port
     #[arg(long)]
     ui_port: Option<u16>,
+
+    /// Allow mutating operations from UI/API (disabled by default for safety)
+    #[arg(long)]
+    ui_allow_mutations: bool,
+
+    /// Restrict UI/API to these commands only (repeatable)
+    #[arg(long = "ui-allow-command")]
+    ui_allow_commands: Vec<String>,
 }
 
 #[tokio::main]
@@ -1484,10 +1493,22 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
             };
             if let Some(port) = args.ui_port {
                 let bridge_cfg = cfg.clone();
+                let allowed_commands = if args.ui_allow_commands.is_empty() {
+                    None
+                } else {
+                    Some(
+                        args.ui_allow_commands
+                            .iter()
+                            .cloned()
+                            .collect::<HashSet<_>>(),
+                    )
+                };
                 let ui_cfg = serve_ui::UiConfig {
                     host: args.ui_host.clone(),
                     port,
                     bus: cfg.clone(),
+                    allow_mutations: args.ui_allow_mutations,
+                    allowed_commands,
                 };
                 let bridge = tokio::spawn(async move { bus::run_bridge(&bridge_cfg).await });
                 let ui = tokio::spawn(async move { serve_ui::run_ui_server(ui_cfg).await });

@@ -62,6 +62,7 @@
 
 ```bash
 pip install arqon-pilot
+# Linux/Conda: if shared libs fail, configure conda hooks (see Developer Guide)
 pilot --help
 pilot init
 pilot multi register --path /path/to/ArqonContinuum --group core --tag apply-pilot
@@ -73,6 +74,7 @@ pilot navigate --multi --group core --dry-run
 ## Documentation
 
 - [Developer Guide](developer-guide.md)
+- [Troubleshooting](troubleshooting.md)
 - [Testing Strategy](testing-strategy.md)
 - [Operator Runbook](operator-runbook.md)
 - [Branch Management Guide](branch-management-guide.md)

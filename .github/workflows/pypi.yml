@@ -49,6 +49,10 @@ jobs:
       - name: Remove rust-toolchain.toml for PyPI build
         run: rm -f rust-toolchain.toml
 
+      # Ensure Cargo.lock is up-to-date with current Cargo.toml versions
+      - name: Update Cargo.lock
+        run: cargo update
+
       # Note: Removed preflight cargo build - maturin does its own build anyway
       # The preflight was redundant and took 15+ minutes
 

@@ -1,25 +1,38 @@
 use crate::bus::{send_command_once, BusBridgeConfig};
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use miette::Result;
+use futures_util::{SinkExt, StreamExt};
+use miette::{IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
+use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[derive(Clone)]
 pub struct UiConfig {
     pub host: String,
     pub port: u16,
     pub bus: BusBridgeConfig,
+    pub allow_mutations: bool,
+    pub allowed_commands: Option<HashSet<String>>,
 }
 
 #[derive(Clone)]
 struct UiState {
     bus: BusBridgeConfig,
+    events: broadcast::Sender<Value>,
+    allow_mutations: bool,
+    allowed_commands: Option<HashSet<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,19 +48,29 @@ struct UiCommandResponse {
 }
 
 pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
-    let state = Arc::new(UiState { bus: cfg.bus });
+    let (event_tx, _) = broadcast::channel(512);
+    spawn_bus_telemetry_listener(cfg.bus.clone(), event_tx.clone());
+    let state = Arc::new(UiState {
+        bus: cfg.bus,
+        events: event_tx,
+        allow_mutations: cfg.allow_mutations,
+        allowed_commands: cfg.allowed_commands,
+    });
 
     let app = Router::new()
         .route("/", get(index))
         .route("/api/command", post(run_command))
         .route("/api/history", get(get_history))
+        .route("/api/stream", get(stream_events))
         .with_state(state);
 
     let addr = format!("{}:{}", cfg.host, cfg.port);
     println!("Pilot UI listening at http://{}", addr);
 
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .into_diagnostic()?;
+    axum::serve(listener, app).await.into_diagnostic()?;
     Ok(())
 }
 
@@ -70,9 +93,42 @@ async fn run_command(
         req.payload["schema_version"] = json!(1);
     }
 
-    match send_command_once(&state.bus, &req.command, req.payload).await {
-        Ok(response) => Json(UiCommandResponse { ok: true, response }).into_response(),
-        Err(err) => error_response(StatusCode::BAD_GATEWAY, &err.to_string()),
+    if let Some(allowlist) = &state.allowed_commands {
+        if !allowlist.contains(&req.command) {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                &format!("command '{}' is not in ui allowlist", req.command),
+            );
+        }
+    }
+
+    if !state.allow_mutations {
+        if is_mutating_command(&req.command) {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                &format!("command '{}' blocked in read-only UI mode", req.command),
+            );
+        }
+        enforce_dry_run(&req.command, &mut req.payload);
+    }
+
+    match send_command_once_with_retry(&state.bus, &req.command, req.payload, 3).await {
+        Ok(response) => {
+            let _ = state.events.send(json!({
+                "source": "ui_command",
+                "command": req.command,
+                "response": response,
+            }));
+            Json(UiCommandResponse { ok: true, response }).into_response()
+        }
+        Err(err) => {
+            let _ = state.events.send(json!({
+                "source": "ui_command",
+                "command": req.command,
+                "error": err.to_string(),
+            }));
+            error_response(StatusCode::BAD_GATEWAY, &err.to_string())
+        }
     }
 }
 
@@ -81,6 +137,22 @@ async fn get_history() -> Response {
         Ok(items) => Json(json!({"ok": true, "events": items})).into_response(),
         Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     }
+}
+
+async fn stream_events(
+    State(state): State<Arc<UiState>>,
+) -> Sse<impl tokio_stream::Stream<Item = std::result::Result<Event, Infallible>>> {
+    let rx = state.events.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|item| async move {
+        match item {
+            Ok(value) => Some(Ok(Event::default()
+                .event("pilot_event")
+                .data(value.to_string()))),
+            Err(_) => None,
+        }
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
 fn read_recent_audit_events(limit: usize) -> std::io::Result<Vec<Value>> {
@@ -115,104 +187,433 @@ fn error_response(status: StatusCode, message: &str) -> Response {
     response
 }
 
+fn spawn_bus_telemetry_listener(bus: BusBridgeConfig, tx: broadcast::Sender<Value>) {
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = consume_bus_telemetry(&bus, &tx).await {
+                let _ = tx.send(json!({
+                    "source": "bus_listener",
+                    "error": err.to_string(),
+                }));
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    });
+}
+
+async fn consume_bus_telemetry(bus: &BusBridgeConfig, tx: &broadcast::Sender<Value>) -> Result<()> {
+    let (ws_stream, _) = connect_async(&bus.ws_url).await.into_diagnostic()?;
+    let (mut writer, mut reader) = ws_stream.split();
+
+    if let Ok(token) = std::env::var(&bus.jwt_env) {
+        let auth = json!({
+            "type": "command",
+            "command": "authenticate",
+            "data": {"token": token},
+            "room": bus.room,
+            "channel": bus.telemetry_channel,
+        });
+        writer
+            .send(Message::Text(auth.to_string()))
+            .await
+            .into_diagnostic()?;
+    }
+
+    let join = json!({
+        "type": "command",
+        "command": "join_channel",
+        "data": {"channel_id": bus.telemetry_channel},
+        "room": bus.room,
+        "channel": bus.telemetry_channel,
+    });
+    writer
+        .send(Message::Text(join.to_string()))
+        .await
+        .into_diagnostic()?;
+
+    while let Some(msg) = reader.next().await {
+        let msg = msg.into_diagnostic()?;
+        let Message::Text(text) = msg else {
+            continue;
+        };
+        let parsed: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let is_telemetry = parsed
+            .get("channel")
+            .and_then(Value::as_str)
+            .map(|c| c == bus.telemetry_channel)
+            .unwrap_or(false)
+            || parsed
+                .get("eventType")
+                .and_then(Value::as_str)
+                .map(|e| e.starts_with("pilot."))
+                .unwrap_or(false);
+
+        if is_telemetry {
+            let _ = tx.send(parsed);
+        }
+    }
+
+    Ok(())
+}
+
+async fn send_command_once_with_retry(
+    bus: &BusBridgeConfig,
+    command: &str,
+    payload: Value,
+    max_attempts: u32,
+) -> Result<Value> {
+    let attempts = max_attempts.max(1);
+    for attempt in 1..=attempts {
+        match send_command_once(bus, command, payload.clone()).await {
+            Ok(v) => return Ok(v),
+            Err(err) if attempt < attempts => {
+                let backoff_ms = 200u64 * (1 << (attempt - 1));
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                let _ = err;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(miette::miette!(
+        "unreachable retry state for command {}",
+        command
+    ))
+}
+
+fn is_mutating_command(command: &str) -> bool {
+    matches!(
+        command,
+        "pilot.branch.create"
+            | "pilot.branch.sync"
+            | "pilot.branch.prune"
+            | "pilot.multi.register"
+            | "pilot.multi.prs.create"
+    )
+}
+
+fn enforce_dry_run(command: &str, payload: &mut Value) {
+    if matches!(
+        command,
+        "pilot.branch.create"
+            | "pilot.branch.sync"
+            | "pilot.branch.prune"
+            | "pilot.multi.prs.create"
+    ) {
+        payload["dry_run"] = json!(true);
+    }
+}
+
 const INDEX_HTML: &str = r#"<!doctype html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"UTF-8\" />
-  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Pilot Control Panel</title>
   <style>
-    :root { color-scheme: dark; }
-    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0c1220; color: #e6ebff; }
-    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
-    h1 { margin: 0 0 16px; }
-    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
-    button.tab { background: #1b2540; border: 1px solid #33466f; color: #dce5ff; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
-    button.tab.active { background: #3a4f8b; }
-    .panel { display: none; background: #111a2c; border: 1px solid #2b3a62; border-radius: 12px; padding: 16px; }
+    :root {
+      color-scheme: dark;
+      --bg: #090f1c;
+      --panel: #111a2d;
+      --panel-2: #14213a;
+      --border: #2e3f64;
+      --text: #e7ecff;
+      --muted: #9db0df;
+      --primary: #6d7dff;
+      --primary-hover: #8090ff;
+      --accent: #30c7f4;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      font-family: "Segoe UI", "Inter", ui-sans-serif, system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 50% 0%, rgba(115, 97, 255, 0.25), transparent 52%),
+        radial-gradient(circle at 90% 100%, rgba(37, 209, 246, 0.16), transparent 38%),
+        var(--bg);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 28px 20px 48px; }
+    .hero {
+      border: 1px solid var(--border);
+      background: linear-gradient(160deg, rgba(20, 33, 58, 0.9), rgba(13, 21, 36, 0.95));
+      border-radius: 14px;
+      padding: 22px;
+      margin-bottom: 18px;
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.28);
+    }
+    h1 { margin: 0; font-size: 2rem; line-height: 1.1; letter-spacing: 0.01em; }
+    h2 { margin: 0; font-size: 1rem; color: var(--muted); font-weight: 500; }
+    h3 { margin: 0 0 10px; font-size: 1.05rem; }
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin: 0 0 16px;
+      flex-wrap: wrap;
+    }
+    button.tab {
+      background: #182744;
+      border: 1px solid #355285;
+      color: #dbe7ff;
+      padding: 9px 16px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.15s ease;
+    }
+    button.tab:hover { border-color: #4b72b6; }
+    button.tab.active {
+      background: linear-gradient(90deg, #4f63dc, #3e56cf);
+      border-color: #5c74ef;
+      box-shadow: 0 0 0 3px rgba(79, 99, 220, 0.18);
+    }
+    .panel {
+      display: none;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      background: rgba(16, 26, 44, 0.92);
+      backdrop-filter: blur(2px);
+    }
     .panel.active { display: block; }
-    .grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0,1fr)); }
-    .card { background: #151f34; border: 1px solid #2b3a62; border-radius: 10px; padding: 12px; }
-    input, textarea, select { width: 100%; box-sizing: border-box; background: #0f1728; color: #e5ecff; border: 1px solid #32466f; border-radius: 8px; padding: 10px; }
-    .row { display: flex; gap: 8px; }
-    .btn { background: #506fd3; border: none; color: white; border-radius: 8px; padding: 10px 14px; cursor: pointer; }
-    pre { background: #09101d; border: 1px solid #2a3f6d; border-radius: 8px; padding: 12px; max-height: 320px; overflow: auto; }
-    .muted { color: #9cb0df; }
-    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .card {
+      background: linear-gradient(155deg, rgba(21, 34, 57, 0.92), rgba(15, 24, 40, 0.98));
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    input {
+      width: 100%;
+      background: #0d1526;
+      color: #ebf1ff;
+      border: 1px solid #334f7d;
+      border-radius: 8px;
+      padding: 10px 11px;
+      font-size: 0.95rem;
+    }
+    input::placeholder { color: #7f94c6; }
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(48, 199, 244, 0.18);
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      background: linear-gradient(90deg, var(--primary), #5567e4);
+      border: 1px solid #7484ff;
+      color: #fff;
+      border-radius: 9px;
+      padding: 9px 13px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.15s ease;
+    }
+    .btn:hover { background: linear-gradient(90deg, var(--primary-hover), #6578f5); }
+    .btn.secondary {
+      background: #1a2844;
+      border-color: #3a578a;
+      color: #d9e6ff;
+    }
+    .status {
+      margin-top: 14px;
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 1fr 1fr;
+    }
+    pre {
+      margin: 0;
+      background: #080f1a;
+      border: 1px solid #2d426c;
+      border-radius: 10px;
+      padding: 12px;
+      max-height: 340px;
+      overflow: auto;
+      font-size: 0.84rem;
+      line-height: 1.4;
+    }
+    .timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 340px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .tl-card {
+      border: 1px solid #2f436f;
+      border-radius: 10px;
+      background: #0a1321;
+      padding: 10px;
+    }
+    .tl-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .tl-title {
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: #dce8ff;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tl-badge {
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border: 1px solid;
+    }
+    .tl-badge.started { color: #9dc7ff; border-color: #3f6db5; background: #152845; }
+    .tl-badge.progress { color: #9de7ff; border-color: #2c7d9c; background: #113242; }
+    .tl-badge.completed { color: #b6f7cb; border-color: #2d8a52; background: #102d1f; }
+    .tl-badge.failed { color: #ffb2b2; border-color: #9e3f3f; background: #341616; }
+    .tl-steps {
+      margin: 0;
+      padding-left: 16px;
+      font-size: 0.8rem;
+      color: #a8b9e3;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .tl-empty {
+      color: #8ca0cf;
+      font-size: 0.88rem;
+      border: 1px dashed #34507e;
+      border-radius: 8px;
+      padding: 10px;
+      text-align: center;
+    }
+    .muted { color: var(--muted); margin-top: 7px; }
+    @media (max-width: 980px) {
+      .grid, .status { grid-template-columns: 1fr; }
+      h1 { font-size: 1.72rem; }
+    }
   </style>
 </head>
 <body>
-<div class=\"wrap\">
-  <h1>Arqon Pilot Control Panel</h1>
-  <p class=\"muted\">Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</p>
-
-  <div class=\"tabs\">
-    <button class=\"tab active\" data-tab=\"branch\">Branch</button>
-    <button class=\"tab\" data-tab=\"multi\">Multi</button>
-    <button class=\"tab\" data-tab=\"telemetry\">Telemetry</button>
+<div class="wrap">
+  <div class="hero">
+    <h1>Arqon Pilot Control Panel</h1>
+    <h2 class="muted">Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</h2>
   </div>
 
-  <section class=\"panel active\" id=\"branch\">
-    <div class=\"grid\">
-      <div class=\"card\">
+  <div class="tabs">
+    <button class="tab active" data-tab="branch">Branch</button>
+    <button class="tab" data-tab="multi">Multi</button>
+    <button class="tab" data-tab="telemetry">Telemetry</button>
+  </div>
+
+  <section class="panel active" id="branch">
+    <div class="grid">
+      <div class="card">
         <h3>Create Branch</h3>
-        <input id=\"branch-name\" placeholder=\"feat/pilot-wave7\" />
-        <input id=\"branch-base\" placeholder=\"main\" value=\"main\" />
-        <input id=\"branch-group\" placeholder=\"core\" />
-        <input id=\"branch-tags\" placeholder=\"apply-pilot,wave7\" />
-        <button class=\"btn\" onclick=\"branchCreate()\">Run</button>
+        <input id="branch-name" placeholder="feat/pilot-wave7" />
+        <input id="branch-base" placeholder="main" value="main" />
+        <input id="branch-group" placeholder="core" />
+        <input id="branch-tags" placeholder="apply-pilot,wave7" />
+        <button class="btn" onclick="branchCreate()">Run</button>
       </div>
-      <div class=\"card\">
+      <div class="card">
         <h3>Sync / Prune / Status</h3>
-        <input id=\"sync-branch\" placeholder=\"dev\" value=\"dev\" />
-        <input id=\"sync-base\" placeholder=\"main\" value=\"main\" />
-        <div class=\"row\">
-          <button class=\"btn\" onclick=\"branchSync()\">Sync</button>
-          <button class=\"btn\" onclick=\"branchPrune()\">Prune</button>
-          <button class=\"btn\" onclick=\"branchStatus()\">Status</button>
+        <input id="sync-branch" placeholder="dev" value="dev" />
+        <input id="sync-base" placeholder="main" value="main" />
+        <div class="row">
+          <button class="btn" onclick="branchSync()">Sync</button>
+          <button class="btn secondary" onclick="branchPrune()">Prune</button>
+          <button class="btn secondary" onclick="branchStatus()">Status</button>
         </div>
       </div>
     </div>
   </section>
 
-  <section class=\"panel\" id=\"multi\">
-    <div class=\"grid\">
-      <div class=\"card\">
+  <section class="panel" id="multi">
+    <div class="grid">
+      <div class="card">
         <h3>Register Repo</h3>
-        <input id=\"repo-path\" placeholder=\"/path/to/repo\" />
-        <input id=\"repo-name\" placeholder=\"ArqonContinuum\" />
-        <input id=\"repo-group\" placeholder=\"core\" />
-        <input id=\"repo-tags\" placeholder=\"apply-pilot,wave7\" />
-        <button class=\"btn\" onclick=\"multiRegister()\">Register</button>
+        <input id="repo-path" placeholder="/path/to/repo" />
+        <input id="repo-name" placeholder="ArqonContinuum" />
+        <input id="repo-group" placeholder="core" />
+        <input id="repo-tags" placeholder="apply-pilot,wave7" />
+        <button class="btn" onclick="multiRegister()">Register</button>
       </div>
-      <div class=\"card\">
+      <div class="card">
         <h3>List / Status / Order / PR Plan</h3>
-        <input id=\"multi-group\" placeholder=\"core\" />
-        <input id=\"multi-tags\" placeholder=\"apply-pilot,wave7\" />
-        <div class=\"row\">
-          <button class=\"btn\" onclick=\"multiList()\">List</button>
-          <button class=\"btn\" onclick=\"multiStatus()\">Status</button>
-          <button class=\"btn\" onclick=\"multiOrder()\">Order</button>
+        <input id="multi-group" placeholder="core" />
+        <input id="multi-tags" placeholder="apply-pilot,wave7" />
+        <div class="row">
+          <button class="btn secondary" onclick="multiList()">List</button>
+          <button class="btn secondary" onclick="multiStatus()">Status</button>
+          <button class="btn secondary" onclick="multiOrder()">Order</button>
         </div>
-        <button class=\"btn\" onclick=\"multiPrsCreate()\">PR Plan (Dry Run)</button>
+        <button class="btn" onclick="multiPrsCreate()">PR Plan (Dry Run)</button>
       </div>
     </div>
   </section>
 
-  <section class=\"panel\" id=\"telemetry\">
-    <div class=\"card\">
-      <h3>Recent Audit Events</h3>
-      <button class=\"btn\" onclick=\"loadHistory()\">Refresh</button>
-      <pre id=\"history\">[]</pre>
+  <section class="panel" id="telemetry">
+    <div class="grid">
+      <div class="card">
+        <h3>Live Event Stream</h3>
+        <div class="row">
+          <button class="btn secondary" onclick="clearLive()">Clear</button>
+        </div>
+        <pre id="live-stream">[]</pre>
+      </div>
+      <div class="card">
+        <h3>Operations Timeline</h3>
+        <div class="row">
+          <label style="font-size:0.82rem;color:#a8b9e3;">
+            <input id="failed-only" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
+            failed only
+          </label>
+        </div>
+        <div id="timeline" class="timeline">
+          <div class="tl-empty">No operations yet</div>
+        </div>
+      </div>
     </div>
   </section>
 
-  <h3>Response</h3>
-  <pre id=\"out\">ready</pre>
+  <div class="status">
+    <div class="card">
+      <h3>Response</h3>
+      <pre id="out">ready</pre>
+    </div>
+    <div class="card">
+      <h3>Recent Audit Events</h3>
+      <pre id="history-mirror">[]</pre>
+    </div>
+  </div>
 </div>
 <script>
 const out = document.getElementById('out');
-const history = document.getElementById('history');
+const liveStream = document.getElementById('live-stream');
+const historyMirror = document.getElementById('history-mirror');
+const timelineEl = document.getElementById('timeline');
+const failedOnlyToggle = document.getElementById('failed-only');
+const timelineState = new Map();
 
 for (const btn of document.querySelectorAll('.tab')) {
   btn.addEventListener('click', () => {
@@ -234,6 +635,129 @@ async function run(command, payload) {
   out.textContent = JSON.stringify(data, null, 2);
   loadHistory();
 }
+
+function appendLive(eventObj) {
+  const current = liveStream.textContent.trim();
+  let arr = [];
+  if (current && current !== '[]') {
+    try { arr = JSON.parse(current); } catch (_) { arr = []; }
+  }
+  arr.push(eventObj);
+  if (arr.length > 120) arr = arr.slice(arr.length - 120);
+  liveStream.textContent = JSON.stringify(arr, null, 2);
+  ingestTimeline(eventObj);
+}
+
+function clearLive() {
+  liveStream.textContent = '[]';
+}
+
+function extractTimelineRecord(evt) {
+  if (!evt || typeof evt !== 'object') return null;
+
+  if (typeof evt.eventType === 'string' && evt.eventType.startsWith('pilot.op.')) {
+    const payload = evt.payload || {};
+    const opId = payload.operation_id || payload.operationId;
+    if (!opId) return null;
+    return {
+      opId,
+      phase: evt.eventType.replace('pilot.op.', '') || 'progress',
+      command: payload.command || 'unknown',
+      summary: payload.summary || '',
+      at: payload.timestamp || new Date().toISOString()
+    };
+  }
+
+  if (evt.source === 'ui_command' && typeof evt.command === 'string') {
+    const success = !!(evt.response && evt.response.success);
+    return {
+      opId: (evt.response && evt.response.reply_to) || ('ui-' + Date.now()),
+      phase: success ? 'completed' : 'failed',
+      command: evt.command,
+      summary: evt.error || (evt.response && evt.response.data && evt.response.data.summary) || '',
+      at: new Date().toISOString()
+    };
+  }
+
+  return null;
+}
+
+function ingestTimeline(evt) {
+  const rec = extractTimelineRecord(evt);
+  if (!rec) return;
+
+  const current = timelineState.get(rec.opId) || {
+    opId: rec.opId,
+    command: rec.command,
+    phase: 'started',
+    updatedAt: rec.at,
+    steps: []
+  };
+
+  current.command = rec.command || current.command;
+  current.phase = rec.phase || current.phase;
+  current.updatedAt = rec.at || current.updatedAt;
+  current.steps.push({
+    phase: rec.phase,
+    summary: rec.summary || '',
+    at: rec.at || new Date().toISOString()
+  });
+  if (current.steps.length > 10) current.steps = current.steps.slice(current.steps.length - 10);
+
+  timelineState.set(rec.opId, current);
+  renderTimeline();
+}
+
+function renderTimeline() {
+  timelineEl.innerHTML = '';
+  const items = Array.from(timelineState.values())
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    .filter((x) => !failedOnlyToggle.checked || x.phase === 'failed')
+    .slice(0, 40);
+
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'tl-empty';
+    empty.textContent = 'No operations yet';
+    timelineEl.appendChild(empty);
+    return;
+  }
+
+  for (const item of items) {
+    const card = document.createElement('div');
+    card.className = 'tl-card';
+
+    const head = document.createElement('div');
+    head.className = 'tl-head';
+
+    const title = document.createElement('div');
+    title.className = 'tl-title';
+    title.textContent = item.command + ' (' + item.opId + ')';
+
+    const badge = document.createElement('span');
+    const phaseClass = ['started', 'progress', 'completed', 'failed'].includes(item.phase) ? item.phase : 'progress';
+    badge.className = 'tl-badge ' + phaseClass;
+    badge.textContent = String(item.phase).toUpperCase();
+
+    head.appendChild(title);
+    head.appendChild(badge);
+    card.appendChild(head);
+
+    const steps = document.createElement('ul');
+    steps.className = 'tl-steps';
+    for (const step of item.steps.slice().reverse()) {
+      const li = document.createElement('li');
+      const msg = step.summary ? ' - ' + step.summary : '';
+      li.textContent = '[' + step.at + '] ' + step.phase + msg;
+      steps.appendChild(li);
+    }
+    card.appendChild(steps);
+
+    timelineEl.appendChild(card);
+  }
+}
+
+failedOnlyToggle.addEventListener('change', renderTimeline);
 
 function branchCreate() {
   run('pilot.branch.create', {
@@ -289,11 +813,26 @@ function multiPrsCreate() {
 async function loadHistory() {
   const res = await fetch('/api/history');
   const data = await res.json();
-  history.textContent = JSON.stringify(data, null, 2);
+  historyMirror.textContent = JSON.stringify(data, null, 2);
 }
 
+function attachStream() {
+  const es = new EventSource('/api/stream');
+  es.addEventListener('pilot_event', (evt) => {
+    try {
+      appendLive(JSON.parse(evt.data));
+    } catch (_) {
+      appendLive({ raw: evt.data });
+    }
+  });
+  es.onerror = () => {
+    appendLive({ source: 'ui', warning: 'stream disconnected, retrying...' });
+  };
+}
+
+attachStream();
 loadHistory();
-setInterval(loadHistory, 5000);
+setInterval(loadHistory, 30000);
 </script>
 </body>
 </html>"#;

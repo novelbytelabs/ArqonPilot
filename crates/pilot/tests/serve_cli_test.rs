@@ -11,6 +11,10 @@ fn test_serve_help_surface() -> Result<(), Box<dyn std::error::Error>> {
         .stdout(predicates::str::contains("--ws-url"))
         .stdout(predicates::str::contains("--channel"))
         .stdout(predicates::str::contains("--telemetry-channel"))
+        .stdout(predicates::str::contains("--ui-host"))
+        .stdout(predicates::str::contains("--ui-port"))
+        .stdout(predicates::str::contains("--ui-allow-mutations"))
+        .stdout(predicates::str::contains("--ui-allow-command"))
         .stdout(predicates::str::contains("--once"));
 
     Ok(())

@@ -28,6 +28,49 @@ pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --teleme
 
 JWT auth is optional and read from `ARQONBUS_AUTH_JWT` by default.
 
+For a local operator panel (Branch, Multi, Telemetry), run:
+
+```bash
+pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788
+```
+
+Safety flags:
+
+```bash
+# allow mutations from UI/API only when explicitly intended
+pilot serve ... --ui-port 7788 --ui-allow-mutations
+
+# optional allowlist for UI/API commands
+pilot serve ... --ui-port 7788 --ui-allow-command pilot.branch.status --ui-allow-command pilot.multi.status
+```
+
+## Critical Linux/Conda Runtime Step
+
+If `pilot` fails with a shared-library error like `libssl-*.so.10` not found, add the
+packaged runtime library directory to `LD_LIBRARY_PATH` via conda hooks.
+
+```bash
+mkdir -p "$CONDA_PREFIX/etc/conda/activate.d" "$CONDA_PREFIX/etc/conda/deactivate.d"
+
+cat > "$CONDA_PREFIX/etc/conda/activate.d/arqon_pilot_libs.sh" <<'EOF'
+export _ARQONPILOT_OLD_LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.10/site-packages/arqon_pilot.libs:${LD_LIBRARY_PATH-}"
+EOF
+
+cat > "$CONDA_PREFIX/etc/conda/deactivate.d/arqon_pilot_libs.sh" <<'EOF'
+export LD_LIBRARY_PATH="${_ARQONPILOT_OLD_LD_LIBRARY_PATH-}"
+unset _ARQONPILOT_OLD_LD_LIBRARY_PATH
+EOF
+```
+
+Reactivate env and verify:
+
+```bash
+conda deactivate
+conda activate helios-gpu-118
+pilot --help
+```
+
 ## Test
 
 ```bash
