@@ -58,6 +58,7 @@ jobs:
           command: build
           manylinux: "2014"
           args: --release --locked --sdist --out dist -v
+          before-script-linux: yum install -y openssl-devel
 
       - name: Publish to TestPyPI (manual)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
