@@ -185,3 +185,25 @@ If DNS checks pass but policy fails, run lock recovery:
 ./scripts/repair_lock_182.sh --no-gate
 ./scripts/prepush_gate.sh
 ```
+
+## 7) VS Code shows generic push failure with no useful reason
+
+Symptom:
+
+```text
+git push origin main:main
+error: failed to push some refs to 'https://github.com/...'
+```
+
+Use the diagnostic wrapper instead of raw push:
+
+```bash
+./scripts/push_main_safe.sh
+```
+
+What it does:
+1. Fetches remote state.
+2. Runs the mandatory pre-push gate.
+3. Runs push with `GIT_TRACE=1` and `GIT_CURL_VERBOSE=1`.
+4. Writes a full log to `~/.pilot/reports/push_main_<timestamp>.log` (fallback: `/tmp/pilot-reports/`).
+5. Prints likely cause buckets (divergence, auth, DNS).

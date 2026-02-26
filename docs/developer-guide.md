@@ -106,6 +106,14 @@ If `Cargo.lock` drifts and pre-push fails with `edition2024` parser errors, run:
 
 This restores a compatible core lockfile (or applies exact-version fallback transitions) and can re-run the gate.
 
+If VS Code shows only a generic push failure message, run:
+
+```bash
+./scripts/push_main_safe.sh
+```
+
+This captures verbose git transport diagnostics and writes a timestamped push log.
+
 ## Pre-Check Scripts Reference
 
 These scripts are the required guardrail layer before commit/push:
