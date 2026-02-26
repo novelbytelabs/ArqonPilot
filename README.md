@@ -71,7 +71,7 @@ Primary docs are in `docs/` and published with MkDocs.
 - `docs/testing-strategy.md`
 - `docs/operator-runbook.md`
 - `docs/branch-management-guide.md`
-- `docs/pilot-deep-dive-plan.md`
+- `archive/docs/pilot-deep-dive-plan.md` (archived)
 
 ## Publish Docs to GitHub Pages
 

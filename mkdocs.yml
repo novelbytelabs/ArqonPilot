@@ -28,7 +28,6 @@ theme:
 
 nav:
   - Home: "index.md"
-  - Pilot Deep Dive & Plan: "pilot-deep-dive-plan.md"
   - Developer Guide: "developer-guide.md"
   - Testing Strategy: "testing-strategy.md"
   - Operator Runbook: "operator-runbook.md"
