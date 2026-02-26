@@ -6,7 +6,7 @@ dev_addr: 127.0.0.1:8037
 
 theme:
   name: "material"
-  logo: assets/logo_with_glow.png
+  logo: assets/favicon.ico
   favicon: assets/favicon.ico
   features:
     - navigation.tabs
