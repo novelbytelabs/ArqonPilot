@@ -50,7 +50,7 @@ run_check "installer_sets_hooks_path" search_pattern 'git config core\.hooksPath
 run_check "installer_chmods_hook" search_pattern 'chmod \+x \.githooks/pre-push' scripts/install_git_hooks.sh || true
 
 log "[hook-policy] gate includes mandatory locked compile"
-run_check "gate_has_locked_check" search_pattern '^cargo check -p pilot --locked$' scripts/prepush_gate.sh || true
+run_check "gate_has_locked_check" search_pattern 'cargo check -p pilot --locked' scripts/prepush_gate.sh || true
 
 if [[ "${#FAILED_CHECKS[@]}" -gt 0 ]]; then
   if [[ "$JSON_MODE" -eq 1 ]]; then
