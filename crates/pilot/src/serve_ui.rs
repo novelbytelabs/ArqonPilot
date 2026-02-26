@@ -665,7 +665,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 <div class="wrap">
   <div class="hero">
     <h1>Arqon Pilot Control Panel</h1>
-    <h2 class="muted">Oracle + Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</h2>
+    <h2 class="muted">Oracle + Heal + Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</h2>
     <div class="bus-status-row">
       ArqonBus:
       <span id="bus-status-chip" class="bus-chip disconnected">DISCONNECTED</span>
@@ -674,6 +674,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
   <div class="tabs">
     <button class="tab" data-tab="oracle">Oracle</button>
+    <button class="tab" data-tab="heal">Heal</button>
     <button class="tab active" data-tab="branch">Branch</button>
     <button class="tab" data-tab="multi">Multi</button>
     <button class="tab" data-tab="telemetry">Telemetry</button>
@@ -695,6 +696,39 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <select id="oracle-report-select"></select>
         <pre id="oracle-report-content">No report selected.</pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="heal">
+    <div class="grid">
+      <div class="card">
+        <h3>Heal Controls</h3>
+        <input id="heal-log-file" placeholder="test_output.json" value="test_output.json" />
+        <input id="heal-target" placeholder="optional target file/crate" />
+        <div class="row">
+          <input id="heal-max-attempts" placeholder="max attempts" value="2" />
+          <input id="heal-max-files" placeholder="max files (plan mode)" value="5" />
+        </div>
+        <label style="font-size:0.82rem;color:#a8b9e3;">
+          <input id="heal-verbose" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
+          verbose output
+        </label>
+        <div class="row">
+          <button class="btn secondary" onclick="healPlan()">Plan Only</button>
+          <button class="btn" onclick="healRun()">Run Heal</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Heal Notes</h3>
+        <pre>Read-only UI mode forces plan-only behavior.
+To allow applying fixes from UI/API:
+pilot serve ... --ui-allow-mutations
+
+Recommended flow:
+1) Plan Only
+2) Review output + timeline
+3) Run Heal (when safe)</pre>
       </div>
     </div>
   </section>
@@ -1073,6 +1107,29 @@ function oracleQuery() {
     query: document.getElementById('oracle-query').value,
     cli: true
   });
+}
+
+function healPayload(planOnly) {
+  const maxAttemptsRaw = document.getElementById('heal-max-attempts').value;
+  const maxFilesRaw = document.getElementById('heal-max-files').value;
+  const maxAttempts = parseInt(maxAttemptsRaw || '2', 10);
+  const maxFiles = parseInt(maxFilesRaw || '5', 10);
+  return {
+    log_file: document.getElementById('heal-log-file').value || 'test_output.json',
+    target: document.getElementById('heal-target').value || null,
+    max_attempts: Number.isFinite(maxAttempts) ? maxAttempts : 2,
+    max_files: Number.isFinite(maxFiles) ? maxFiles : 5,
+    verbose: !!document.getElementById('heal-verbose').checked,
+    plan_only: !!planOnly
+  };
+}
+
+function healPlan() {
+  run('pilot.heal.run', healPayload(true));
+}
+
+function healRun() {
+  run('pilot.heal.run', healPayload(false));
 }
 
 async function oracleLoadReports() {

@@ -61,6 +61,10 @@ The Oracle tab includes:
 - `pilot.oracle.query` interactive query
 - report browser/viewer for `~/.pilot/reports`
 
+The Heal tab includes:
+- `pilot.heal.run` controls (`log_file`, `max_attempts`, `target`, `verbose`, `plan_only`, `max_files`)
+- safe default behavior in read-only UI mode (`plan_only=true` is enforced)
+
 Run one message and exit:
 
 ```bash
@@ -107,6 +111,7 @@ Do not put this in global `.bashrc`; keep it scoped to the target conda environm
 - `pilot.multi.prs.create`
 - `pilot.oracle.scan`
 - `pilot.oracle.query`
+- `pilot.heal.run`
 
 ## Contract Rules (Strict v1)
 
@@ -138,6 +143,20 @@ Do not put this in global `.bashrc`; keep it scoped to the target conda environm
   "name": "ArqonContinuum",
   "group": "core",
   "tags": ["apply-pilot"]
+}
+```
+
+### `pilot.heal.run`
+
+```json
+{
+  "schema_version": 1,
+  "log_file": "test_output.json",
+  "max_attempts": 2,
+  "target": "crates/pilot/src/main.rs",
+  "verbose": false,
+  "plan_only": true,
+  "max_files": 5
 }
 ```
 
