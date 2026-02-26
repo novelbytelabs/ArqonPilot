@@ -57,7 +57,7 @@ jobs:
         with:
           command: build
           manylinux: "2014"
-          args: --release --locked --compatibility manylinux2014 --sdist --out dist -v
+          args: --release --locked --sdist --out dist -v
 
       - name: Publish to TestPyPI (manual)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
