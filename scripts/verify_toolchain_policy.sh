@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/frozen_versions.sh"
 
 JSON_MODE=0
 if [[ "${1:-}" == "--json" ]]; then
@@ -45,6 +46,11 @@ contains_pattern() {
   else
     grep -En "$pattern" "$file" >/dev/null
   fi
+}
+
+toolchain_installed() {
+  local ver="$1"
+  rustup toolchain list 2>/dev/null | grep -Fq "$ver"
 }
 
 check_lock_compat() {
@@ -102,13 +108,23 @@ check_lock_compat() {
 }
 
 log "[policy] rust-toolchain pin"
-run_check "rust_toolchain_pin" search_pattern '^channel = "1\.82\.0"$' rust-toolchain.toml || true
+run_check "rust_toolchain_pin" search_pattern "^channel = \"${PILOT_CORE_RUST_VERSION//./\\.}\"$" rust-toolchain.toml || true
+run_check "rustup_available" command -v rustup >/dev/null 2>&1 || true
+run_check "core_toolchain_installed" toolchain_installed "$PILOT_CORE_RUST_VERSION" || true
 
 log "[policy] CI lane pin"
-run_check "ci_lane_pin" search_pattern 'toolchain:\s*"1\.82\.0"' .github/workflows/ci.yml || true
+run_check "ci_lane_pin" search_pattern "toolchain:\\s*\"${PILOT_CORE_RUST_VERSION//./\\.}\"" .github/workflows/ci.yml || true
 
 log "[policy] packaging lane pin"
-run_check "packaging_lane_pin" search_pattern 'toolchain:\s*"1\.88\.0"' .github/workflows/pypi.yml || true
+run_check "packaging_lane_pin" search_pattern "toolchain:\\s*\"${PILOT_PACKAGING_RUST_VERSION//./\\.}\"" .github/workflows/pypi.yml || true
+
+log "[policy] protobuf/protoc freeze pin"
+run_check "packaging_protoc_pin" search_pattern "protoc-${PILOT_PROTOC_VERSION//./\\.}-linux-x86_64\\.zip" .github/workflows/pypi.yml || true
+run_check "packaging_protoc_release_pin" search_pattern "releases/download/v${PILOT_PROTOC_VERSION//./\\.}/protoc-${PILOT_PROTOC_VERSION//./\\.}-linux-x86_64\\.zip" .github/workflows/pypi.yml || true
+if contains_pattern 'apt-get\s+install\s+-y\s+protobuf-compiler' .github/workflows/pypi.yml; then
+  echo "ERROR: pypi.yml must not use unpinned protobuf-compiler apt package; use protoc ${PILOT_PROTOC_VERSION} archive" >&2
+  FAILED_CHECKS+=("packaging_no_unpinned_protobuf_apt")
+fi
 
 log "[policy] packaging lockfile policy"
 run_check "packaging_lockfile_reference" search_pattern 'Cargo\.lock\.packaging' .github/workflows/pypi.yml || true

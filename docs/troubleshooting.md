@@ -151,6 +151,10 @@ Gotchas:
 4. Packaging lane is separate:
 - PyPI packaging lane can use newer toolchain and `Cargo.lock.packaging`.
 - Core lane still must satisfy Rust `1.82.0` with `Cargo.lock`.
+- Frozen versions are enforced by policy checks:
+  - core Rust `1.82.0`
+  - packaging Rust `1.88.0`
+  - protobuf `4.25.8` (`protoc` `25.8`)
 
 ## 6) Pre-push fails due transient DNS/crates.io access
 

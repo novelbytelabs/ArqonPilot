@@ -3,12 +3,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/frozen_versions.sh"
+
+core_cargo() {
+  rustup run "$PILOT_CORE_RUST_VERSION" cargo "$@"
+}
 
 echo "[1/4] Locked compile"
-cargo check -p pilot --locked
+core_cargo check -p pilot --locked
 
 echo "[2/4] Targeted locked CLI/E2E tests"
-cargo test -p pilot --locked \
+core_cargo test -p pilot --locked \
   --test e2e_wave6_dryrun_test \
   --test branch_cli_test \
   --test multi_cli_test \
@@ -22,11 +27,11 @@ cargo test -p pilot --locked \
   --test report_cli_test
 
 echo "[3/4] Command surface smoke check"
-cargo run -q -p pilot -- --help >/tmp/pilot_help.txt
+core_cargo run -q -p pilot -- --help >/tmp/pilot_help.txt
 rg -n "oracle|heal|navigate|branch|multi|secure|plan|create|know|init" /tmp/pilot_help.txt >/dev/null
 
 echo "[4/4] Rust toolchain pin check"
-rg -n 'channel = "1\.82\.0"' rust-toolchain.toml >/dev/null
+rg -n "^channel = \"${PILOT_CORE_RUST_VERSION//./\\.}\"$" rust-toolchain.toml >/dev/null
 
 echo "[policy] Toolchain and lockfile policy checks"
 ./scripts/verify_toolchain_policy.sh

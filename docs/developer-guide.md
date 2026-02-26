@@ -5,6 +5,10 @@
 - Rust toolchain pinned by `rust-toolchain.toml`
 - `git`
 - Python 3.10+ for packaging smoke checks
+- Frozen policy file: `scripts/frozen_versions.sh`
+  - core lane Rust: `1.82.0`
+  - packaging lane Rust: `1.88.0`
+  - protobuf: `4.25.8` (`protoc` `25.8`)
 
 ## Build
 
@@ -127,6 +131,7 @@ These scripts are the required guardrail layer before commit/push:
 
 2. `./scripts/verify_toolchain_policy.sh`
 - Verifies Rust lane pins (`1.82.0` core, `1.88.0` packaging), lockfile policy wiring, and lockfile compatibility checks for core lane.
+- Verifies PyPI workflow protobuf/protoc freeze pin (`4.25.8` / `25.8`) and rejects unpinned `protobuf-compiler` apt usage.
 - Fails fast with explicit incompatible dependencies (for example `time 0.3.47`, `wit-bindgen 0.51.0`).
 - Supports machine-readable mode: `./scripts/verify_toolchain_policy.sh --json`
 
@@ -163,6 +168,7 @@ These scripts are the required guardrail layer before commit/push:
 Arqon Pilot enforces a dual-lane policy:
 - core dev/test lane: Rust `1.82.0` + `Cargo.lock`
 - packaging lane: Rust `1.88.0` + `Cargo.lock.packaging`
+- protobuf/protoc lane: `4.25.8` / `25.8` (pinned in `.github/workflows/pypi.yml`)
 
 Validate policy locally:
 

@@ -31,11 +31,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install protoc
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
       # Packaging-only exception:
       # PyPI build resolves dependencies that require Rust >=1.88 (time crate).
       # Keep repository/toolchain policy at 1.82 for core dev/test lanes.
@@ -63,7 +58,7 @@ jobs:
           command: build
           manylinux: "2_28"
           args: --release --sdist --locked --out dist -v
-          before-script-linux: yum install -y openssl-devel unzip perl-core make && curl -L https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-linux-x86_64.zip -o protoc.zip && unzip -o protoc.zip -d /usr/local && rm protoc.zip
+          before-script-linux: yum install -y openssl-devel unzip perl-core make && curl -L https://github.com/protocolbuffers/protobuf/releases/download/v25.8/protoc-25.8-linux-x86_64.zip -o protoc.zip && unzip -o protoc.zip -d /usr/local && rm protoc.zip
 
       - name: Publish to TestPyPI (manual)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'

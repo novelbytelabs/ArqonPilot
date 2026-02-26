@@ -154,6 +154,11 @@ For release prep:
 
 Core CI runs with Rust `1.82.0` for deterministic project validation. Packaging has a scoped exception in the PyPI workflow when needed for ecosystem compatibility. This separation is intentional and documented so you can keep core engineering policy stable while still shipping installable artifacts.
 
+Frozen versions are enforced by guardrail scripts:
+- core Rust `1.82.0`
+- packaging Rust `1.88.0`
+- protobuf `4.25.8` (`protoc` `25.8`)
+
 Release and packaging paths use locked dependency resolution. In practice, this means `Cargo.lock` must be present and up to date. If `Cargo.lock` drifts, CI failures are expected and should be fixed before release.
 
 ## How to Read Failures

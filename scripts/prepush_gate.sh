@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/frozen_versions.sh"
 
 # Cargo network hardening for transient crates.io/DNS issues.
 export CARGO_REGISTRIES_CRATES_IO_PROTOCOL="${CARGO_REGISTRIES_CRATES_IO_PROTOCOL:-sparse}"
@@ -29,6 +30,10 @@ print_dns_diag() {
   echo "[net] DNS diagnostics:"
   getent hosts index.crates.io || true
   getent hosts static.crates.io || true
+}
+
+core_cargo() {
+  rustup run "$PILOT_CORE_RUST_VERSION" cargo "$@"
 }
 
 run_with_retry() {
@@ -89,10 +94,10 @@ echo "[1/4] Toolchain policy"
 ./scripts/verify_toolchain_policy.sh
 
 echo "[2/4] Locked compile gate (mandatory)"
-run_with_retry "cargo-check" 3 cargo check -p pilot --locked
+run_with_retry "cargo-check" 3 core_cargo check -p pilot --locked
 
 echo "[3/4] Targeted locked CLI tests"
-run_with_retry "cargo-test" 3 cargo test -p pilot --locked \
+run_with_retry "cargo-test" 3 core_cargo test -p pilot --locked \
   --test branch_cli_test \
   --test multi_cli_test \
   --test navigate_cli_test \
@@ -105,7 +110,7 @@ run_with_retry "cargo-test" 3 cargo test -p pilot --locked \
   --test report_cli_test
 
 echo "[4/4] Help surface smoke check"
-run_with_retry "cargo-help" 3 cargo run -q -p pilot -- --help >/tmp/pilot_help.txt
+run_with_retry "cargo-help" 3 core_cargo run -q -p pilot -- --help >/tmp/pilot_help.txt
 if command -v rg >/dev/null 2>&1; then
   rg -n "oracle|heal|navigate|branch|multi|secure|plan|create|know|init|serve" /tmp/pilot_help.txt >/dev/null
 else
