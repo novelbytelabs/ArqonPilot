@@ -209,5 +209,5 @@ What it does:
 5. Prints likely cause buckets (divergence, auth, DNS).
 
 Defaults:
-- Push target defaults to `dev`.
+- Push target defaults to your current checked-out branch.
 - To push `main` explicitly: `./scripts/push_main.sh main`.

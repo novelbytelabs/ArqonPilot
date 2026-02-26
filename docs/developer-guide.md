@@ -113,7 +113,7 @@ If VS Code shows only a generic push failure message, run:
 ```
 
 This captures verbose git transport diagnostics and writes a timestamped push log.
-By default it pushes `dev`; pass `main` explicitly when needed:
+By default it pushes your current checked-out branch; pass an explicit branch when needed:
 `./scripts/push_main.sh main`.
 
 ## Pre-Check Scripts Reference

@@ -4,7 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-BRANCH="${1:-dev}"
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [[ "$CURRENT_BRANCH" == "HEAD" ]]; then
+  echo "ERROR: detached HEAD; checkout a branch first." >&2
+  exit 1
+fi
+
+BRANCH="${1:-$CURRENT_BRANCH}"
 REMOTE="${2:-origin}"
 REPORT_DIR="${PILOT_REPORT_DIR:-$HOME/.pilot/reports}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -21,9 +27,10 @@ fi
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "[push-safe] branch=$BRANCH remote=$REMOTE"
+echo "[push-safe] current_branch=$CURRENT_BRANCH"
 echo "[push-safe] log file: $LOG_FILE"
 
-if [[ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]]; then
+if [[ "$CURRENT_BRANCH" != "$BRANCH" ]]; then
   echo "ERROR: current branch is not '$BRANCH'." >&2
   echo "Run: git checkout $BRANCH" >&2
   exit 1
