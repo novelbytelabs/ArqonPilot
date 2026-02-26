@@ -17,6 +17,47 @@
   </div>
 </div>
 
+## Capabilities
+
+<div class="pilot-feature-grid">
+  <div class="pilot-feature-card">
+    <h3>🔮 Oracle</h3>
+    <p>Tree-sitter parsing, hybrid search, and codebase intelligence for precise context.</p>
+  </div>
+  <div class="pilot-feature-card">
+    <h3>🩹 Heal</h3>
+    <p>Failure parsing, repair planning, and verification-gated self-healing workflows.</p>
+  </div>
+  <div class="pilot-feature-card">
+    <h3>🚢 Navigate</h3>
+    <p>Release preflight, versioning, changelog flow, and controlled rollout orchestration.</p>
+  </div>
+  <div class="pilot-feature-card">
+    <h3>🌿 Branch</h3>
+    <p>Create, sync, status, and prune branch operations across repo cohorts.</p>
+  </div>
+  <div class="pilot-feature-card">
+    <h3>🧭 Multi</h3>
+    <p>Cross-repo registry, dependency ordering, linked PR planning, and scoped execution.</p>
+  </div>
+  <div class="pilot-feature-card">
+    <h3>🔐 Secure</h3>
+    <p>Security scans and dependency maintenance with dry-run-first and auditable output.</p>
+  </div>
+  <div class="pilot-feature-card">
+    <h3>🗺️ Plan</h3>
+    <p>Issue ingestion, scoring, and roadmap generation for execution-focused prioritization.</p>
+  </div>
+  <div class="pilot-feature-card">
+    <h3>🏗️ Create</h3>
+    <p>Feature and test scaffolding to accelerate repeatable engineering workflows.</p>
+  </div>
+  <div class="pilot-feature-card">
+    <h3>🧠 Know</h3>
+    <p>Decision capture and queryable operational memory for long-term continuity.</p>
+  </div>
+</div>
+
 ## Quick Start
 
 ```bash

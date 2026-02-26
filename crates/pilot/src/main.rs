@@ -1,5 +1,7 @@
 #![allow(dead_code)]
+mod bus;
 mod config;
+mod serve_ui;
 use pilot_branch as branch;
 use pilot_core::{
     append_audit_event, write_repo_outcomes_artifact, AuditEvent, CommandReport, RepoContext,
@@ -58,6 +60,8 @@ enum Commands {
     Branch(BranchArgs),
     /// Multi-repo registry and operations
     Multi(MultiArgs),
+    /// Run Pilot as an ArqonBus command bridge
+    Serve(ServeArgs),
 }
 
 #[derive(Args)]
@@ -541,6 +545,41 @@ struct MultiPrsCreateArgs {
     /// Preview plan only, without writing manifest
     #[arg(long)]
     dry_run: bool,
+}
+
+#[derive(Args, Clone)]
+struct ServeArgs {
+    /// ArqonBus websocket URL
+    #[arg(long, default_value_t = bus::default_ws_url())]
+    ws_url: String,
+
+    /// Environment variable that contains JWT for bus authentication
+    #[arg(long, default_value_t = bus::default_jwt_env())]
+    jwt_env: String,
+
+    /// Bus room for pilot control-plane events
+    #[arg(long, default_value_t = bus::default_room())]
+    room: String,
+
+    /// Bus channel for incoming pilot commands
+    #[arg(long, default_value = "control")]
+    channel: String,
+
+    /// Bus channel for outgoing pilot telemetry events
+    #[arg(long, default_value = "telemetry")]
+    telemetry_channel: String,
+
+    /// Process exactly one command then exit
+    #[arg(long)]
+    once: bool,
+
+    /// Start local UI control panel bound to this host
+    #[arg(long, default_value = "127.0.0.1")]
+    ui_host: String,
+
+    /// Start local UI control panel on this port
+    #[arg(long)]
+    ui_port: Option<u16>,
 }
 
 #[tokio::main]
@@ -1434,6 +1473,39 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                 },
             }
         }
+        Commands::Serve(args) => {
+            let cfg = bus::BusBridgeConfig {
+                ws_url: args.ws_url.clone(),
+                room: args.room.clone(),
+                channel: args.channel.clone(),
+                telemetry_channel: args.telemetry_channel.clone(),
+                jwt_env: args.jwt_env.clone(),
+                once: args.once,
+            };
+            if let Some(port) = args.ui_port {
+                let bridge_cfg = cfg.clone();
+                let ui_cfg = serve_ui::UiConfig {
+                    host: args.ui_host.clone(),
+                    port,
+                    bus: cfg.clone(),
+                };
+                let bridge = tokio::spawn(async move { bus::run_bridge(&bridge_cfg).await });
+                let ui = tokio::spawn(async move { serve_ui::run_ui_server(ui_cfg).await });
+                let (bridge_res, ui_res) = tokio::try_join!(bridge, ui)
+                    .map_err(|e| miette::miette!("Serve tasks failed: {e}"))?;
+                bridge_res?;
+                ui_res?;
+            } else {
+                bus::run_bridge(&cfg).await?;
+            }
+            Ok(CommandReport::ok(
+                "serve",
+                format!(
+                    "Bridge exited (ws={}, room={}, channel={})",
+                    cfg.ws_url, cfg.room, cfg.channel
+                ),
+            ))
+        }
     }
 }
 
@@ -1709,6 +1781,7 @@ fn command_name(command: &Commands) -> &'static str {
                     command: MultiPrsCommands::Create(_),
                 }),
         }) => "multi.prs.create",
+        Commands::Serve(_) => "serve",
     }
 }
 

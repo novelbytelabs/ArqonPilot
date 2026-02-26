@@ -40,6 +40,7 @@ theme:
 nav:
   - Home: "index.md"
   - Developer Guide: "developer-guide.md"
+  - ArqonBus Integration: "bus-integration-guide.md"
   - Testing Strategy: "testing-strategy.md"
   - Operator Runbook: "operator-runbook.md"
   - Branch Management Guide: "branch-management-guide.md"

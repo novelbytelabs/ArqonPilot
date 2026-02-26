@@ -22,6 +22,7 @@ cargo run -p pilot -- init
 cargo run -p pilot -- multi register --path /path/to/repo --group core --tag apply-pilot
 cargo run -p pilot -- multi status --group core
 cargo run -p pilot -- branch create feat/pilot-wave --group core --dry-run
+cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry
 ```
 
 ## Testing
@@ -69,6 +70,7 @@ Primary docs are in `docs/` and published with MkDocs.
 
 - `docs/developer-guide.md`
 - `docs/testing-strategy.md`
+- `docs/bus-integration-guide.md`
 - `docs/operator-runbook.md`
 - `docs/branch-management-guide.md`
 - `archive/docs/pilot-deep-dive-plan.md` (archived)

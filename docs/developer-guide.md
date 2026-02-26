@@ -18,6 +18,16 @@ cargo check -p pilot --locked
 cargo run -p pilot -- --help
 ```
 
+## ArqonBus Bridge
+
+Use `pilot serve` to expose Branch and Multi operations through ArqonBus command lanes:
+
+```bash
+pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry
+```
+
+JWT auth is optional and read from `ARQONBUS_AUTH_JWT` by default.
+
 ## Test
 
 ```bash
