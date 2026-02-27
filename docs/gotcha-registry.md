@@ -63,6 +63,18 @@ Keep this file current whenever a new failure class appears.
      - `result: SUCCESS`
      - `git_push_rc: 0`
 
+## G-014: UI smoke CI fails with missing `protoc`
+
+- Signature:
+  - `failed to run custom build command for lance-encoding`
+  - `Could not find protoc`
+  - fails in `./scripts/ui_smoke_check.sh` during `cargo run -p pilot -- serve ...`
+- Cause:
+  - UI smoke workflow job started without installing pinned protoc runtime.
+- Recovery:
+  1. Ensure `ui-smoke` job installs pinned protoc `25.8` before smoke check.
+  2. Re-run CI.
+
 ## G-004: Generic VS Code push failure
 
 - Signature:
