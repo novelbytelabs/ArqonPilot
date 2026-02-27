@@ -658,6 +658,27 @@ impl AgorgStore {
             )
             .await
             .into_diagnostic()?;
+
+        // Perform schema migrations here since IF NOT EXISTS doesn't update columns
+        client
+            .batch_execute(
+                "
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name='agorgs' AND column_name='master_path'
+                    ) THEN
+                        ALTER TABLE agorgs ADD COLUMN master_path TEXT NULL;
+                    END IF;
+                END
+                $$;
+                ",
+            )
+            .await
+            .into_diagnostic()?;
+
         Ok(())
     }
 }

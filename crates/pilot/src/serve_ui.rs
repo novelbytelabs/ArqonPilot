@@ -2320,10 +2320,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
       border: 1px solid #3a578a;
       background: #152845;
       color: #d5e4ff;
-      font-size: 0.76rem;
+      font-size: 0.85rem;
       font-weight: 700;
       padding: 4px 10px;
       white-space: nowrap;
+      cursor: pointer;
     }
     .step {
       border: 1px solid #2f4975;
@@ -2489,20 +2490,81 @@ const INDEX_HTML: &str = r#"<!doctype html>
     /* Hero Dropdown */
     .agorg-scope-container { position: relative; display: inline-block; }
     .agorg-dropdown { 
-      position: absolute; top: 100%; right: 0; min-width: 280px; 
-      background: #1a2a47; border: 1px solid #2d426c; border-radius: 8px; 
-      box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 1000; 
-      display: none; max-height: 400px; overflow-y: auto; padding: 8px 0;
+      position: relative;
     }
-    .agorg-dropdown.active { display: block; }
-    .agorg-drop-item { 
-      padding: 8px 16px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
-      border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem;
+    .agorg-dropdown-menu {
+      position: absolute;
+      top: 100%;
+      left: 16px;
+      margin-top: 4px;
+      background: #0f111a;
+      border: 1px solid #4e6ba6;
+      border-radius: 4px;
+      min-width: 280px;
+      max-height: 400px;
+      overflow-y: auto;
+      z-index: 1000;
+      display: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
     }
-    .agorg-drop-item:hover { background: #2d426c; color: #6a7dff; }
-    .agorg-drop-item .type { font-size: 0.7rem; opacity: 0.6; text-transform: uppercase; }
-    .agorg-drop-header { padding: 4px 16px; font-size: 0.7rem; color: #6a7dff; font-weight: 700; text-transform: uppercase; margin-top: 8px; }
-    .agorg-drop-header:first-child { margin-top: 0; }
+    .agorg-dropdown.active .agorg-dropdown-menu {
+      display: block;
+    }
+    .agorg-drop-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      border-bottom: 1px solid #202b38;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #a8b9e3;
+    }
+    .agorg-drop-item:hover {
+      background: #1a2235;
+      color: #fff;
+    }
+    .agorg-drop-item .type {
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      background: #202b38;
+      border-radius: 4px;
+      color: #8b9bb4;
+    }
+    .agorg-drop-header {
+      padding: 8px 12px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: #4e6ba6;
+      font-weight: bold;
+      background: #161b22;
+      border-bottom: 1px solid #202b38;
+      position: sticky;
+      top: 0;
+    }
+
+    /* Registry list styles */
+    .agorg-registry-list {
+      display: flex;
+      flex-direction: column;
+    }
+    .agorg-reg-item {
+      padding: 8px 10px;
+      border-bottom: 1px solid #202b38;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .agorg-reg-item:hover, .agorg-reg-item.active {
+      background: #1a2235;
+    }
+    .agorg-reg-type {
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      background: #202b38;
+      border-radius: 4px;
+      color: #8b9bb4;
+    }
     @media (max-width: 980px) {
       .grid, .status { grid-template-columns: 1fr; }
       h1 { font-size: 1.72rem; }
@@ -2519,12 +2581,17 @@ const INDEX_HTML: &str = r#"<!doctype html>
         ArqonBus:
         <span id="bus-status-chip" class="bus-chip disconnected">DISCONNECTED</span>
       </div>
-      <div class="agorg-scope-container">
-        <button id="agorg-open-btn" class="status-right" type="button" title="Quick scope dropdown / Click label for AGOrg tab" onclick="toggleAgorgDropdown(event)">
-          AGOrg:
-          <span id="agorg-status-chip" class="bus-chip agorg-chip none">NO ACTIVE</span>
+      <div class="system-menu" style="display:flex; gap:8px; align-items:center;">
+        <button class="menu-btn" onclick="run('pilot.engine.stop', {})" title="Stop System"><span class="icon">⏹</span></button>
+        <button class="menu-btn" onclick="run('pilot.engine.restart', {})" title="Restart Engine"><span class="icon">↺</span></button>
+      </div>
+      
+      <!-- Active AGOrg Scope dropdown -->
+      <div style="position:relative; display:inline-block;" class="agorg-dropdown" id="agorg-hero-dropdown-container">
+        <button class="btn secondary" id="agorg-open-btn" style="margin-left: 16px; min-width: 140px; border-color:#4e6ba6; color:#a8b9e3;" onclick="toggleAgorgDropdown(event)">
+          AGOrg: <span id="agorg-status-chip" style="color:#fff; font-weight:bold;">Loading...</span> ▼
         </button>
-        <div id="agorg-hero-dropdown" class="agorg-dropdown">
+        <div class="agorg-dropdown-menu" id="agorg-hero-dropdown" onclick="event.stopPropagation()">
           <div class="agorg-drop-header">Loading registered repositories...</div>
         </div>
       </div>
@@ -2894,20 +2961,38 @@ Recommended flow:
   <section class="panel" id="agorg">
     <div class="three-panel-layout">
       <!-- Panel 1: Settings/CRUD -->
-      <div class="panel-left">
-        <div class="card">
-          <h3>Saved AGOrgs</h3>
-          <div class="helper">Manage global scope. Switch between known AGOrg contexts.</div>
-          <div class="row">
-            <button class="btn secondary" onclick="agorgList()">List Saved</button>
-            <button class="btn secondary" onclick="agorgShowActive()">Active Scope</button>
-          </div>
-          <label class="field-label" for="agorg-use-id">Switch Scope (UUID or Name)</label>
-          <div class="row">
-            <input id="agorg-use-id" placeholder="UUID or name" />
-            <button class="btn secondary" onclick="agorgUse()">Switch</button>
+      <div class="panel-left" style="display:flex; flex-direction:row; gap:16px;">
+        <div style="flex:1;">
+          <div class="card">
+            <h3>Active Scope</h3>
+            <div class="helper">Manage global scope. Switch between known AGOrg contexts or input manually.</div>
+            <div id="agorg-active-details" style="background:#0f111a; border-radius:4px; padding:10px; border:1px solid #202b38; margin-bottom:12px; font-size:0.85rem; word-break:break-all;">
+              <em>Loading active scope...</em>
+            </div>
+            <label class="field-label" for="agorg-use-id">Manual Switch (UUID or Name)</label>
+            <div class="row">
+              <input id="agorg-use-id" placeholder="UUID or name" />
+              <button class="btn secondary" onclick="agorgUse()">Switch</button>
+            </div>
+            <div class="row" style="margin-top:8px;">
+              <button class="btn secondary" onclick="agorgUpdate()">Update</button>
+              <button class="btn secondary" style="color:#ff6b6b; border-color:#ff6b6b;" onclick="agorgDelete()">Delete</button>
+            </div>
           </div>
         </div>
+
+        <div style="flex:1;">
+          <div class="card" style="height:100%; display:flex; flex-direction:column;">
+            <h3>Registry</h3>
+            <div class="helper" style="margin-bottom:8px;">Click to switch scope instantly.</div>
+            <div id="agorg-registry-list" class="agorg-registry-list" style="flex:1; overflow-y:auto; background:#0f111a; border:1px solid #202b38; border-radius:4px;">
+              <div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">Loading registry...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-left">
 
         <div class="card" style="margin-top: 16px;">
           <div class="sub-tabs">
@@ -2947,10 +3032,9 @@ Recommended flow:
                 set default scope
               </label>
             </div>
+            </div>
             <div class="row">
               <button class="btn" onclick="agorgCreateProject()">Import</button>
-              <button class="btn secondary" onclick="agorgUpdate()">Update</button>
-              <button class="btn secondary" onclick="agorgDelete()">Delete</button>
             </div>
           </div>
 
@@ -3142,6 +3226,21 @@ Recommended flow:
   </div>
 </div>
 <script>
+async function fetchJsonSafe(url, options = {}) {
+  try {
+    const res = await fetch(url, options);
+    const text = await res.text();
+    if (!text || text.trim() === '') return { ok: false, error: 'Empty response' };
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return { ok: false, error: 'Malformed JSON response', raw: text };
+    }
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 function copyToClipboard(id, btn) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -3240,7 +3339,7 @@ for (const btn of document.querySelectorAll('.tab')) {
 // Hero AGOrg Dropdown Logic
 async function toggleAgorgDropdown(event) {
   event.stopPropagation();
-  const dropdown = document.getElementById('agorg-hero-dropdown');
+  const dropdown = document.getElementById('agorg-hero-dropdown-container');
   const isActive = dropdown.classList.contains('active');
   
   // Close all other dropdowns if any
@@ -3457,13 +3556,16 @@ function setBusStatus(connected, note) {
 function setAgorgStatus(label, active) {
   if (!agorgStatusChip) return;
   agorgStatusChip.textContent = label;
-  agorgStatusChip.className = 'bus-chip agorg-chip ' + (active ? 'active' : 'none');
+  if (active) {
+    agorgStatusChip.style.color = '#fff';
+  } else {
+    agorgStatusChip.style.color = '#a8b9e3';
+  }
 }
 
 async function refreshAgorgHeader() {
   try {
-    const res = await fetch('/api/agorg/active');
-    const data = await res.json();
+    const data = await fetchJsonSafe('/api/agorg/active');
     const active = data && data.ok && data.active ? data.active : null;
     if (active && active.name) {
       setAgorgStatus(active.name, true);
@@ -3954,23 +4056,23 @@ async function agorgCreateProject() {
     name: document.getElementById('agorg-name').value.trim(),
     root: document.getElementById('agorg-root').value.trim(),
     master: document.getElementById('agorg-master').value.trim() || null,
-    parent: document.getElementById('agorg-parent').value.trim() || null,
+    parent: null,
     scan_depth: parseInt(document.getElementById('agorg-depth').value || '4', 10),
     autoscan: true, // Always scan for fleet model
     import: true,   // Default to import for fleet model
     default_scope: !!document.getElementById('agorg-default').checked
   };
-  const res = await fetch('/api/agorg/create_project', {
+  const data = await fetchJsonSafe('/api/agorg/create_project', {
     method: 'POST',
     headers: {'content-type':'application/json'},
     body: JSON.stringify(req)
   });
-  const data = await res.json();
   agorgOut.textContent = JSON.stringify(data, null, 2);
   if (data.ok && data.agorg && data.agorg.master_path) {
     agorgScanMaster(data.agorg.master_path);
   }
   refreshAgorgHeader();
+  agorgList();
 }
 
 async function agorgScanMaster(path) {
@@ -4105,34 +4207,93 @@ function clearAgorgResults() {
 }
 
 async function agorgList() {
-  const res = await fetch('/api/agorg/list');
-  const data = await res.json();
+  if (agorgRegistryList) {
+    agorgRegistryList.innerHTML = '<div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">Loading backend properties...</div>';
+  }
+  const data = await fetchJsonSafe('/api/agorg/list');
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
-  out.textContent = text;
+  if (data.ok) {
+    renderAgorgRegistry(data.agorgs);
+    
+    // Attempt to mix in AGOs from the active tree to the registry view
+    const treeData = await fetchJsonSafe('/api/agorg/tree');
+    if (treeData.ok && treeData.tree && treeData.tree.length > 0) {
+       const agos = [];
+       const walk = (node) => {
+         (node.agos || []).forEach(a => agos.push(a));
+         (node.child_agorgs || []).forEach(walk);
+       };
+       treeData.tree.forEach(walk);
+       
+       const seen = new Set();
+       const uniqueAgos = agos.filter(a => {
+         if (seen.has(a.id)) return false;
+         seen.add(a.id);
+         return true;
+       });
+       
+       uniqueAgos.forEach(ago => {
+         const el = document.createElement('div');
+         el.className = 'agorg-reg-item';
+         el.innerHTML = `
+           <span style="font-weight:600;">${ago.name}</span>
+           <span class="agorg-reg-type" style="color:#6a7dff;">AGO</span>
+         `;
+         el.onclick = () => switchAgorgScope(ago.id);
+         if (agorgRegistryList) agorgRegistryList.appendChild(el);
+       });
+    }
+  } else {
+    if (agorgRegistryList) {
+      agorgRegistryList.innerHTML = `<div style="padding:10px; color:#ff6b6b; font-size:0.8rem;">Load Failed: ${data.error}</div>`;
+    }
+  }
 }
 
 async function agorgShowActive() {
-  const res = await fetch('/api/agorg/active');
-  const data = await res.json();
+  if (agorgActiveDetails) {
+    agorgActiveDetails.innerHTML = '<em>Loading active scope...</em>';
+  }
+  const data = await fetchJsonSafe('/api/agorg/active');
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
-  out.textContent = text;
+  
+  if (data.ok && data.active) {
+    if (agorgActiveDetails) {
+      agorgActiveDetails.innerHTML = `
+        <div style="color:#fff; font-weight:700; margin-bottom:4px; font-size:1.05rem;">${data.active.name}</div>
+        <div style="margin-bottom:2px;"><strong>ID:</strong> <span style="font-family:monospace; color:#6a7dff;">${data.active.id}</span></div>
+        <div style="margin-bottom:2px;"><strong>Root:</strong> <span style="font-family:monospace;">${data.active.root_path}</span></div>
+        <div style="margin-bottom:2px;"><strong>Master:</strong> <span style="font-family:monospace;">${data.active.master_path || 'None'}</span></div>
+      `;
+    }
+    // Highlight active in registry
+    Array.from(document.querySelectorAll('.agorg-reg-item')).forEach(el => el.classList.remove('active'));
+  } else {
+    if (agorgActiveDetails) {
+      agorgActiveDetails.innerHTML = `<em>No active scope set</em>`;
+    }
+  }
   refreshAgorgHeader();
 }
 
 async function agorgUse() {
   const req = { agorg: document.getElementById('agorg-use-id').value.trim() };
-  const res = await fetch('/api/agorg/use', {
+  if (!req.agorg) return;
+  const data = await fetchJsonSafe('/api/agorg/use', {
     method: 'POST',
     headers: {'content-type':'application/json'},
     body: JSON.stringify(req)
   });
-  const data = await res.json();
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
-  out.textContent = text;
   refreshAgorgHeader();
+  if (data.ok) {
+    agorgList();
+    agorgShowActive();
+    agorgTree();
+  }
 }
 
 async function agorgLink() {
