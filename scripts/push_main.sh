@@ -33,6 +33,8 @@ echo "[push-safe] log file: $LOG_FILE"
 
 PUSH_NET_RETRIES="${PUSH_NET_RETRIES:-6}"
 PUSH_NET_RETRY_DELAY_SEC="${PUSH_NET_RETRY_DELAY_SEC:-8}"
+DNS_PREFLIGHT_ATTEMPTS="${DNS_PREFLIGHT_ATTEMPTS:-12}"
+DNS_PREFLIGHT_DELAY_SEC="${DNS_PREFLIGHT_DELAY_SEC:-2}"
 TRANSIENT_NET_PATTERN='Could not resolve host|Temporary failure in name resolution|Name or service not known|timed out|connection reset|Failed to connect|network is unreachable|TLS handshake timeout|Connection timed out'
 
 count_matches() {
@@ -95,6 +97,9 @@ run_with_net_retry() {
     fi
 
     if grep -Eiq "$TRANSIENT_NET_PATTERN" "$tmp_out" && [[ "$attempt" -lt "$max_attempts" ]]; then
+      if grep -Eiq "Could not resolve host|Temporary failure in name resolution|Name or service not known" "$tmp_out"; then
+        dns_self_heal "$REMOTE_HOST"
+      fi
       echo "[$label] transient network failure detected; retrying in ${PUSH_NET_RETRY_DELAY_SEC}s..."
       sleep "$PUSH_NET_RETRY_DELAY_SEC"
       continue
@@ -129,8 +134,9 @@ print_remediation() {
       ;;
     dns_or_name_resolution|network_transport_instability)
       echo "  1) getent hosts github.com"
-      echo "  2) retry push when network is stable"
-      echo "  3) ./scripts/push_main.sh $BRANCH $REMOTE"
+      echo "  2) resolvectl flush-caches (if available)"
+      echo "  3) retry push when network is stable"
+      echo "  4) ./scripts/push_main.sh $BRANCH $REMOTE"
       ;;
     branch_protection_or_server_hook)
       echo "  1) push to dev/feature branch and open PR"
@@ -216,10 +222,71 @@ summarize_result() {
   fi
 }
 
+remote_host_from_url() {
+  local remote="$1"
+  local url host
+  url="$(git remote get-url "$remote" 2>/dev/null || true)"
+  if [[ -z "$url" ]]; then
+    echo "github.com"
+    return 0
+  fi
+
+  if [[ "$url" =~ ^https?://([^/]+)/ ]]; then
+    host="${BASH_REMATCH[1]}"
+  elif [[ "$url" =~ ^ssh://([^@]+@)?([^/:]+) ]]; then
+    host="${BASH_REMATCH[2]}"
+  elif [[ "$url" =~ ^([^@]+@)?([^:]+): ]]; then
+    host="${BASH_REMATCH[2]}"
+  else
+    host="github.com"
+  fi
+  echo "$host"
+}
+
+dns_self_heal() {
+  local host="$1"
+  [[ -z "$host" ]] && return 0
+  echo "[dns] self-heal for host: $host"
+  if command -v resolvectl >/dev/null 2>&1; then
+    resolvectl flush-caches >/dev/null 2>&1 || true
+  fi
+  getent hosts "$host" >/dev/null 2>&1 || true
+}
+
+dns_preflight() {
+  local host="$1"
+  local attempts="${2:-$DNS_PREFLIGHT_ATTEMPTS}"
+  local delay="${3:-$DNS_PREFLIGHT_DELAY_SEC}"
+  local i ok_streak=0
+  [[ -z "$host" ]] && return 0
+  echo "[dns] preflight host=$host attempts=$attempts delay=${delay}s"
+  for ((i = 1; i <= attempts; i++)); do
+    if getent hosts "$host" >/dev/null 2>&1; then
+      ok_streak=$((ok_streak + 1))
+      if [[ "$ok_streak" -ge 2 ]]; then
+        echo "[dns] preflight PASS (stable resolution)"
+        return 0
+      fi
+    else
+      ok_streak=0
+      dns_self_heal "$host"
+    fi
+    sleep "$delay"
+  done
+  echo "[dns] preflight FAIL for host: $host"
+  return 1
+}
+
 if [[ "$CURRENT_BRANCH" != "$BRANCH" ]]; then
   echo "ERROR: current branch is not '$BRANCH'." >&2
   echo "Run: git checkout $BRANCH" >&2
   exit 1
+fi
+
+REMOTE_HOST="$(remote_host_from_url "$REMOTE")"
+echo "[push-safe] remote_host=$REMOTE_HOST"
+if ! dns_preflight "$REMOTE_HOST"; then
+  echo "[push-safe] WARNING: DNS preflight failed; continuing with retry-protected operations."
 fi
 
 echo "[push-safe] fetch remote state"
