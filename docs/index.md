@@ -1,6 +1,6 @@
 <div class="pilot-hero">
   <div class="pilot-hero-title">Arqon Pilot</div>
-  <p class="pilot-hero-subtitle">A Monorepo with<br/>Multi-repo power.</p>
+  <p class="pilot-hero-subtitle">Monorepo with<br/>Multi-repo power.</p>
   <p class="pilot-hero-copy">The local control plane for Arqon's ecosystem:<br/>orchestrate branches, enforce policy, self-heal failures, and push safely across the fleet.</p>
 
   <div class="pilot-pill-row">
