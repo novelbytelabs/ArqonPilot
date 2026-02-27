@@ -241,6 +241,11 @@ Exit criteria:
 2. Test matrix covers unit/integration/e2e/regression/adversarial.
 3. CI parity checks prevent recurrence of lane mismatch confusion.
 
+Progress update:
+
+1. Added `scripts/ui_smoke_check.sh` for Control Panel + API smoke validation (shim + serve + key endpoint/action checks).
+2. Updated operator/testing documentation to align with tab-level `Recommended Sequence` UX and explicit status-chip workflows.
+
 ## Wave 15 (Production Release Gate)
 
 Deliverables:

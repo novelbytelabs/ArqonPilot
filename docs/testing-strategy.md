@@ -101,11 +101,16 @@ Run:
 
 ```bash
 ./scripts/test_matrix.sh e2e
+# optional Control Panel + API smoke (deterministic lane)
+./scripts/ui_smoke_check.sh
+# optional full command-lane checks when bus compatibility is confirmed
+PILOT_UI_SMOKE_INCLUDE_COMMANDS=1 ./scripts/ui_smoke_check.sh
 ```
 
 Use this when:
 - You changed branch, navigate, or multi-repo orchestration behavior.
 - You need confidence that complete workflows still execute correctly.
+- You changed Control Panel action flow/state chips/sequence guidance and want a quick endpoint-level sanity check.
 
 ## 4. Regression tests
 

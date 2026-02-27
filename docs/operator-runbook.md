@@ -70,6 +70,11 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
 
     - Oracle + Heal quick actions for fast triage and plan/repair loops.
     - Branch + Multi quick actions for cohort branch and status operations.
+    - Follow the in-panel `Recommended Sequence` strips:
+      - Dashboard: `Status -> Bus Health -> Oracle Query -> Heal Plan -> Heal Run -> Push Safe`
+      - Oracle: `Scan Index -> Run Query -> Open Report`
+      - Heal: `Plan Only -> Review Response/Timeline -> Run Heal`
+      - Multi: `Register -> List/Status/Order -> DAG/PR Plan -> Staged Apply`
 
 3. `Operations Timeline` + `Operation Detail`
 
@@ -78,6 +83,17 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
 4. `Live Event Stream`
 
     - Pinned at the bottom of Dashboard for long-running monitoring without losing context.
+
+6. UI/API smoke verification (post-change)
+
+    - `./scripts/ui_smoke_check.sh`
+    - Starts/uses ArqonBus shim, starts `pilot serve`, and validates key UI/API paths:
+      - dashboard HTML load
+      - history/report/log endpoints
+      - dependency action endpoint
+    - Optional full command-lane checks:
+      - `PILOT_UI_SMOKE_INCLUDE_COMMANDS=1 ./scripts/ui_smoke_check.sh`
+      - includes `pilot.multi.status`, `pilot.multi.dag` (dry-run), and `pilot.multi.apply` (dry-run) via `/api/command`
 
 5. `Codex` tab (contract-driven operations)
 
