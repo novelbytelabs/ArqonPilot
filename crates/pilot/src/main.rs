@@ -429,6 +429,10 @@ enum MultiCommands {
     Deps(MultiDepsArgs),
     /// Print selected repos in dependency order
     Order(MultiFilterArgs),
+    /// Export dependency DAG and staged execution plan
+    Dag(MultiDagArgs),
+    /// Apply branch orchestration in dependency-aware stages
+    Apply(MultiApplyArgs),
     /// Linked pull request planning
     Prs(MultiPrsArgs),
 }
@@ -546,6 +550,64 @@ struct MultiPrsCreateArgs {
     /// Preview plan only, without writing manifest
     #[arg(long)]
     dry_run: bool,
+}
+
+#[derive(Args, Clone)]
+struct MultiDagArgs {
+    /// Select only repos in this group
+    #[arg(long)]
+    group: Option<String>,
+
+    /// Select only repos that contain all given tags; repeatable
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+
+    /// Optional output path for DAG JSON report
+    #[arg(long)]
+    output: Option<PathBuf>,
+
+    /// Preview plan only, without writing a file
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Args, Clone)]
+struct MultiApplyArgs {
+    /// Feature branch to create in selected repositories
+    #[arg(long)]
+    branch: String,
+
+    /// Base branch used to create/reset feature branch
+    #[arg(long, default_value = "dev")]
+    base_branch: String,
+
+    /// PR base branch used for linked PR planning
+    #[arg(long, default_value = "main")]
+    pr_base_branch: String,
+
+    /// Select only repos in this group
+    #[arg(long)]
+    group: Option<String>,
+
+    /// Select only repos that contain all given tags; repeatable
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+
+    /// Max repos to process in one batch within each dependency stage
+    #[arg(long, default_value = "2")]
+    stage_size: usize,
+
+    /// Continue processing next batches even if one batch has failures
+    #[arg(long)]
+    continue_on_failure: bool,
+
+    /// Optional output path for linked PR manifest JSON
+    #[arg(long)]
+    pr_output: Option<PathBuf>,
+
+    /// Apply changes (default is dry-run preview)
+    #[arg(long)]
+    apply: bool,
 }
 
 #[derive(Args, Clone)]
@@ -1411,6 +1473,188 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                         ),
                     ))
                 }
+                MultiCommands::Dag(args) => {
+                    let filter = to_filter(args.group.clone(), args.tags.clone());
+                    let dag = registry
+                        .dependency_dag_report(&filter)
+                        .map_err(|e| miette::miette!("DAG build failed: {e}"))?;
+
+                    println!(
+                        "Dependency DAG: repos={} edges={} stages={}",
+                        dag.repos.len(),
+                        dag.edges.len(),
+                        dag.stages.len()
+                    );
+                    for (idx, stage) in dag.stages.iter().enumerate() {
+                        println!("Stage {}: {}", idx + 1, stage.join(", "));
+                    }
+
+                    if args.dry_run {
+                        return Ok(CommandReport::ok(
+                            "multi.dag",
+                            format!(
+                                "Dry-run DAG generated (repos={}, edges={}, stages={})",
+                                dag.repos.len(),
+                                dag.edges.len(),
+                                dag.stages.len()
+                            ),
+                        ));
+                    }
+
+                    let out_path = registry
+                        .write_dependency_dag_report(&filter, args.output.as_deref())
+                        .map_err(|e| miette::miette!("DAG write failed: {e}"))?;
+                    println!("DAG manifest: {}", out_path.display());
+
+                    Ok(CommandReport::ok(
+                        "multi.dag",
+                        format!("Dependency DAG written to {}", out_path.display()),
+                    ))
+                }
+                MultiCommands::Apply(args) => {
+                    let filter = to_filter(args.group.clone(), args.tags.clone());
+                    let mut stages = registry
+                        .dependency_stages(&filter)
+                        .map_err(|e| miette::miette!("Stage plan failed: {e}"))?;
+                    if stages.is_empty() {
+                        return Err(miette::miette!("No repositories match selected group/tags"));
+                    }
+
+                    let stage_size = args.stage_size.max(1);
+                    let dry_run = !args.apply;
+                    let mut outcomes: Vec<branch::BranchOutcome> = Vec::new();
+                    let mut failed_batches = 0usize;
+                    let mut stage_count = 0usize;
+
+                    println!(
+                        "{} multi apply for branch '{}' from '{}' (stage_size={})",
+                        if dry_run { "[DRY RUN]" } else { "[APPLY]" },
+                        args.branch,
+                        args.base_branch,
+                        stage_size
+                    );
+
+                    for (stage_idx, stage_repos) in stages.iter_mut().enumerate() {
+                        stage_count += 1;
+                        stage_repos.sort_by(|a, b| a.name.cmp(&b.name));
+                        println!(
+                            "Stage {} ({} repos): {}",
+                            stage_idx + 1,
+                            stage_repos.len(),
+                            stage_repos
+                                .iter()
+                                .map(|r| r.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+
+                        for batch in stage_repos.chunks(stage_size) {
+                            let batch_repos: Vec<_> = batch.to_vec();
+                            let batch_names = batch_repos
+                                .iter()
+                                .map(|r| r.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            println!("  -> Batch: {}", batch_names);
+                            let batch_outcomes = branch::create_branch(
+                                &batch_repos,
+                                &args.branch,
+                                &args.base_branch,
+                                dry_run,
+                            );
+                            let batch_failed = batch_outcomes.iter().any(|o| !o.success);
+                            for o in &batch_outcomes {
+                                println!(
+                                    "     {} | {} | ok={} | {}",
+                                    o.repo, o.path, o.success, o.message
+                                );
+                            }
+                            outcomes.extend(batch_outcomes);
+                            if batch_failed {
+                                failed_batches += 1;
+                                if !args.continue_on_failure {
+                                    let report = CommandReport::err(
+                                        "multi.apply",
+                                        format!(
+                                            "Stopped at stage {} due to batch failure (use --continue-on-failure to proceed)",
+                                            stage_idx + 1
+                                        ),
+                                    );
+                                    persist_mutation_audit(
+                                        "multi.apply",
+                                        dry_run,
+                                        &report.summary,
+                                        outcomes
+                                            .iter()
+                                            .map(|o| RepoOutcome {
+                                                repo: o.repo.clone(),
+                                                path: o.path.clone(),
+                                                success: o.success,
+                                                message: o.message.clone(),
+                                            })
+                                            .collect(),
+                                    );
+                                    return Ok(report);
+                                }
+                            }
+                        }
+                    }
+
+                    let pr_manifest = if dry_run {
+                        None
+                    } else {
+                        Some(
+                            registry
+                                .generate_linked_pr_plan(
+                                    &filter,
+                                    &args.branch,
+                                    &args.pr_base_branch,
+                                    args.pr_output.as_deref(),
+                                )
+                                .map_err(|e| miette::miette!("Linked PR manifest failed: {e}"))?,
+                        )
+                    };
+
+                    if let Some(path) = pr_manifest.as_ref() {
+                        println!("Linked PR manifest: {}", path.display());
+                    } else {
+                        println!(
+                            "[DRY RUN] Linked PR plan would use head='{}' base='{}'",
+                            args.branch, args.pr_base_branch
+                        );
+                    }
+
+                    let failed = outcomes.iter().filter(|o| !o.success).count();
+                    let success = outcomes.len().saturating_sub(failed);
+                    let summary = format!(
+                        "Staged apply completed: stages={} repos={} ok={} failed={} failed_batches={}",
+                        stage_count,
+                        outcomes.len(),
+                        success,
+                        failed,
+                        failed_batches
+                    );
+                    let report = if failed == 0 {
+                        CommandReport::ok("multi.apply", summary)
+                    } else {
+                        CommandReport::err("multi.apply", summary)
+                    };
+                    persist_mutation_audit(
+                        "multi.apply",
+                        dry_run,
+                        &report.summary,
+                        outcomes
+                            .iter()
+                            .map(|o| RepoOutcome {
+                                repo: o.repo.clone(),
+                                path: o.path.clone(),
+                                success: o.success,
+                                message: o.message.clone(),
+                            })
+                            .collect(),
+                    );
+                    Ok(report)
+                }
                 MultiCommands::Prs(args) => match &args.command {
                     MultiPrsCommands::Create(args) => {
                         let filter = to_filter(args.group.clone(), args.tags.clone());
@@ -1796,6 +2040,12 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Multi(MultiArgs {
             command: MultiCommands::Order(_),
         }) => "multi.order",
+        Commands::Multi(MultiArgs {
+            command: MultiCommands::Dag(_),
+        }) => "multi.dag",
+        Commands::Multi(MultiArgs {
+            command: MultiCommands::Apply(_),
+        }) => "multi.apply",
         Commands::Multi(MultiArgs {
             command:
                 MultiCommands::Prs(MultiPrsArgs {

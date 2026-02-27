@@ -1259,6 +1259,7 @@ fn is_mutating_command(command: &str) -> bool {
             | "pilot.branch.sync"
             | "pilot.branch.prune"
             | "pilot.multi.register"
+            | "pilot.multi.apply"
             | "pilot.multi.prs.create"
             | "pilot.heal.run"
     )
@@ -1273,6 +1274,9 @@ fn enforce_dry_run(command: &str, payload: &mut Value) {
             | "pilot.multi.prs.create"
     ) {
         payload["dry_run"] = json!(true);
+    }
+    if command == "pilot.multi.apply" {
+        payload["apply"] = json!(false);
     }
     if command == "pilot.heal.run" {
         payload["plan_only"] = json!(true);
@@ -1833,15 +1837,32 @@ Recommended flow:
         <button class="btn" onclick="multiRegister()">Register</button>
       </div>
       <div class="card">
-        <h3>List / Status / Order / PR Plan</h3>
+        <h3>List / Status / Order / DAG / PR Plan</h3>
         <input id="multi-group" placeholder="core" />
         <input id="multi-tags" placeholder="apply-pilot,wave7" />
         <div class="row">
           <button class="btn secondary" onclick="multiList()">List</button>
           <button class="btn secondary" onclick="multiStatus()">Status</button>
           <button class="btn secondary" onclick="multiOrder()">Order</button>
+          <button class="btn secondary" onclick="multiDag()">DAG</button>
         </div>
         <button class="btn" onclick="multiPrsCreate()">PR Plan (Dry Run)</button>
+      </div>
+      <div class="card">
+        <h3>Staged Apply (Dependency-Aware)</h3>
+        <div class="helper">Runs branch creation in dependency stages. Default is dry-run preview.</div>
+        <input id="multi-apply-branch" placeholder="feat/pilot-wave13" value="feat/pilot-wave13" />
+        <input id="multi-apply-base" placeholder="dev" value="dev" />
+        <input id="multi-apply-pr-base" placeholder="main" value="main" />
+        <input id="multi-apply-stage-size" placeholder="2" value="2" />
+        <label style="font-size:0.82rem;color:#a8b9e3;">
+          <input id="multi-apply-continue" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
+          Continue on failure
+        </label>
+        <div class="row">
+          <button class="btn secondary" onclick="multiApplyDryRun()">Staged Apply (Dry Run)</button>
+          <button class="btn" onclick="multiApplyExecute()">Staged Apply (Execute)</button>
+        </div>
       </div>
     </div>
   </section>
@@ -2477,6 +2498,13 @@ function multiStatus() {
 function multiOrder() {
   run('pilot.multi.order', { group: document.getElementById('multi-group').value || null, tags: tags(document.getElementById('multi-tags').value) });
 }
+function multiDag() {
+  run('pilot.multi.dag', {
+    group: document.getElementById('multi-group').value || null,
+    tags: tags(document.getElementById('multi-tags').value),
+    dry_run: true
+  });
+}
 function multiPrsCreate() {
   run('pilot.multi.prs.create', {
     group: document.getElementById('multi-group').value || null,
@@ -2485,6 +2513,31 @@ function multiPrsCreate() {
     head_branch: 'dev',
     base_branch: 'main'
   });
+}
+
+function multiApplyPayload(apply) {
+  const stageSizeRaw = parseInt(document.getElementById('multi-apply-stage-size').value || '2', 10);
+  const stageSize = Number.isFinite(stageSizeRaw) && stageSizeRaw > 0 ? stageSizeRaw : 2;
+  return {
+    branch: document.getElementById('multi-apply-branch').value || 'feat/pilot-wave13',
+    base_branch: document.getElementById('multi-apply-base').value || 'dev',
+    pr_base_branch: document.getElementById('multi-apply-pr-base').value || 'main',
+    group: document.getElementById('multi-group').value || null,
+    tags: tags(document.getElementById('multi-tags').value),
+    stage_size: stageSize,
+    continue_on_failure: !!document.getElementById('multi-apply-continue').checked,
+    apply: !!apply
+  };
+}
+
+function multiApplyDryRun() {
+  const payload = multiApplyPayload(false);
+  run('pilot.multi.apply', payload);
+}
+
+function multiApplyExecute() {
+  const payload = multiApplyPayload(true);
+  run('pilot.multi.apply', payload);
 }
 
 function dashBranchCreate() {

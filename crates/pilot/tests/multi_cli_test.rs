@@ -16,6 +16,8 @@ fn test_multi_help_surface() -> Result<(), Box<dyn std::error::Error>> {
         .stdout(predicates::str::contains("query"))
         .stdout(predicates::str::contains("deps"))
         .stdout(predicates::str::contains("order"))
+        .stdout(predicates::str::contains("dag"))
+        .stdout(predicates::str::contains("apply"))
         .stdout(predicates::str::contains("prs"));
 
     Ok(())
@@ -138,6 +140,86 @@ fn test_multi_register_and_list() -> Result<(), Box<dyn std::error::Error>> {
         .success()
         .stdout(predicates::str::contains("repo-a"))
         .stdout(predicates::str::contains("group=Some(\"core\")"));
+
+    Ok(())
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_multi_dag_and_apply_dry_run() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let home = temp.path().join("home");
+    let repo_a = temp.path().join("repo-a");
+    let repo_b = temp.path().join("repo-b");
+    fs::create_dir_all(&home)?;
+    fs::create_dir_all(&repo_a)?;
+    fs::create_dir_all(&repo_b)?;
+
+    let mut register_a = Command::cargo_bin("pilot")?;
+    register_a
+        .env("HOME", &home)
+        .arg("multi")
+        .arg("register")
+        .arg("--path")
+        .arg(repo_a.to_string_lossy().to_string())
+        .arg("--group")
+        .arg("core")
+        .assert()
+        .success();
+
+    let mut register_b = Command::cargo_bin("pilot")?;
+    register_b
+        .env("HOME", &home)
+        .arg("multi")
+        .arg("register")
+        .arg("--path")
+        .arg(repo_b.to_string_lossy().to_string())
+        .arg("--group")
+        .arg("core")
+        .assert()
+        .success();
+
+    let mut deps_set = Command::cargo_bin("pilot")?;
+    deps_set
+        .env("HOME", &home)
+        .arg("multi")
+        .arg("deps")
+        .arg("set")
+        .arg("--repo")
+        .arg("repo-b")
+        .arg("--depends-on")
+        .arg("repo-a")
+        .assert()
+        .success();
+
+    let mut dag = Command::cargo_bin("pilot")?;
+    dag.env("HOME", &home)
+        .arg("multi")
+        .arg("dag")
+        .arg("--group")
+        .arg("core")
+        .arg("--dry-run")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Dependency DAG"))
+        .stdout(predicates::str::contains("Stage 1: repo-a"));
+
+    let mut apply = Command::cargo_bin("pilot")?;
+    apply
+        .env("HOME", &home)
+        .arg("multi")
+        .arg("apply")
+        .arg("--branch")
+        .arg("feat/pilot-wave13")
+        .arg("--base-branch")
+        .arg("dev")
+        .arg("--group")
+        .arg("core")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("[DRY RUN] multi apply"))
+        .stdout(predicates::str::contains("Stage 1"))
+        .stdout(predicates::str::contains("Linked PR plan would use"));
 
     Ok(())
 }

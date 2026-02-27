@@ -24,8 +24,10 @@ This runbook defines the standard operating procedure for running Arqon Pilot ac
 2. Dependency order and branch planning
 
     - `pilot multi order --group <group>`
+    - `pilot multi dag --group <group> --dry-run`
     - `pilot branch create feat/<name> --group <group> --base-branch dev --dry-run`
     - `pilot branch sync --branch feat/<name> --group <group> --dry-run`
+    - `pilot multi apply --branch feat/<name> --group <group> --stage-size 2` (dry-run default)
 
 3. Release planning
     - `pilot multi prs create --group <group> --dry-run`
@@ -34,6 +36,15 @@ This runbook defines the standard operating procedure for running Arqon Pilot ac
 4. Security and maintenance
     - `pilot secure scan --group <group>`
     - `pilot secure fix --group <group>` (dry-run default)
+
+5. Cross-repo staged orchestration
+
+    - Dry-run staged orchestration:
+      - `pilot multi apply --branch feat/<name> --group <group> --stage-size 2`
+    - Execute staged orchestration:
+      - `pilot multi apply --branch feat/<name> --group <group> --stage-size 2 --apply`
+    - Optional failure behavior:
+      - add `--continue-on-failure` to continue later batches/stages.
 
 5. Planning and knowledge loop
   

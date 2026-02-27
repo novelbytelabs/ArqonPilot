@@ -117,6 +117,43 @@ struct MultiPrsCreatePayload {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct MultiDagPayload {
+    schema_version: u32,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    output: Option<String>,
+    #[serde(default)]
+    dry_run: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MultiApplyPayload {
+    schema_version: u32,
+    branch: String,
+    #[serde(default)]
+    base_branch: Option<String>,
+    #[serde(default)]
+    pr_base_branch: Option<String>,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    stage_size: Option<usize>,
+    #[serde(default)]
+    continue_on_failure: Option<bool>,
+    #[serde(default)]
+    pr_output: Option<String>,
+    #[serde(default)]
+    apply: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OracleScanPayload {
     schema_version: u32,
 }
@@ -550,6 +587,45 @@ fn map_bus_command_to_args(
                 args.push("--dry-run".to_string());
             }
         }
+        "pilot.multi.dag" => {
+            let req: MultiDagPayload = parse_contract(command, payload)?;
+            args.extend(["multi".to_string(), "dag".to_string()]);
+            apply_scope(&mut args, req.group, req.tags);
+            if let Some(output) = req.output {
+                args.extend(["--output".to_string(), output]);
+            }
+            if req.dry_run.unwrap_or(false) {
+                args.push("--dry-run".to_string());
+            }
+        }
+        "pilot.multi.apply" => {
+            let req: MultiApplyPayload = parse_contract(command, payload)?;
+            args.extend([
+                "multi".to_string(),
+                "apply".to_string(),
+                "--branch".to_string(),
+                req.branch,
+            ]);
+            if let Some(base) = req.base_branch {
+                args.extend(["--base-branch".to_string(), base]);
+            }
+            if let Some(base) = req.pr_base_branch {
+                args.extend(["--pr-base-branch".to_string(), base]);
+            }
+            apply_scope(&mut args, req.group, req.tags);
+            if let Some(stage_size) = req.stage_size {
+                args.extend(["--stage-size".to_string(), stage_size.to_string()]);
+            }
+            if req.continue_on_failure.unwrap_or(false) {
+                args.push("--continue-on-failure".to_string());
+            }
+            if let Some(out) = req.pr_output {
+                args.extend(["--pr-output".to_string(), out]);
+            }
+            if req.apply.unwrap_or(false) {
+                args.push("--apply".to_string());
+            }
+        }
         "pilot.oracle.scan" => {
             let _req: OracleScanPayload = parse_contract(command, payload)?;
             args.extend(["oracle".to_string(), "scan".to_string()]);
@@ -699,6 +775,41 @@ mod tests {
         assert_eq!(args[0], "multi");
         assert!(args.contains(&"prs".to_string()));
         assert!(args.contains(&"--dry-run".to_string()));
+    }
+
+    #[test]
+    fn map_multi_dag_supported() {
+        let payload = json!({
+            "schema_version": 1,
+            "group": "core",
+            "tags": ["apply-pilot"],
+            "dry_run": true
+        });
+        let args = map_bus_command_to_args("pilot.multi.dag", &payload).unwrap();
+        assert_eq!(args[0], "multi");
+        assert!(args.contains(&"dag".to_string()));
+        assert!(args.contains(&"--dry-run".to_string()));
+    }
+
+    #[test]
+    fn map_multi_apply_supported() {
+        let payload = json!({
+            "schema_version": 1,
+            "branch": "feat/pilot-wave13",
+            "base_branch": "dev",
+            "pr_base_branch": "main",
+            "group": "core",
+            "stage_size": 2,
+            "continue_on_failure": true,
+            "apply": false
+        });
+        let args = map_bus_command_to_args("pilot.multi.apply", &payload).unwrap();
+        assert_eq!(args[0], "multi");
+        assert!(args.contains(&"apply".to_string()));
+        assert!(args.contains(&"--branch".to_string()));
+        assert!(args.contains(&"--stage-size".to_string()));
+        assert!(args.contains(&"--continue-on-failure".to_string()));
+        assert!(!args.contains(&"--apply".to_string()));
     }
 
     #[test]

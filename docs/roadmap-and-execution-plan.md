@@ -192,7 +192,7 @@ Progress update:
      - load prior contract into form
      - retry failed contract (`approve -> execute`) from the panel.
 
-## Wave 13 (Cross-Repo Orchestration)
+## Wave 13 (Cross-Repo Orchestration) - In Progress (Core Implemented)
 
 Deliverables:
 
@@ -204,6 +204,19 @@ Exit criteria:
 
 1. Multi-repo feature flow works end-to-end from Dashboard.
 2. Merge/release ordering is validated against dependency graph.
+
+Progress update:
+
+1. Added dependency DAG export/reporting:
+     - `pilot multi dag [--group ... --tag ...] [--dry-run] [--output ...]`
+     - emits repos, edges, and stage plan.
+2. Added staged cohort apply orchestration:
+     - `pilot multi apply --branch <feat/x> [--base-branch dev] [--stage-size N] [--apply]`
+     - executes dependency-aware stages with batch control and failure policy.
+3. Added bus contracts for orchestration commands:
+     - `pilot.multi.dag`
+     - `pilot.multi.apply`
+4. Added Multi tab controls for DAG and staged apply (dry-run + execute).
 
 ## Wave 14 (Documentation and Testing Closure)
 

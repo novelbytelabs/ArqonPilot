@@ -55,6 +55,20 @@ pub struct LinkedPrPlan {
     pub repos: Vec<LinkedRepoPlan>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoDependencyEdge {
+    pub repo: String,
+    pub depends_on: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DependencyDagReport {
+    pub generated_at: String,
+    pub repos: Vec<RepoEntry>,
+    pub edges: Vec<RepoDependencyEdge>,
+    pub stages: Vec<Vec<String>>,
+}
+
 pub struct MultiRegistry {
     conn: Connection,
 }
@@ -289,6 +303,147 @@ impl MultiRegistry {
             .into_iter()
             .filter_map(|id| repo_by_id.get(&id).cloned())
             .collect())
+    }
+
+    pub fn dependency_stages(&self, filter: &RepoFilter) -> Result<Vec<Vec<RepoEntry>>> {
+        let repos = self.list_repos(filter)?;
+        let selected_ids: HashSet<i64> = repos.iter().map(|r| r.id).collect();
+        let repo_by_id: HashMap<i64, RepoEntry> = repos.into_iter().map(|r| (r.id, r)).collect();
+
+        let mut indegree: HashMap<i64, usize> = repo_by_id.keys().map(|id| (*id, 0usize)).collect();
+        let mut graph: HashMap<i64, Vec<i64>> = HashMap::new();
+
+        let mut stmt = self
+            .conn
+            .prepare("SELECT repo_id, depends_on_repo_id FROM repo_deps")?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+
+        for row in rows {
+            let (repo_id, dep_id) = row?;
+            if !(selected_ids.contains(&repo_id) && selected_ids.contains(&dep_id)) {
+                continue;
+            }
+            graph.entry(dep_id).or_default().push(repo_id);
+            *indegree.entry(repo_id).or_insert(0) += 1;
+        }
+
+        let mut queue: Vec<i64> = indegree
+            .iter()
+            .filter_map(|(id, deg)| if *deg == 0 { Some(*id) } else { None })
+            .collect();
+        queue.sort_by(|a, b| {
+            let an = repo_by_id.get(a).map(|r| r.name.as_str()).unwrap_or("");
+            let bn = repo_by_id.get(b).map(|r| r.name.as_str()).unwrap_or("");
+            an.cmp(bn).then(a.cmp(b))
+        });
+
+        let mut visited = 0usize;
+        let mut stages = Vec::new();
+
+        while !queue.is_empty() {
+            let current = queue.clone();
+            queue.clear();
+
+            let mut stage: Vec<RepoEntry> = current
+                .iter()
+                .filter_map(|id| repo_by_id.get(id).cloned())
+                .collect();
+            stage.sort_by(|a, b| a.name.cmp(&b.name));
+            visited += stage.len();
+            stages.push(stage);
+
+            let mut next = Vec::new();
+            for id in current {
+                if let Some(children) = graph.get(&id) {
+                    for child in children {
+                        if let Some(deg) = indegree.get_mut(child) {
+                            *deg -= 1;
+                            if *deg == 0 {
+                                next.push(*child);
+                            }
+                        }
+                    }
+                }
+            }
+            next.sort_by(|a, b| {
+                let an = repo_by_id.get(a).map(|r| r.name.as_str()).unwrap_or("");
+                let bn = repo_by_id.get(b).map(|r| r.name.as_str()).unwrap_or("");
+                an.cmp(bn).then(a.cmp(b))
+            });
+            next.dedup();
+            queue = next;
+        }
+
+        if visited != selected_ids.len() {
+            return Err(anyhow!(
+                "Dependency graph has a cycle or unresolved dependency references"
+            ));
+        }
+
+        Ok(stages)
+    }
+
+    pub fn dependency_dag_report(&self, filter: &RepoFilter) -> Result<DependencyDagReport> {
+        let repos = self.list_repos(filter)?;
+        let selected_ids: HashSet<i64> = repos.iter().map(|r| r.id).collect();
+        let name_by_id: HashMap<i64, String> =
+            repos.iter().map(|r| (r.id, r.name.clone())).collect();
+
+        let mut edges = Vec::new();
+        let mut stmt = self
+            .conn
+            .prepare("SELECT repo_id, depends_on_repo_id FROM repo_deps")?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+
+        for row in rows {
+            let (repo_id, dep_id) = row?;
+            if !(selected_ids.contains(&repo_id) && selected_ids.contains(&dep_id)) {
+                continue;
+            }
+            let repo_name = name_by_id.get(&repo_id).cloned().unwrap_or_default();
+            let dep_name = name_by_id.get(&dep_id).cloned().unwrap_or_default();
+            edges.push(RepoDependencyEdge {
+                repo: repo_name,
+                depends_on: dep_name,
+            });
+        }
+        edges.sort_by(|a, b| a.depends_on.cmp(&b.depends_on).then(a.repo.cmp(&b.repo)));
+
+        let stages = self
+            .dependency_stages(filter)?
+            .into_iter()
+            .map(|s| s.into_iter().map(|r| r.name).collect())
+            .collect();
+
+        Ok(DependencyDagReport {
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            repos,
+            edges,
+            stages,
+        })
+    }
+
+    pub fn write_dependency_dag_report(
+        &self,
+        filter: &RepoFilter,
+        output: Option<&Path>,
+    ) -> Result<PathBuf> {
+        let report = self.dependency_dag_report(filter)?;
+        let out_path = if let Some(p) = output {
+            p.to_path_buf()
+        } else {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".pilot").join(format!(
+                "dependency_dag_{}.json",
+                chrono::Utc::now().timestamp()
+            ))
+        };
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let body = serde_json::to_string_pretty(&report)?;
+        std::fs::write(&out_path, body)?;
+        Ok(out_path)
     }
 
     pub fn generate_linked_pr_plan(
@@ -610,5 +765,48 @@ mod tests {
         let i3 = names.iter().position(|n| n == "repo3").unwrap();
 
         assert!(i1 < i2 && i2 < i3);
+    }
+
+    #[test]
+    fn test_dependency_stages_and_dag_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("workspace.db");
+        let registry = MultiRegistry::open(&db).unwrap();
+
+        let r1 = dir.path().join("repo1");
+        let r2 = dir.path().join("repo2");
+        let r3 = dir.path().join("repo3");
+        std::fs::create_dir_all(&r1).unwrap();
+        std::fs::create_dir_all(&r2).unwrap();
+        std::fs::create_dir_all(&r3).unwrap();
+
+        registry
+            .register_repo(&r1, Some("repo1"), Some("core"), &[])
+            .unwrap();
+        registry
+            .register_repo(&r2, Some("repo2"), Some("core"), &[])
+            .unwrap();
+        registry
+            .register_repo(&r3, Some("repo3"), Some("core"), &[])
+            .unwrap();
+        registry
+            .set_dependencies("repo2", &["repo1".to_string()])
+            .unwrap();
+        registry
+            .set_dependencies("repo3", &["repo2".to_string()])
+            .unwrap();
+
+        let stages = registry.dependency_stages(&RepoFilter::default()).unwrap();
+        assert_eq!(stages.len(), 3);
+        assert_eq!(stages[0][0].name, "repo1");
+        assert_eq!(stages[1][0].name, "repo2");
+        assert_eq!(stages[2][0].name, "repo3");
+
+        let dag = registry
+            .dependency_dag_report(&RepoFilter::default())
+            .unwrap();
+        assert_eq!(dag.repos.len(), 3);
+        assert_eq!(dag.edges.len(), 2);
+        assert_eq!(dag.stages.len(), 3);
     }
 }

@@ -88,6 +88,10 @@ The Dependencies tab includes:
 - recent gate-log viewer
 - status cards powered by script `--json` outputs for policy/hook checks
 
+The Multi tab includes:
+- `DAG`: dependency graph + stage preview (`pilot.multi.dag` dry-run)
+- `Staged Apply (Dry Run / Execute)`: dependency-aware staged branch orchestration (`pilot.multi.apply`)
+
 System Status panel controls:
 - `Policy`: runs frozen-policy verification.
 - `Hook Policy`: validates local pre-push hook policy.
@@ -156,6 +160,8 @@ pilot serve --help
 - `pilot.multi.list`
 - `pilot.multi.status`
 - `pilot.multi.order`
+- `pilot.multi.dag`
+- `pilot.multi.apply`
 - `pilot.multi.prs.create`
 - `pilot.oracle.scan`
 - `pilot.oracle.query`
