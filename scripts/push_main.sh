@@ -247,9 +247,7 @@ dns_self_heal() {
   local host="$1"
   [[ -z "$host" ]] && return 0
   echo "[dns] self-heal for host: $host"
-  if command -v resolvectl >/dev/null 2>&1; then
-    resolvectl flush-caches >/dev/null 2>&1 || true
-  fi
+  # Avoid aggressive resolver cache flushes here; on some hosts this worsens flapping.
   getent hosts "$host" >/dev/null 2>&1 || true
 }
 
@@ -289,15 +287,31 @@ if ! dns_preflight "$REMOTE_HOST"; then
   echo "[push-safe] WARNING: DNS preflight failed; continuing with retry-protected operations."
 fi
 
+remote_head_sha() {
+  local remote="$1"
+  local branch="$2"
+  local out
+  out="$(git ls-remote "$remote" -h "refs/heads/${branch}" 2>/dev/null | awk '{print $1}' | head -n1)"
+  echo "$out"
+}
+
 echo "[push-safe] fetch remote state"
 set +e
 run_with_net_retry "git-fetch" "$PUSH_NET_RETRIES" git fetch "$REMOTE"
 fetch_rc=$?
 set -e
 if [[ "$fetch_rc" -ne 0 ]]; then
-  echo "[push-safe] FAILED (git fetch)"
-  summarize_result "FAILED" "$fetch_rc" 0
-  exit "$fetch_rc"
+  echo "[push-safe] WARN: git fetch failed; probing remote head via ls-remote fallback"
+  set +e
+  run_with_net_retry "git-lsremote" "$PUSH_NET_RETRIES" git ls-remote "$REMOTE" -h "refs/heads/${BRANCH}" >/tmp/push_main_lsremote.log
+  lsremote_rc=$?
+  set -e
+  if [[ "$lsremote_rc" -ne 0 ]]; then
+    echo "[push-safe] FAILED (git fetch + ls-remote fallback)"
+    summarize_result "FAILED" "$fetch_rc" 0
+    exit "$fetch_rc"
+  fi
+  echo "[push-safe] ls-remote fallback succeeded; continuing without local fetch update."
 fi
 git status -sb
 
@@ -320,6 +334,15 @@ set -e
 
 if [[ "$rc" -eq 0 ]]; then
   echo "[push-safe] SUCCESS"
+  summarize_result "SUCCESS" 0 "$gate_rc"
+  exit 0
+fi
+
+# If push command failed in a flaky network window, verify whether remote actually advanced.
+local_sha="$(git rev-parse HEAD)"
+remote_sha="$(remote_head_sha "$REMOTE" "$BRANCH")"
+if [[ -n "$remote_sha" && "$remote_sha" == "$local_sha" ]]; then
+  echo "[push-safe] push returned non-zero, but remote branch matches local HEAD; treating as SUCCESS."
   summarize_result "SUCCESS" 0 "$gate_rc"
   exit 0
 fi
