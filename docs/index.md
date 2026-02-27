@@ -19,28 +19,20 @@
 
 ## Why Arqon Pilot Exists in Arqon
 
-Arqon spans multiple specialized repositories: Rust core systems, ArqonBus runtime messaging,
-frontend control surfaces, Python packaging/bindings, and docs/operations assets.
-Git can manage each repository, but Git alone is blind to the dependency and execution
-relationships across the full Arqon fleet.
-
-Arqon Pilot is the local orchestration layer that makes this decentralized architecture
-operate like one cohesive engineering system.
+Arqon is a multi-repo system: Rust core, ArqonBus, UI, Python bindings, and docs.
+Git manages repositories, but not cross-repo intent, dependency order, or release flow.
+Arqon Pilot closes that gap and turns the fleet into one governed operating system.
 
 ### Arqon-Specific Value
 
 - **Fleet-Wide Orchestration**
-    - `multi`, `branch`, and `navigate` let you coordinate branches, dependency order,
-    and release motion across multiple Arqon repos from one command/UI surface.
+    - `multi`, `branch`, and `navigate` coordinate branches, dependency order, and release flow across repos.
 - **Shift-Left CI/CD Governance**
-    - Policy, hook, and pre-push gates run locally first, preventing predictable CI failures
-    before code leaves your workstation.
+    - Policy, hook, and pre-push gates run locally first so broken changes do not reach CI.
 - **Self-Healing and Repair**
-    - Heal workflows surface failures, build context, and execute controlled repair loops
-    with audit artifacts.
+    - Heal builds context from failures and runs controlled repair loops with audit evidence.
 - **Push Safe as Default**
-    - `Push Safe` validates policy, hook integrity, and gate state before pushing, replacing
-    push-and-pray with deterministic preflight.
+    - `Push Safe` verifies policy + gate state before push, replacing push-and-pray with deterministic preflight.
 
 ## Capabilities
 
@@ -117,6 +109,7 @@ pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --teleme
 ## Documentation
 
 - [Roadmap & Execution Plan](roadmap-and-execution-plan.md)
+- [AGOrg Control Plane Plan](agorg-control-plane-plan.md)
 - [Developer Guide](developer-guide.md)
 - [Troubleshooting](troubleshooting.md)
 - [Testing Strategy](testing-strategy.md)

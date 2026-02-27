@@ -260,6 +260,43 @@ Exit criteria:
 1. Deterministic release with reproducible artifacts.
 2. Install/runbook validated in clean environment.
 
+## Wave 16 (AGOrg Scope and Multi-Organization Control Plane)
+
+Deliverables:
+
+1. AGOrg model and persistence (`parent` + child AGO registry).
+   - AGOrg is the parent entity; AGOs are children.
+   - AGOrg may include nested AGOrgs plus AGOs.
+   - AGOrg identity is UUID with unique root path constraint.
+2. AGOrg CRUD + discovery in UI/CLI.
+   - Includes `Create AGOrg Project` wizard.
+   - Includes optional autoscan hierarchy discovery on create.
+   - Includes configurable discovery scan depth.
+3. Active AGOrg scope selector for whole Control Panel.
+4. Per-AGOrg preferences/profile state + default AGOrg on restart.
+5. Scope-aware execution for Dashboard/Oracle/Heal/Dependencies/Branch/Multi.
+6. Graph-link AGOrg composition model:
+   - reusable AGOrg membership across multiple parent AGOrgs
+   - hard cycle prevention
+7. Local Postgres ownership:
+   - Pilot-managed local Postgres only (this phase)
+   - automatic migrations and schema lifecycle
+
+Exit criteria:
+
+1. Operator can load `~/Projects/arqon/Arqon` as default AGOrg and auto-resume on restart.
+2. AGOrg is always visible as active scope in header and action context.
+3. Mutating actions cannot run without an explicit active AGOrg scope.
+4. Discovery can find AGOrg/AGO candidates from a root directory and support selective import.
+5. All AGOrg operations are auditable and replayable.
+6. Nested AGOrg hierarchies render correctly in AGOrg tree view.
+7. Create + autoscan flow can bootstrap Arqon AGOrg in one operation.
+8. AGOrg linking permits recombination without conflict while deterministically blocking circular loops.
+
+Planning source:
+
+1. `docs/agorg-control-plane-plan.md`
+
 ## Operational Rules
 
 1. Never bypass frozen policy constants.
