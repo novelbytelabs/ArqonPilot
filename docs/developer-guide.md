@@ -1,5 +1,9 @@
 # Developer Guide
 
+ArqonPilot is the local control plane for Arqon's multi-repo ecosystem. It provides
+monorepo-like developer flow (single control surface, coordinated actions) while keeping
+repositories independent for security and lifecycle isolation.
+
 ## Prerequisites
 
 - Rust toolchain pinned by `rust-toolchain.toml`

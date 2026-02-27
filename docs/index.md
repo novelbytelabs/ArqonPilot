@@ -17,6 +17,31 @@
   </div>
 </div>
 
+## Why ArqonPilot Exists in Arqon
+
+Arqon spans multiple specialized repositories: Rust core systems, ArqonBus runtime messaging,
+frontend control surfaces, Python packaging/bindings, and docs/operations assets.
+Git can manage each repository, but Git alone is blind to the dependency and execution
+relationships across the full Arqon fleet.
+
+ArqonPilot is the local orchestration layer that makes this decentralized architecture
+operate like one cohesive engineering system.
+
+### Arqon-Specific Value
+
+- **Fleet-Wide Orchestration**
+  - `multi`, `branch`, and `navigate` let you coordinate branches, dependency order,
+    and release motion across multiple Arqon repos from one command/UI surface.
+- **Shift-Left CI/CD Governance**
+  - Policy, hook, and pre-push gates run locally first, preventing predictable CI failures
+    before code leaves your workstation.
+- **Self-Healing and Repair**
+  - Heal workflows surface failures, build context, and execute controlled repair loops
+    with audit artifacts.
+- **Push Safe as Default**
+  - `Push Safe` validates policy, hook integrity, and gate state before pushing, replacing
+    push-and-pray with deterministic preflight.
+
 ## Capabilities
 
 <div class="pilot-feature-grid">

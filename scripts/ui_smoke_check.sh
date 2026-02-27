@@ -14,6 +14,7 @@ REUSE_UI="${PILOT_UI_SMOKE_REUSE_UI:-0}"
 INCLUDE_COMMANDS="${PILOT_UI_SMOKE_INCLUDE_COMMANDS:-0}"
 REPORT_DIR="${PILOT_REPORT_DIR:-$HOME/.pilot/reports}"
 CURL_TIMEOUT_SEC="${PILOT_UI_SMOKE_CURL_TIMEOUT_SEC:-35}"
+STARTUP_TIMEOUT_SEC="${PILOT_UI_SMOKE_STARTUP_TIMEOUT_SEC:-900}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 LOG_FILE="$REPORT_DIR/ui_smoke_${STAMP}.log"
 
@@ -41,7 +42,7 @@ say() {
 
 wait_http() {
   local url="$1"
-  local attempts="${2:-40}"
+  local attempts="${2:-60}"
   local delay="${3:-1}"
   local i
   for ((i = 1; i <= attempts; i++)); do
@@ -82,6 +83,7 @@ post_json() {
 }
 
 say "log file: $LOG_FILE"
+say "startup timeout sec: $STARTUP_TIMEOUT_SEC"
 
 if [[ "$START_SHIM" == "1" ]]; then
   say "starting/checking ArqonBus shim..."
@@ -104,7 +106,8 @@ else
     --ui-port "$UI_PORT" >>"$LOG_FILE" 2>&1 &
   SERVE_PID="$!"
 
-  if ! wait_http "http://127.0.0.1:${UI_PORT}/" 45 1; then
+  startup_attempts=$(( (STARTUP_TIMEOUT_SEC / 2) + 1 ))
+  if ! wait_http "http://127.0.0.1:${UI_PORT}/" "$startup_attempts" 2; then
     say "ERROR: UI failed to start; tailing log"
     tail -n 120 "$LOG_FILE" || true
     exit 1

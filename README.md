@@ -1,6 +1,34 @@
 # Arqon Pilot
 
-Arqon Pilot is a standalone CLI for single-repo and cross-repo engineering operations: oracle indexing/query, healing, release navigation, branch orchestration, security scans, planning, scaffolding, and knowledge capture.
+ArqonPilot is a Rust-first, local DevSecOps control plane for the Arqon ecosystem.
+It gives teams the unified developer experience of a monorepo while preserving the
+security, flexibility, and independence of Arqon's multi-repo architecture.
+
+Arqon repositories span a Rust core engine, ArqonBus messaging, UI surfaces, Python
+bindings via maturin, and docs/research repos. Standard Git does not understand these
+cross-repo relationships. ArqonPilot is the orchestration layer that coordinates them
+as one logical workspace.
+
+## Big Picture for Arqon
+
+ArqonPilot removes the "push-and-pray" loop and turns decentralized repo operations
+into governed, deterministic workflows that run locally before CI.
+
+### How this maps to ArqonPilot modules
+
+- Fleet-wide orchestration (`multi`, `branch`, `navigate`)
+  - Branch creation/sync/status, DAG ordering, and PR planning across repo cohorts.
+- CI/CD shift-left (`policy`, `hook`, `gate`, `push safe`)
+  - Toolchain/lock policy and release preflight enforced locally before push.
+- Autonomous repair (`heal`, `repair`)
+  - Detects and surfaces failures, with guided repair paths and auditable outcomes.
+- Unified control panel (`serve` dashboard + tabs)
+  - Central command surface for Oracle, Heal, Dependencies, Branch, Multi, and telemetry.
+
+## Arqon Elevator Pitch
+
+ArqonPilot lets Arqon teams branch, test, self-heal, and safely push across an entire
+fleet of repositories from one intelligent local control panel.
 
 ## Core Modules
 

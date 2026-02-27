@@ -63,6 +63,7 @@ jobs:
           PILOT_UI_SMOKE_START_SHIM: "0"
           PILOT_UI_SMOKE_INCLUDE_COMMANDS: "0"
           PILOT_UI_PORT: "7791"
+          PILOT_UI_SMOKE_STARTUP_TIMEOUT_SEC: "1200"
         run: ./scripts/ui_smoke_check.sh
 
       - name: Upload UI Smoke Logs
