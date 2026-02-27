@@ -9,7 +9,7 @@ use futures_util::{SinkExt, StreamExt};
 use miette::{IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fs;
 use std::path::PathBuf;
@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command as TokioCommand;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -36,6 +36,7 @@ struct UiState {
     events: broadcast::Sender<Value>,
     allow_mutations: bool,
     allowed_commands: Option<HashSet<String>>,
+    codex_contracts: Arc<Mutex<HashMap<String, CodexContractRecord>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,14 +80,37 @@ struct EvidenceExportRequest {
 
 #[derive(Debug, Deserialize)]
 struct CodexActionRequest {
-    intent: String,
-    command: String,
+    intent: Option<String>,
+    command: Option<String>,
+    contract_id: Option<String>,
     #[serde(default)]
     payload: Value,
     mode: Option<String>,
     expected_effect: Option<String>,
     rollback_strategy: Option<String>,
     verify_command: Option<String>,
+    reconcile_notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodexContractRecord {
+    contract_id: String,
+    status: String,
+    intent: String,
+    command: String,
+    payload_original: Value,
+    payload_normalized: Value,
+    mutating_command: bool,
+    expected_effect: Option<String>,
+    rollback_strategy: Option<String>,
+    verify_command: Option<String>,
+    verify_payload: Value,
+    execute_response: Option<Value>,
+    verify_response: Option<Value>,
+    last_error: Option<String>,
+    reconcile_notes: Option<String>,
+    created_at_unix: u64,
+    updated_at_unix: u64,
 }
 
 pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
@@ -97,6 +121,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         events: event_tx,
         allow_mutations: cfg.allow_mutations,
         allowed_commands: cfg.allowed_commands,
+        codex_contracts: Arc::new(Mutex::new(HashMap::new())),
     });
 
     let app = Router::new()
@@ -379,115 +404,330 @@ async fn run_codex_action(
     State(state): State<Arc<UiState>>,
     Json(mut req): Json<CodexActionRequest>,
 ) -> Response {
-    let command = req.command.trim().to_string();
-    if command.is_empty() || !command.starts_with("pilot.") {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "command must be namespaced as pilot.*",
-        );
-    }
-    let intent = req.intent.trim().to_string();
-    if intent.is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "intent is required");
-    }
     let mode = req
         .mode
         .as_deref()
         .unwrap_or("preview")
         .trim()
         .to_ascii_lowercase();
-    if mode != "preview" && mode != "execute" {
-        return error_response(StatusCode::BAD_REQUEST, "mode must be preview or execute");
+    if !matches!(
+        mode.as_str(),
+        "preview" | "approve" | "execute" | "reconcile"
+    ) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "mode must be preview, approve, execute, or reconcile",
+        );
     }
-
-    if let Some(allowlist) = &state.allowed_commands {
-        if !allowlist.contains(&command) {
-            return error_response(
-                StatusCode::FORBIDDEN,
-                &format!("command '{}' is not in ui allowlist", command),
-            );
-        }
-    }
-
-    if req.payload.get("schema_version").is_none() {
-        req.payload["schema_version"] = json!(1);
-    }
-    let is_mutating = is_mutating_command(&command);
-    let mut normalized_payload = req.payload.clone();
 
     if mode == "preview" {
+        let intent = req.intent.as_deref().unwrap_or("").trim().to_string();
+        if intent.is_empty() {
+            return error_response(StatusCode::BAD_REQUEST, "intent is required");
+        }
+        let command = req.command.as_deref().unwrap_or("").trim().to_string();
+        if command.is_empty() || !command.starts_with("pilot.") {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "command must be namespaced as pilot.*",
+            );
+        }
+        if let Some(allowlist) = &state.allowed_commands {
+            if !allowlist.contains(&command) {
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    &format!("command '{}' is not in ui allowlist", command),
+                );
+            }
+        }
+
+        if req.payload.get("schema_version").is_none() {
+            req.payload["schema_version"] = json!(1);
+        }
+        let mut normalized_payload = req.payload.clone();
         enforce_dry_run(&command, &mut normalized_payload);
-        let contract = json!({
-            "intent": intent,
-            "mode": "preview",
-            "command": command,
-            "payload_original": req.payload,
-            "payload_normalized": normalized_payload,
-            "mutating_command": is_mutating,
-            "expected_effect": req.expected_effect,
-            "rollback_strategy": req.rollback_strategy,
-            "verify_command": req.verify_command,
-            "ui_read_only": !state.allow_mutations
-        });
+        let now = now_unix();
+        let contract_id = new_codex_contract_id();
+        let contract = CodexContractRecord {
+            contract_id: contract_id.clone(),
+            status: "previewed".to_string(),
+            intent,
+            command: command.clone(),
+            payload_original: req.payload.clone(),
+            payload_normalized: normalized_payload,
+            mutating_command: is_mutating_command(&command),
+            expected_effect: req.expected_effect.clone().filter(|s| !s.trim().is_empty()),
+            rollback_strategy: req
+                .rollback_strategy
+                .clone()
+                .filter(|s| !s.trim().is_empty()),
+            verify_command: req.verify_command.clone().filter(|s| !s.trim().is_empty()),
+            verify_payload: json!({"schema_version": 1}),
+            execute_response: None,
+            verify_response: None,
+            last_error: None,
+            reconcile_notes: None,
+            created_at_unix: now,
+            updated_at_unix: now,
+        };
+
+        {
+            let mut contracts = state.codex_contracts.lock().await;
+            contracts.insert(contract_id.clone(), contract.clone());
+        }
         let _ = state.events.send(json!({
             "source": "codex_action",
             "phase": "preview",
-            "command": contract["command"],
-            "intent": contract["intent"],
-            "mutating_command": is_mutating
+            "contract_id": contract_id,
+            "command": command
         }));
         return Json(json!({"ok": true, "contract": contract})).into_response();
     }
 
-    if !state.allow_mutations && is_mutating {
+    let contract_id = req.contract_id.as_deref().unwrap_or("").trim().to_string();
+    if contract_id.is_empty() {
         return error_response(
-            StatusCode::FORBIDDEN,
-            &format!("command '{}' blocked in read-only UI mode", command),
+            StatusCode::BAD_REQUEST,
+            "contract_id is required for approve/execute/reconcile",
         );
     }
-    if !state.allow_mutations {
-        enforce_dry_run(&command, &mut normalized_payload);
+
+    if mode == "approve" {
+        let mut contracts = state.codex_contracts.lock().await;
+        let Some(contract) = contracts.get_mut(&contract_id) else {
+            return error_response(StatusCode::NOT_FOUND, "contract_id not found");
+        };
+        if contract.status != "previewed" && contract.status != "approved" {
+            return error_response(
+                StatusCode::CONFLICT,
+                "contract must be in previewed/approved state",
+            );
+        }
+        if let Some(v) = req
+            .expected_effect
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+        {
+            contract.expected_effect = Some(v.trim().to_string());
+        }
+        if let Some(v) = req
+            .rollback_strategy
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+        {
+            contract.rollback_strategy = Some(v.trim().to_string());
+        }
+        if let Some(v) = req.verify_command.as_ref().filter(|s| !s.trim().is_empty()) {
+            contract.verify_command = Some(v.trim().to_string());
+        }
+        contract.status = "approved".to_string();
+        contract.updated_at_unix = now_unix();
+        let response_contract = contract.clone();
+        let _ = state.events.send(json!({
+            "source": "codex_action",
+            "phase": "approved",
+            "contract_id": response_contract.contract_id,
+            "command": response_contract.command
+        }));
+        return Json(json!({"ok": true, "contract": response_contract})).into_response();
     }
 
+    if mode == "execute" {
+        let execute_contract = {
+            let contracts = state.codex_contracts.lock().await;
+            let Some(contract) = contracts.get(&contract_id) else {
+                return error_response(StatusCode::NOT_FOUND, "contract_id not found");
+            };
+            if contract.status != "approved" {
+                return error_response(
+                    StatusCode::CONFLICT,
+                    "contract must be approved before execute",
+                );
+            }
+            contract.clone()
+        };
+
+        if let Some(allowlist) = &state.allowed_commands {
+            if !allowlist.contains(&execute_contract.command) {
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    &format!(
+                        "command '{}' is not in ui allowlist",
+                        execute_contract.command
+                    ),
+                );
+            }
+        }
+        if !state.allow_mutations && execute_contract.mutating_command {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                &format!(
+                    "command '{}' blocked in read-only UI mode",
+                    execute_contract.command
+                ),
+            );
+        }
+
+        let _ = state.events.send(json!({
+            "source": "codex_action",
+            "phase": "started",
+            "contract_id": execute_contract.contract_id,
+            "command": execute_contract.command,
+            "intent": execute_contract.intent
+        }));
+
+        match send_command_once_with_retry(
+            &state.bus,
+            &execute_contract.command,
+            execute_contract.payload_normalized.clone(),
+            3,
+        )
+        .await
+        {
+            Ok(response) => {
+                let updated = {
+                    let mut contracts = state.codex_contracts.lock().await;
+                    let Some(contract) = contracts.get_mut(&contract_id) else {
+                        return error_response(StatusCode::NOT_FOUND, "contract_id not found");
+                    };
+                    contract.status = "executed".to_string();
+                    contract.execute_response = Some(response.clone());
+                    contract.last_error = None;
+                    contract.updated_at_unix = now_unix();
+                    contract.clone()
+                };
+                let _ = state.events.send(json!({
+                    "source": "codex_action",
+                    "phase": "completed",
+                    "contract_id": updated.contract_id,
+                    "command": updated.command,
+                    "success": true
+                }));
+                return Json(json!({"ok": true, "contract": updated, "response": response}))
+                    .into_response();
+            }
+            Err(err) => {
+                let updated = {
+                    let mut contracts = state.codex_contracts.lock().await;
+                    if let Some(contract) = contracts.get_mut(&contract_id) {
+                        contract.status = "failed".to_string();
+                        contract.last_error = Some(err.to_string());
+                        contract.updated_at_unix = now_unix();
+                        Some(contract.clone())
+                    } else {
+                        None
+                    }
+                };
+                let _ = state.events.send(json!({
+                    "source": "codex_action",
+                    "phase": "failed",
+                    "contract_id": contract_id,
+                    "error": err.to_string()
+                }));
+                if let Some(contract) = updated {
+                    return Json(
+                        json!({"ok": false, "contract": contract, "error": err.to_string()}),
+                    )
+                    .into_response();
+                }
+                return error_response(StatusCode::BAD_GATEWAY, &err.to_string());
+            }
+        }
+    }
+
+    // reconcile
+    let reconcile_contract = {
+        let contracts = state.codex_contracts.lock().await;
+        let Some(contract) = contracts.get(&contract_id) else {
+            return error_response(StatusCode::NOT_FOUND, "contract_id not found");
+        };
+        if contract.status != "executed" && contract.status != "failed" {
+            return error_response(
+                StatusCode::CONFLICT,
+                "contract must be executed or failed before reconcile",
+            );
+        }
+        contract.clone()
+    };
+
+    let mut verify_response: Option<Value> = None;
+    if let Some(verify_cmd) = reconcile_contract.verify_command.as_ref() {
+        if verify_cmd.starts_with("pilot.") {
+            if let Some(allowlist) = &state.allowed_commands {
+                if !allowlist.contains(verify_cmd) {
+                    return error_response(
+                        StatusCode::FORBIDDEN,
+                        &format!("verify command '{}' is not in ui allowlist", verify_cmd),
+                    );
+                }
+            }
+            match send_command_once_with_retry(
+                &state.bus,
+                verify_cmd,
+                reconcile_contract.verify_payload.clone(),
+                3,
+            )
+            .await
+            {
+                Ok(v) => verify_response = Some(v),
+                Err(err) => {
+                    let _ = state.events.send(json!({
+                        "source": "codex_action",
+                        "phase": "reconcile_verify_failed",
+                        "contract_id": contract_id,
+                        "error": err.to_string()
+                    }));
+                }
+            }
+        }
+    }
+
+    let updated = {
+        let mut contracts = state.codex_contracts.lock().await;
+        let Some(contract) = contracts.get_mut(&contract_id) else {
+            return error_response(StatusCode::NOT_FOUND, "contract_id not found");
+        };
+        contract.status = "reconciled".to_string();
+        if let Some(v) = verify_response.clone() {
+            contract.verify_response = Some(v);
+        }
+        if let Some(v) = req
+            .reconcile_notes
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+        {
+            contract.reconcile_notes = Some(v.trim().to_string());
+        }
+        contract.updated_at_unix = now_unix();
+        contract.clone()
+    };
     let _ = state.events.send(json!({
         "source": "codex_action",
-        "phase": "started",
-        "command": command,
-        "intent": intent
+        "phase": "reconciled",
+        "contract_id": updated.contract_id,
+        "command": updated.command
     }));
+    Json(json!({
+        "ok": true,
+        "contract": updated,
+        "verify_response": verify_response
+    }))
+    .into_response()
+}
 
-    match send_command_once_with_retry(&state.bus, &command, normalized_payload.clone(), 3).await {
-        Ok(response) => {
-            let contract = json!({
-                "intent": intent,
-                "mode": "execute",
-                "command": command,
-                "payload_normalized": normalized_payload,
-                "mutating_command": is_mutating,
-                "expected_effect": req.expected_effect,
-                "rollback_strategy": req.rollback_strategy,
-                "verify_command": req.verify_command
-            });
-            let _ = state.events.send(json!({
-                "source": "codex_action",
-                "phase": "completed",
-                "command": contract["command"],
-                "intent": contract["intent"],
-                "success": true
-            }));
-            Json(json!({"ok": true, "contract": contract, "response": response})).into_response()
-        }
-        Err(err) => {
-            let _ = state.events.send(json!({
-                "source": "codex_action",
-                "phase": "failed",
-                "command": command,
-                "intent": intent,
-                "error": err.to_string()
-            }));
-            error_response(StatusCode::BAD_GATEWAY, &err.to_string())
-        }
-    }
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn new_codex_contract_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("codex-{}", nanos)
 }
 
 fn is_safe_cli_token(s: &str) -> bool {
@@ -1387,15 +1627,19 @@ Recommended flow:
     <div class="grid">
       <div class="card">
         <h3>Codex Action Contract</h3>
+        <input id="codex-contract-id" placeholder="contract id (auto-filled by preview)" />
         <input id="codex-intent" placeholder="intent (required)" value="Check multi-repo status before branch action" />
         <input id="codex-command" placeholder="pilot.command" value="pilot.multi.status" />
         <textarea id="codex-payload" rows="8" placeholder='{"group":"core","tags":["apply-pilot"]}'>{ "group": "core", "tags": ["apply-pilot"] }</textarea>
         <input id="codex-expected" placeholder="expected effect (optional)" value="Status summary is returned for the core cohort" />
         <input id="codex-rollback" placeholder="rollback strategy (optional)" value="No repo mutation expected; rerun in preview mode if uncertain" />
         <input id="codex-verify" placeholder="verify command (optional)" value="pilot.multi.status" />
+        <input id="codex-reconcile-notes" placeholder="reconcile notes (optional)" value="Outcome reviewed in timeline and response payload." />
         <div class="row">
           <button class="btn secondary" onclick="codexPreview()">Preview Contract</button>
+          <button class="btn secondary" onclick="codexApprove()">Approve Contract</button>
           <button class="btn" onclick="codexExecute()">Execute Contract</button>
+          <button class="btn secondary" onclick="codexReconcile()">Reconcile Contract</button>
         </div>
       </div>
       <div class="card">
@@ -1451,6 +1695,7 @@ let selectedOperationId = null;
 let auditCache = [];
 let streamPaused = false;
 let streamHandle = null;
+let latestCodexContractId = '';
 
 for (const btn of document.querySelectorAll('.tab')) {
   btn.addEventListener('click', () => {
@@ -2016,13 +2261,15 @@ async function codexRun(mode) {
     return;
   }
   const req = {
+    contract_id: document.getElementById('codex-contract-id').value.trim(),
     intent: document.getElementById('codex-intent').value.trim(),
     command: document.getElementById('codex-command').value.trim(),
     payload,
     mode,
     expected_effect: document.getElementById('codex-expected').value.trim(),
     rollback_strategy: document.getElementById('codex-rollback').value.trim(),
-    verify_command: document.getElementById('codex-verify').value.trim()
+    verify_command: document.getElementById('codex-verify').value.trim(),
+    reconcile_notes: document.getElementById('codex-reconcile-notes').value.trim()
   };
   const res = await fetch('/api/codex/action', {
     method: 'POST',
@@ -2034,12 +2281,28 @@ async function codexRun(mode) {
   codexOut.textContent = text;
   out.textContent = text;
   if (dashStatusOut) dashStatusOut.textContent = text;
+  if (data && data.contract && data.contract.contract_id) {
+    latestCodexContractId = data.contract.contract_id;
+    document.getElementById('codex-contract-id').value = latestCodexContractId;
+  }
   appendLive({ source: 'codex_ui', mode, command: req.command, ok: !!data.ok });
-  if (mode === 'execute') loadHistory();
+  if (mode === 'execute' || mode === 'reconcile') loadHistory();
 }
 
 function codexPreview() { codexRun('preview'); }
+function codexApprove() {
+  if (!document.getElementById('codex-contract-id').value.trim() && latestCodexContractId) {
+    document.getElementById('codex-contract-id').value = latestCodexContractId;
+  }
+  codexRun('approve');
+}
 function codexExecute() { codexRun('execute'); }
+function codexReconcile() {
+  if (!document.getElementById('codex-contract-id').value.trim() && latestCodexContractId) {
+    document.getElementById('codex-contract-id').value = latestCodexContractId;
+  }
+  codexRun('reconcile');
+}
 
 async function loadHistory() {
   const res = await fetch('/api/history');

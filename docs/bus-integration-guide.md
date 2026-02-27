@@ -48,7 +48,7 @@ UI endpoints:
 - `POST /api/dependencies/run` run dependency guardrail actions (`policy`, `hook-policy`, `gate`, `repair`, `push`)
 - `GET /api/dependencies/logs` read recent pre-push gate logs
 - `POST /api/evidence/export` snapshot policy/history/reports/gate logs into an evidence bundle
-- `POST /api/codex/action` contract-driven preview/execute API for `pilot.*` commands
+- `POST /api/codex/action` contract-driven lifecycle API (`preview`, `approve`, `execute`, `reconcile`) for `pilot.*` commands
 - `GET /api/stream` live telemetry stream (SSE)
 
 Control model:
@@ -98,7 +98,9 @@ System Status panel controls:
 
 Codex contract tab:
 - `Preview Contract`: validate and normalize a command contract without executing.
-- `Execute Contract`: run the contract (subject to UI mutation and allowlist policy) with telemetry events.
+- `Approve Contract`: lock in a previewed contract before execution.
+- `Execute Contract`: run an approved contract (subject to UI mutation and allowlist policy) with telemetry events.
+- `Reconcile Contract`: capture post-execution verification and notes for auditable closure.
 
 Run one message and exit:
 

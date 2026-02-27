@@ -168,13 +168,14 @@ Exit criteria:
 
 Progress update:
 
-1. Added `Codex` tab in Control Panel with `Preview Contract` and `Execute Contract`.
+1. Added `Codex` tab in Control Panel with `Preview`, `Approve`, `Execute`, and `Reconcile` controls.
 2. Added `/api/codex/action` contract endpoint with:
      - required `intent`
      - `pilot.*` command enforcement
      - normalized payload preview
      - read-only mutation protection
-     - telemetry events for preview/start/complete/fail.
+     - stateful contract lifecycle (`previewed -> approved -> executed|failed -> reconciled`)
+     - telemetry events for preview/approved/start/complete/fail/reconciled.
 
 ## Wave 13 (Cross-Repo Orchestration)
 

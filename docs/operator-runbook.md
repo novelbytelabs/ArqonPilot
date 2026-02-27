@@ -70,8 +70,10 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
 
 5. `Codex` tab (contract-driven operations)
 
-    - `Preview Contract` builds a normalized action contract (intent, command, payload, expected effect, rollback strategy) without executing.
-    - `Execute Contract` runs the same contract through the Bus bridge with telemetry and response capture.
+    - `Preview Contract` builds a normalized action contract (intent, command, payload, expected effect, rollback strategy) and generates `contract_id`.
+    - `Approve Contract` transitions contract to executable state.
+    - `Execute Contract` runs the approved contract through the Bus bridge with telemetry and response capture.
+    - `Reconcile Contract` records verification outcome and closure notes.
     - Use `verify_command` to define post-action verification intent in the contract record.
 
 ## 4. Controlled Apply Workflow

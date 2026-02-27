@@ -335,10 +335,12 @@ Common causes:
 1. `intent` is empty.
 2. `command` is not `pilot.*`.
 3. payload JSON is invalid.
-4. mutating command attempted in read-only UI mode.
+4. `execute` or `reconcile` run without a valid `contract_id`.
+5. mutating command attempted in read-only UI mode.
 
 Recovery:
 1. Use `Preview Contract` first.
-2. Ensure payload is valid JSON object.
-3. For mutation execution, run `pilot serve ... --ui-allow-mutations`.
-4. If allowlist is configured, ensure command is in `--ui-allow-command`.
+2. Copy/confirm returned `contract_id`, then run `Approve Contract`.
+3. Ensure payload is valid JSON object.
+4. For mutation execution, run `pilot serve ... --ui-allow-mutations`.
+5. If allowlist is configured, ensure command is in `--ui-allow-command`.
