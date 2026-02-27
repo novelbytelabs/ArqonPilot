@@ -71,6 +71,24 @@ pilot branch create feat/pilot-rollout --group core --dry-run
 pilot navigate --multi --group core --dry-run
 ```
 
+## First 5 Minutes (Recommended)
+
+1. Start the control panel:
+
+```bash
+pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788
+```
+
+2. Open `http://127.0.0.1:7788`.
+3. In `Dashboard -> System Status`, run:
+   - `Policy`
+   - `Hook Policy`
+   - `Gate`
+4. If ArqonBus is down, use:
+   - `Start Bus`
+   - `Bus Status`
+5. Use `Dependencies` tab for drift diagnosis before push.
+
 ## Documentation
 
 - [Roadmap & Execution Plan](roadmap-and-execution-plan.md)

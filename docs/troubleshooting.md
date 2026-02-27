@@ -290,3 +290,34 @@ What it does:
 Defaults:
 - Push target defaults to your current checked-out branch.
 - To push `main` explicitly: `./scripts/push_main.sh main`.
+
+## 9) PyPI workflow succeeded but new version is not visible
+
+Symptom:
+- GitHub Actions publish job reports success, but `pip install arqon-pilot==<new_version>` fails.
+- PyPI JSON still shows an older latest version.
+
+Verify directly:
+
+```bash
+python3 - <<'PY'
+import json, urllib.request
+data = json.load(urllib.request.urlopen("https://pypi.org/pypi/arqon-pilot/json", timeout=20))
+print("latest:", data["info"]["version"])
+print("releases:", sorted(data["releases"].keys()))
+PY
+```
+
+Checks:
+1. Confirm workflow actually uploaded expected files/version (not `skip-existing` on older version).
+2. Confirm publish target was `pypi` (not `testpypi`).
+3. Confirm package version in source (`pyproject.toml`) matches intended release.
+4. Retry install after short propagation delay and clear pip cache:
+
+```bash
+python -m pip install --no-cache-dir --index-url https://pypi.org/simple arqon-pilot==<new_version>
+```
+
+If still not visible:
+- Treat as publish-index mismatch incident and record in `docs/gotcha-registry.md`.
+- Re-run publish with corrected versioning and explicit verification step.

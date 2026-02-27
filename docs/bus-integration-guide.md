@@ -61,6 +61,7 @@ Dashboard telemetry includes:
 - export: filtered timeline JSON
 - bus status chip: connected/disconnected
 - operation detail drill-down: click timeline item for full payload and artifact hint
+- Live Event Stream is pinned to the bottom of Dashboard for persistent monitoring.
 
 Telemetry tab includes:
 - mirrored tail view for quick telemetry inspection
@@ -82,6 +83,15 @@ The Dependencies tab includes:
 - safe push trigger (`push_main.sh <branch> <remote>`)
 - recent gate-log viewer
 - status cards powered by script `--json` outputs for policy/hook checks
+
+System Status panel controls:
+- `Policy`: runs frozen-policy verification.
+- `Hook Policy`: validates local pre-push hook policy.
+- `Drift`: runs lock drift diagnostics.
+- `Gate`: runs mandatory pre-push gate.
+- `Repair`: runs lock repair workflow.
+- `Push Safe`: runs guarded push with classification summary.
+- `Start Bus` / `Stop Bus` / `Bus Status`: manage local ArqonBus shim lifecycle.
 
 Run one message and exit:
 
@@ -115,6 +125,13 @@ EOF
 ```
 
 Do not put this in global `.bashrc`; keep it scoped to the target conda environment.
+
+Validation command after hook setup:
+
+```bash
+pilot --help
+pilot serve --help
+```
 
 ## Currently Supported Bus Commands
 

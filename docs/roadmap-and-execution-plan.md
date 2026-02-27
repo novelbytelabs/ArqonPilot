@@ -23,13 +23,13 @@ ArqonPilot becomes a centralized control system:
 1. Core modules exist: `oracle`, `heal`, `navigate`, `branch`, `multi`, `secure`, `plan`, `create`, `know`.
 2. Bus bridge and Control Panel exist and are operational.
 3. Guardrail scripts exist:
-   - `scripts/prepush_gate.sh`
-   - `scripts/verify_toolchain_policy.sh`
-   - `scripts/verify_git_hook_policy.sh`
-   - `scripts/repair_lock_182.sh`
-   - `scripts/push_main.sh`
+     - `scripts/prepush_gate.sh`
+     - `scripts/verify_toolchain_policy.sh`
+     - `scripts/verify_git_hook_policy.sh`
+     - `scripts/repair_lock_182.sh`
+     - `scripts/push_main.sh`
 4. Gotcha tracking exists:
-   - `docs/gotcha-registry.md`
+     - `docs/gotcha-registry.md`
 5. Active risk: lockfile drift families (now including ICU `2.1.x`) and transient DNS failures.
 
 ## Program Tracks (Run In Parallel)
@@ -71,107 +71,137 @@ Completed foundational extraction, modularization, multi-repo core, branch/navig
 
 ## Wave 9 (Control Panel Maturation) - Completed
 Deliverables:
+
 1. Dashboard as default central command.
 2. Tab parity for high-frequency operations.
 3. Unified operation timeline with status chips.
 
 Exit criteria:
+
 1. All key actions invokable from Dashboard.
 2. Live operation statuses are visible without opening logs.
 
 Completion notes:
+
 1. Dashboard now acts as central command for Oracle/Heal/Dependencies/Branch/Multi operations.
 2. Dependencies actions are executable from Dashboard, including safe push via `push_main.sh`.
 3. Timeline, operation detail, status chips, and telemetry stream are centralized in Dashboard.
 
 ## Wave 10 (Packaging and Runtime Reliability) - Completed
+
 Deliverables:
+
 1. Deterministic packaging lane (`1.88.0`, `Cargo.lock.packaging`).
 2. Conda/Linux runtime guidance and fixes.
 3. Stable PyPI release process.
 
 Exit criteria:
+
 1. Packaging workflow is reproducible.
 2. Install + `pilot --help` smoke documented and repeatable.
 
 Completion notes:
+
 1. Added packaging-lane check script (`scripts/packaging_lane_check.sh`) using Rust `1.88.0` + `Cargo.lock.packaging`.
 2. Added CI parity script (`scripts/ci_parity_check.sh`) for deterministic local validation of both lanes.
 3. Added CI `packaging-parity` job in `.github/workflows/ci.yml` to catch packaging drift before publish.
 4. Strengthened policy checks so CI must retain both lane pins and packaging check step.
 
-## Wave 11 (Guardrails and Dependencies System) - In Progress
+## Wave 11 (Guardrails and Dependencies System) - In Progress (Near Close)
 Deliverables:
+
 1. Dependencies/Guardrails tab in UI.
 2. Actions:
-   - policy check
-   - drift report
-   - lock repair
-   - pre-push gate
-   - push-safe with summary
+     - policy check
+     - drift report
+     - lock repair
+     - pre-push gate
+     - push-safe with summary
 3. Lock drift map includes known families:
-   - `time/comfy-table/wit-bindgen`
-   - `blake3/constant_time_eq`
-   - `globset`
-   - `icu_* 2.1.x`
+     - `time/comfy-table/wit-bindgen`
+     - `blake3/constant_time_eq`
+     - `globset`
+     - `icu_* 2.1.x`
 
 Exit criteria:
+
 1. Local-pass/CI-fail has one-click diagnosis path.
 2. Push failure always prints root cause + next action.
 
 Progress update:
+
 1. Added UI dependency action `drift` backed by `scripts/drift_report.sh` with JSON output support.
 2. Added System Status bus controls: `Start Bus`, `Stop Bus`, `Bus Status`.
 3. Added persisted bus health status in Dashboard (`localStorage`) for resume visibility.
 4. Upgraded `scripts/push_main.sh` to classify push failures and print cause-specific remediation.
+5. Added dashboard bus lifecycle controls (`Start Bus`, `Stop Bus`, `Bus Status`) and shim integration.
+6. Added deterministic drift diagnostics via `scripts/drift_report.sh` and UI integration.
+7. Live Event Stream moved to bottom of Dashboard to stay visible as a persistent monitoring surface.
+
+Remaining to close Wave 11:
+
+1. Harden PyPI visibility verification and post-publish validation flow.
+2. Close final documentation gaps (runbook, troubleshooting, bus guide) in same lane as guardrails.
+3. Verify CI lane parity continuously for lock drift classes (`icu_*`, `globset`, `blake3/constant_time_eq`, `time/*`).
 
 ## Wave 12 (Codex Ops Integration)
 Deliverables:
+
 1. Codex action contract:
-   - intent
-   - dry-run plan
-   - execution steps
-   - expected effect
-   - rollback strategy
+     - intent
+     - dry-run plan
+     - execution steps
+     - expected effect
+     - rollback strategy
 2. Dashboard Codex controls:
-   - preview
-   - approve
-   - execute
-   - reconcile
+     - preview
+     - approve
+     - execute
+     - reconcile
 3. Audit + telemetry for every Codex action.
 
 Exit criteria:
+
 1. No opaque AI actions; every action is auditable.
 2. Operator can replay and resume failed operations.
 
 ## Wave 13 (Cross-Repo Orchestration)
+
 Deliverables:
+
 1. Cross-repo dependency DAG.
 2. Dependency-aware branch/PR sequencing.
 3. Cohort apply with staged execution.
 
 Exit criteria:
+
 1. Multi-repo feature flow works end-to-end from Dashboard.
 2. Merge/release ordering is validated against dependency graph.
 
 ## Wave 14 (Documentation and Testing Closure)
+
 Deliverables:
+
 1. Complete documentation set (all Track D artifacts).
 2. Complete test pyramid and automation (all Track C levels).
 3. Regression and adversarial suites integrated in CI.
 
 Exit criteria:
+
 1. New operator can run system from docs only.
 2. Test matrix covers unit/integration/e2e/regression/adversarial.
 3. CI parity checks prevent recurrence of lane mismatch confusion.
 
 ## Wave 15 (Production Release Gate)
+
 Deliverables:
+
 1. Final release checklist with hard gates.
 2. Versioned release evidence archive.
 3. Production rollout runbook.
 
 Exit criteria:
+
 1. Deterministic release with reproducible artifacts.
 2. Install/runbook validated in clean environment.
 

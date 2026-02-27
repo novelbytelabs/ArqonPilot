@@ -5,6 +5,8 @@ This runbook defines the standard operating procedure for running Arqon Pilot ac
 ## 1. Environment Baseline
 
 - Rust toolchain pinned at `1.82.0` (`rust-toolchain.toml`).
+- Packaging lane Rust pinned at `1.88.0` (PyPI workflow only).
+- Protobuf/protoc pinned at `4.25.8` / `25.8`.
 - Pilot binary built from current repo:
   - `cargo build -p pilot`
 - Workspace state path:
@@ -38,7 +40,26 @@ This runbook defines the standard operating procedure for running Arqon Pilot ac
 - `pilot create feature <name> --dry-run`
 - `pilot know record --title ... --context ... --decision ...`
 
-## 3. Controlled Apply Workflow
+## 3. Dashboard-First Operational Flow
+
+Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
+
+1. `Dashboard -> System Status`
+- Run `Policy`, `Hook Policy`, and `Gate` before branch/release operations.
+- Use `Push Safe` instead of raw push for root-cause summaries.
+- Use `Start Bus` / `Stop Bus` / `Bus Status` for ArqonBus control.
+
+2. `Dashboard` quick cards
+- Oracle + Heal quick actions for fast triage and plan/repair loops.
+- Branch + Multi quick actions for cohort branch and status operations.
+
+3. `Operations Timeline` + `Operation Detail`
+- Filter failures, inspect payloads, and use artifact paths for one-click debugging.
+
+4. `Live Event Stream`
+- Pinned at the bottom of Dashboard for long-running monitoring without losing context.
+
+## 4. Controlled Apply Workflow
 
 Apply mode is allowed only for explicitly tagged pilot cohorts.
 
@@ -59,7 +80,7 @@ Apply mode is allowed only for explicitly tagged pilot cohorts.
 - repo tests and lint
 - inspect `~/.pilot/audit.jsonl` and `~/.pilot/reports/*.json`
 
-## 4. Rollback Procedure
+## 5. Rollback Procedure
 
 Preferred rollback:
 - `git revert <bad_commit_sha>`
@@ -72,7 +93,7 @@ After rollback:
 Avoid:
 - history rewriting on shared branches (`reset --hard`, force-push) except emergency local recovery with explicit approval.
 
-## 5. Incident Triage
+## 6. Incident Triage
 
 When a multi-repo operation fails:
 1. open latest report artifact from `~/.pilot/reports/`
@@ -80,7 +101,7 @@ When a multi-repo operation fails:
 3. re-run command scoped to failed repo only
 4. record root cause and corrective action in `pilot know`
 
-## 6. Release Candidate Gate (v1-rc1)
+## 7. Release Candidate Gate (v1-rc1)
 
 Before cutting `pilot-v1-rc1`:
 1. `cargo check -p pilot --locked`
