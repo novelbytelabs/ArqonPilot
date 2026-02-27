@@ -123,7 +123,19 @@ summarize_result() {
   end_ts="$(date +%s)"
   duration="$((end_ts - START_TS))"
   warn_count="$(count_matches 'warning:' "$LOG_FILE")"
-  err_count="$(count_matches '(^error:|^fatal:| failed |Could not resolve host|Temporary failure in name resolution|Authentication failed|HTTP/2 401|HTTP/2 403)' "$LOG_FILE")"
+  err_count="$(count_matches '(^error:|^fatal:| failed |Could not resolve host|Temporary failure in name resolution|Authentication failed|HTTP/2 403)' "$LOG_FILE")"
+  # GitHub HTTPS push commonly logs an initial HTTP/2 401 challenge before credential retry.
+  # Treat it as expected when push actually succeeded.
+  if [[ "$push_rc" -eq 0 ]]; then
+    local auth401_count
+    auth401_count="$(count_matches 'HTTP/2 401' "$LOG_FILE")"
+    if [[ "$auth401_count" -gt 0 ]]; then
+      err_count="$((err_count - auth401_count))"
+      if [[ "$err_count" -lt 0 ]]; then
+        err_count=0
+      fi
+    fi
+  fi
 
   before_state="$(divergence_for "${REMOTE}/${BRANCH}" "${BRANCH}")"
   after_state="$(divergence_for "${REMOTE}/${BRANCH}" "${BRANCH}")"
