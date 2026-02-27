@@ -1657,10 +1657,14 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
       <div class="card">
         <h3>Oracle + Heal Quick Ops</h3>
+        <div class="chip-row">
+          <span id="dash-oracle-chip" class="chip neutral">Oracle: idle</span>
+          <span id="dash-heal-chip" class="chip neutral">Heal: idle</span>
+        </div>
         <input id="dash-oracle-query" placeholder="where is branch sync implemented?" />
         <div class="row">
-          <button class="btn secondary" onclick="oracleScan()">Oracle Scan</button>
-          <button class="btn secondary" onclick="dashOracleQuery()">Oracle Query</button>
+          <button id="dash-oracle-scan-btn" class="btn secondary" onclick="dashOracleScan()">Oracle Scan</button>
+          <button id="dash-oracle-query-btn" class="btn secondary" onclick="dashOracleQuery()">Oracle Query</button>
         </div>
         <div class="row">
           <input id="dash-heal-log-file" placeholder="test_output.json" value="test_output.json" />
@@ -1671,8 +1675,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <input id="dash-heal-max-files" placeholder="5" value="5" />
         </div>
         <div class="row">
-          <button class="btn secondary" onclick="dashHealPlan()">Heal Plan</button>
-          <button class="btn" onclick="dashHealRun()">Heal Run</button>
+          <button id="dash-heal-plan-btn" class="btn secondary" onclick="dashHealPlan()">Heal Plan</button>
+          <button id="dash-heal-run-btn" class="btn" onclick="dashHealRun()">Heal Run</button>
         </div>
       </div>
 
@@ -2015,6 +2019,12 @@ const dashDriftChip = document.getElementById('dash-drift-chip');
 const dashBusChip = document.getElementById('dash-bus-chip');
 const dashGateChip = document.getElementById('dash-gate-chip');
 const dashPushChip = document.getElementById('dash-push-chip');
+const dashOracleChip = document.getElementById('dash-oracle-chip');
+const dashHealChip = document.getElementById('dash-heal-chip');
+const dashOracleScanBtn = document.getElementById('dash-oracle-scan-btn');
+const dashOracleQueryBtn = document.getElementById('dash-oracle-query-btn');
+const dashHealPlanBtn = document.getElementById('dash-heal-plan-btn');
+const dashHealRunBtn = document.getElementById('dash-heal-run-btn');
 const multiDagChip = document.getElementById('multi-dag-chip');
 const multiApplyChip = document.getElementById('multi-apply-chip');
 const multiDagBtn = document.getElementById('multi-dag-btn');
@@ -2409,10 +2419,24 @@ function oracleQuery() {
   });
 }
 
+function dashOracleScan() {
+  run('pilot.oracle.scan', {}, {
+    label: 'Oracle',
+    chip: dashOracleChip,
+    buttons: [dashOracleScanBtn, dashOracleQueryBtn],
+    runningLabel: 'Running...'
+  });
+}
+
 function dashOracleQuery() {
   run('pilot.oracle.query', {
     query: document.getElementById('dash-oracle-query').value,
     cli: true
+  }, {
+    label: 'Oracle',
+    chip: dashOracleChip,
+    buttons: [dashOracleScanBtn, dashOracleQueryBtn],
+    runningLabel: 'Running...'
   });
 }
 
@@ -2465,11 +2489,21 @@ function dashHealPayload(planOnly) {
 }
 
 function dashHealPlan() {
-  run('pilot.heal.run', dashHealPayload(true));
+  run('pilot.heal.run', dashHealPayload(true), {
+    label: 'Heal',
+    chip: dashHealChip,
+    buttons: [dashHealPlanBtn, dashHealRunBtn],
+    runningLabel: 'Running...'
+  });
 }
 
 function dashHealRun() {
-  run('pilot.heal.run', dashHealPayload(false));
+  run('pilot.heal.run', dashHealPayload(false), {
+    label: 'Heal',
+    chip: dashHealChip,
+    buttons: [dashHealPlanBtn, dashHealRunBtn],
+    runningLabel: 'Running...'
+  });
 }
 
 async function oracleLoadReports() {
