@@ -1,5 +1,4 @@
 use crate::agorg::{self, AgorgStore};
-use uuid::Uuid;
 use crate::bus::{send_command_once, BusBridgeConfig};
 use axum::extract::{Query, State};
 use axum::http::{HeaderValue, StatusCode};
@@ -24,6 +23,7 @@ use tokio::process::Command as TokioCommand;
 use tokio::sync::{broadcast, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use uuid::Uuid;
 
 const FAVICON_ICO: &[u8] = include_bytes!("../assets/favicon.ico");
 
@@ -143,6 +143,14 @@ struct AgorgDiscoverRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct AgorgBatchCreateRequest {
+    pub destination: String,
+    pub name: String,
+    pub siblings: Vec<String>,
+    pub use_git: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct AgorgTreeQuery {
     root: Option<String>,
 }
@@ -237,6 +245,13 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         agorg_store,
     });
 
+    if state.allow_mutations {
+        let store = state.agorg_store.clone();
+        tokio::spawn(async move {
+            let _ = store.ensure_managed_db().await;
+        });
+    }
+
     let app = Router::new()
         .route("/", get(index))
         .route("/api/command", post(run_command))
@@ -247,6 +262,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/codex/contract", get(get_codex_contract))
         .route("/api/agorg/list", get(api_agorg_list))
         .route("/api/agorg/active", get(api_agorg_active))
+        .route("/api/agorg/batch-create", post(api_agorg_batch_create))
         .route("/api/agorg/create", post(api_agorg_create))
         .route("/api/agorg/create_project", post(api_agorg_create_project))
         .route("/api/agorg/update", post(api_agorg_update))
@@ -257,7 +273,10 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/agorg/link", post(api_agorg_link))
         .route("/api/agorg/scan_master", post(api_agorg_scan_master))
         .route("/api/agorg/upgrade_ago", post(api_agorg_upgrade_ago))
-        .route("/api/agorg/edit_relationship", post(api_agorg_edit_relationship))
+        .route(
+            "/api/agorg/edit_relationship",
+            post(api_agorg_edit_relationship),
+        )
         .route("/api/fs/pick-directory", post(api_fs_pick_directory))
         .route("/api/dependencies/run", post(run_dependency_action))
         .route("/api/dependencies/logs", get(get_dependency_logs))
@@ -424,6 +443,28 @@ async fn api_agorg_list(State(state): State<Arc<UiState>>) -> Response {
 async fn api_agorg_active(State(state): State<Arc<UiState>>) -> Response {
     match state.agorg_store.get_active_agorg().await {
         Ok(active) => Json(json!({"ok": true, "active": active})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn api_agorg_batch_create(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgBatchCreateRequest>,
+) -> Response {
+    if !state.allow_mutations {
+        return error_response(StatusCode::FORBIDDEN, "Creation blocked in read-only mode");
+    }
+    match state
+        .agorg_store
+        .init_agorg_batch(
+            Path::new(&req.destination),
+            &req.name,
+            &req.siblings,
+            req.use_git,
+        )
+        .await
+    {
+        Ok(agorg) => Json(json!({ "ok": true, "agorg": agorg })).into_response(),
         Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     }
 }
@@ -733,6 +774,11 @@ async fn resolve_agorg_ref_optional(
     }
 }
 
+fn bus_shim_running(stdout: &str, stderr: &str) -> bool {
+    let combined = format!("{stdout}\n{stderr}");
+    combined.contains("RUNNING")
+}
+
 async fn run_dependency_action(
     State(state): State<Arc<UiState>>,
     Json(req): Json<DependencyActionRequest>,
@@ -741,7 +787,20 @@ async fn run_dependency_action(
     if action.is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "action is required");
     }
-    if matches!(action, "repair" | "db-start" | "db-stop") && !state.allow_mutations {
+    if matches!(
+        action,
+        "repair"
+            | "db-start"
+            | "db-stop"
+            | "db-restart"
+            | "bus-start"
+            | "bus-stop"
+            | "bus-restart"
+            | "services-start"
+            | "services-stop"
+            | "services-restart"
+    ) && !state.allow_mutations
+    {
         return error_response(StatusCode::FORBIDDEN, "action blocked in read-only UI mode");
     }
     if action == "db-status" {
@@ -885,6 +944,166 @@ async fn run_dependency_action(
             }
         };
     }
+    if action == "db-restart" {
+        return match state.agorg_store.stop_managed_db().await {
+            Ok(_) => match state.agorg_store.ensure_managed_db().await {
+                Ok(Some(status)) => {
+                    let ok = status.running;
+                    let body = json!({
+                        "ok": ok,
+                        "action": action,
+                        "exit_code": 0,
+                        "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
+                        "stderr": ""
+                    });
+                    let _ = state.events.send(json!({
+                        "source": "dependency_action",
+                        "action": action,
+                        "success": ok,
+                        "exit_code": 0
+                    }));
+                    Json(body).into_response()
+                }
+                Ok(None) => {
+                    let body = json!({
+                        "ok": true,
+                        "action": action,
+                        "exit_code": 0,
+                        "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
+                        "stderr": ""
+                    });
+                    let _ = state.events.send(json!({
+                        "source": "dependency_action",
+                        "action": action,
+                        "success": true,
+                        "exit_code": 0
+                    }));
+                    Json(body).into_response()
+                }
+                Err(err) => {
+                    let _ = state.events.send(json!({
+                        "source": "dependency_action",
+                        "action": action,
+                        "success": false,
+                        "exit_code": 1,
+                        "error": err.to_string()
+                    }));
+                    error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string())
+                }
+            },
+            Err(err) => {
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": false,
+                    "exit_code": 1,
+                    "error": err.to_string()
+                }));
+                error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string())
+            }
+        };
+    }
+    if action == "services-status" {
+        let bus = run_local_script(
+            "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
+        )
+        .await;
+        let db = state.agorg_store.managed_db_status().await;
+        return match (bus, db) {
+            (Ok((bus_code, bus_out, bus_err)), Ok(db_status_opt)) => {
+                let bus_running = bus_code == 0 && bus_shim_running(&bus_out, &bus_err);
+                let (db_running, db_stdout) = match db_status_opt {
+                    Some(status) => (
+                        status.running,
+                        serde_json::to_string_pretty(&status).unwrap_or_default(),
+                    ),
+                    None => (
+                        true,
+                        "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set".to_string(),
+                    ),
+                };
+                let ok = bus_running && db_running;
+                let body = json!({
+                    "ok": ok,
+                    "action": action,
+                    "exit_code": if ok { 0 } else { 1 },
+                    "bus_running": bus_running,
+                    "db_running": db_running,
+                    "stdout": format!("Bus:\n{}\n{}\n\nDB:\n{}", bus_out, bus_err, db_stdout),
+                    "stderr": ""
+                });
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": ok,
+                    "exit_code": if ok { 0 } else { 1 },
+                    "bus_running": bus_running,
+                    "db_running": db_running
+                }));
+                Json(body).into_response()
+            }
+            (Err(err), _) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+            (_, Err(err)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+        };
+    }
+    if matches!(
+        action,
+        "services-start" | "services-stop" | "services-restart"
+    ) {
+        let bus_cmd = match action {
+            "services-start" => "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh start && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
+            "services-stop" => "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh stop && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
+            _ => "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh stop || true; PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh start && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
+        };
+        let bus_result = run_local_script(bus_cmd).await;
+        let db_result = match action {
+            "services-start" => state.agorg_store.ensure_managed_db().await,
+            "services-stop" => state.agorg_store.stop_managed_db().await,
+            _ => {
+                let _ = state.agorg_store.stop_managed_db().await;
+                state.agorg_store.ensure_managed_db().await
+            }
+        };
+        return match (bus_result, db_result) {
+            (Ok((bus_code, bus_out, bus_err)), Ok(db_status_opt)) => {
+                let bus_running = bus_code == 0 && bus_shim_running(&bus_out, &bus_err);
+                let (db_running, db_stdout) = match db_status_opt {
+                    Some(status) => (
+                        status.running,
+                        serde_json::to_string_pretty(&status).unwrap_or_default(),
+                    ),
+                    None => (
+                        true,
+                        "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set".to_string(),
+                    ),
+                };
+                let ok = match action {
+                    "services-stop" => !bus_running && !db_running,
+                    _ => bus_running && db_running,
+                };
+                let body = json!({
+                    "ok": ok,
+                    "action": action,
+                    "exit_code": if ok { 0 } else { 1 },
+                    "bus_running": bus_running,
+                    "db_running": db_running,
+                    "stdout": format!("Bus:\n{}\n{}\n\nDB:\n{}", bus_out, bus_err, db_stdout),
+                    "stderr": ""
+                });
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": ok,
+                    "exit_code": if ok { 0 } else { 1 },
+                    "bus_running": bus_running,
+                    "db_running": db_running
+                }));
+                Json(body).into_response()
+            }
+            (Err(err), _) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+            (_, Err(err)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+        };
+    }
 
     let result = match (action, req.json) {
         ("policy", true) => run_local_script("./scripts/verify_toolchain_policy.sh --json").await,
@@ -902,6 +1121,9 @@ async fn run_dependency_action(
         }
         ("bus-stop", _) => {
             run_local_script("PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh stop && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status").await
+        }
+        ("bus-restart", _) => {
+            run_local_script("PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh stop || true; PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh start && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status").await
         }
         ("bus-status", _) => {
             run_local_script("PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status").await
@@ -1739,6 +1961,15 @@ fn spawn_bus_telemetry_listener(bus: BusBridgeConfig, tx: broadcast::Sender<Valu
                     last_error = err.to_string();
                     last_emit = std::time::Instant::now();
                 }
+
+                // Attempt auto-start if mutations allowed and it's been down for a few loops
+                if let Ok(_) = std::env::var("PILOT_AUTO_START_BUS") {
+                    // We would ideally call into a bus management system here
+                    // For now, we spawn the 'pilot bus start' command as a repair attempt
+                    let _ = tokio::process::Command::new("pilot")
+                        .args(["bus", "start"])
+                        .spawn();
+                }
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
@@ -2239,16 +2470,39 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .dep-ok { color: #b6f7cb; }
     .dep-fail { color: #ffb2b2; }
     .muted { color: var(--muted); margin-top: 7px; }
-    .three-panel-layout { display: flex; gap: 20px; align-items: flex-start; }
-    .panel-left { flex: 1; min-width: 0; }
-    .panel-center { flex: 1.5; min-width: 0; border-left: 1px solid #2f436f; border-right: 1px solid #2f436f; padding: 0 20px; }
-    .panel-right { flex: 1; min-width: 0; }
+    .three-panel-layout { display: flex; flex-direction: column; gap: 24px; }
+    .panel-left, .panel-center, .panel-right { width: 100%; }
+    .panel-center { border-top: 1px solid #2f436f; border-bottom: 1px solid #2f436f; padding: 24px 0; }
     .tree-node { cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: background 0.2s; }
     .tree-node:hover { background: rgba(109, 125, 255, 0.15); }
     .tree-node.selected { background: rgba(109, 125, 255, 0.3); border: 1px solid #6a7dff; }
     .tree-node.agorg { color: #9dc7ff; font-weight: 700; }
     .tree-node.ago { color: #b6f7cb; }
     .tree-node.none { color: #8ca0cf; font-style: italic; }
+    .sub-tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid #2d426c; padding-bottom: 4px; }
+    .sub-tab { background: none; border: none; color: #8ca0cf; font-size: 0.8rem; font-weight: 700; cursor: pointer; padding: 4px 8px; border-bottom: 2px solid transparent; }
+    .sub-tab.active { color: #6a7dff; border-bottom-color: #6a7dff; }
+    .sub-panel { display: none; }
+    .sub-panel.active { display: block; }
+    .batch-list { font-family: monospace; min-height: 80px; padding: 8px; background: #1a2a47; color: #b6f7cb; border: 1px solid #2d426c; border-radius: 4px; }
+    
+    /* Hero Dropdown */
+    .agorg-scope-container { position: relative; display: inline-block; }
+    .agorg-dropdown { 
+      position: absolute; top: 100%; right: 0; min-width: 280px; 
+      background: #1a2a47; border: 1px solid #2d426c; border-radius: 8px; 
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 1000; 
+      display: none; max-height: 400px; overflow-y: auto; padding: 8px 0;
+    }
+    .agorg-dropdown.active { display: block; }
+    .agorg-drop-item { 
+      padding: 8px 16px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+      border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem;
+    }
+    .agorg-drop-item:hover { background: #2d426c; color: #6a7dff; }
+    .agorg-drop-item .type { font-size: 0.7rem; opacity: 0.6; text-transform: uppercase; }
+    .agorg-drop-header { padding: 4px 16px; font-size: 0.7rem; color: #6a7dff; font-weight: 700; text-transform: uppercase; margin-top: 8px; }
+    .agorg-drop-header:first-child { margin-top: 0; }
     @media (max-width: 980px) {
       .grid, .status { grid-template-columns: 1fr; }
       h1 { font-size: 1.72rem; }
@@ -2265,10 +2519,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
         ArqonBus:
         <span id="bus-status-chip" class="bus-chip disconnected">DISCONNECTED</span>
       </div>
-      <button id="agorg-open-btn" class="status-right" type="button" title="Open AGOrg panel">
-        AGOrg:
-        <span id="agorg-status-chip" class="bus-chip agorg-chip none">NO ACTIVE</span>
-      </button>
+      <div class="agorg-scope-container">
+        <button id="agorg-open-btn" class="status-right" type="button" title="Quick scope dropdown / Click label for AGOrg tab" onclick="toggleAgorgDropdown(event)">
+          AGOrg:
+          <span id="agorg-status-chip" class="bus-chip agorg-chip none">NO ACTIVE</span>
+        </button>
+        <div id="agorg-hero-dropdown" class="agorg-dropdown">
+          <div class="agorg-drop-header">Loading registered repositories...</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -2309,10 +2568,16 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button class="btn" onclick="dashRunRepair()">Repair</button>
           <button class="btn secondary" onclick="dashStartBus()">Start Bus</button>
           <button class="btn secondary" onclick="dashStopBus()">Stop Bus</button>
+          <button class="btn secondary" onclick="dashRestartBus()">Restart Bus</button>
           <button class="btn secondary" onclick="dashBusStatus()">Bus Status</button>
           <button class="btn secondary" onclick="dashDbStatus()">DB Status</button>
           <button class="btn secondary" onclick="dashDbStart()">DB Start</button>
           <button class="btn secondary" onclick="dashDbStop()">DB Stop</button>
+          <button class="btn secondary" onclick="dashDbRestart()">DB Restart</button>
+          <button class="btn secondary" onclick="dashServicesStatus()">Services Status</button>
+          <button class="btn secondary" onclick="dashServicesStart()">Start Services</button>
+          <button class="btn secondary" onclick="dashServicesStop()">Stop Services</button>
+          <button class="btn secondary" onclick="dashServicesRestart()">Restart Services</button>
           <button class="btn secondary" onclick="dashExportEvidence()">Export Evidence</button>
         </div>
         <div class="row">
@@ -2631,44 +2896,8 @@ Recommended flow:
       <!-- Panel 1: Settings/CRUD -->
       <div class="panel-left">
         <div class="card">
-          <h3>Import AGOrg</h3>
-          <div class="helper">Onboard a Master Directory. All AGOs/AGOrgs must exist as siblings within this space.</div>
-          <label class="field-label" for="agorg-master">AGOrg Master Directory</label>
-          <div class="row">
-            <input id="agorg-master" placeholder="/path/to/parent/dir" value="/home/irbsurfer/Projects/arqon" />
-            <button class="btn secondary" onclick="browseMasterDir()">Browse…</button>
-          </div>
-          <label class="field-label" for="agorg-name">AGOrg Name</label>
-          <input id="agorg-name" placeholder="Arqon" value="Arqon" />
-          <label class="field-label" for="agorg-root">AGOrg Root Path (Active)</label>
-          <div class="row">
-            <input id="agorg-root" placeholder="/path/to/org/repo" value="/home/irbsurfer/Projects/arqon" />
-            <button class="btn secondary" onclick="browseAgorgRoot()">Browse…</button>
-          </div>
-          <label class="field-label" for="agorg-depth">Discovery Depth</label>
-          <input id="agorg-depth" placeholder="scan depth" value="4" />
-          <div class="row">
-            <label style="font-size:0.82rem;color:#a8b9e3;">
-              <input id="agorg-autoscan" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-              autoscan
-            </label>
-            <label style="font-size:0.82rem;color:#a8b9e3;">
-              <input id="agorg-import" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-              import discovery
-            </label>
-            <label style="font-size:0.82rem;color:#a8b9e3;">
-              <input id="agorg-default" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-              set default scope
-            </label>
-          </div>
-          <div class="row">
-            <button class="btn" onclick="agorgCreateProject()">Import</button>
-            <button class="btn secondary" onclick="agorgUpdate()">Update</button>
-            <button class="btn secondary" onclick="agorgDelete()">Delete</button>
-          </div>
-        </div>
-        <div class="card">
-          <h3>Registry and Scope</h3>
+          <h3>Saved AGOrgs</h3>
+          <div class="helper">Manage global scope. Switch between known AGOrg contexts.</div>
           <div class="row">
             <button class="btn secondary" onclick="agorgList()">List Saved</button>
             <button class="btn secondary" onclick="agorgShowActive()">Active Scope</button>
@@ -2677,6 +2906,79 @@ Recommended flow:
           <div class="row">
             <input id="agorg-use-id" placeholder="UUID or name" />
             <button class="btn secondary" onclick="agorgUse()">Switch</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 16px;">
+          <div class="sub-tabs">
+            <button class="sub-tab active" onclick="activateSubPanel('agorg-import-panel', this)">Import Existing</button>
+            <button class="sub-tab" onclick="activateSubPanel('agorg-create-panel', this)">Create New</button>
+          </div>
+
+          <!-- Sub-Panel: Import -->
+          <div id="agorg-import-panel" class="sub-panel active">
+            <h3>Import AGOrg</h3>
+            <div class="helper">Onboard an existing Master Directory. All AGOs/AGOrgs must exist as siblings within this space.</div>
+            <label class="field-label" for="agorg-master">AGOrg Master Directory</label>
+            <div class="row">
+              <input id="agorg-master" placeholder="/path/to/parent/dir" value="/home/irbsurfer/Projects/arqon" />
+              <button class="btn secondary" onclick="browseAgorgMaster()">Browse…</button>
+            </div>
+            <label class="field-label" for="agorg-name">AGOrg Name</label>
+            <input id="agorg-name" placeholder="Arqon" value="Arqon" />
+            <label class="field-label" for="agorg-root">Parent AGOrg Root Path (Active)</label>
+            <div class="row">
+              <input id="agorg-root" placeholder="/path/to/org/repo" value="/home/irbsurfer/Projects/arqon" />
+              <button class="btn secondary" onclick="browseAgorgRoot()">Browse…</button>
+            </div>
+            <label class="field-label" for="agorg-depth">Discovery Depth</label>
+            <input id="agorg-depth" placeholder="scan depth" value="4" />
+            <div class="row">
+              <label style="font-size:0.82rem;color:#a8b9e3;">
+                <input id="agorg-autoscan" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+                autoscan
+              </label>
+              <label style="font-size:0.82rem;color:#a8b9e3;">
+                <input id="agorg-import" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+                import discovery
+              </label>
+              <label style="font-size:0.82rem;color:#a8b9e3;">
+                <input id="agorg-default" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+                set default scope
+              </label>
+            </div>
+            <div class="row">
+              <button class="btn" onclick="agorgCreateProject()">Import</button>
+              <button class="btn secondary" onclick="agorgUpdate()">Update</button>
+              <button class="btn secondary" onclick="agorgDelete()">Delete</button>
+            </div>
+          </div>
+
+          <!-- Sub-Panel: Create -->
+          <div id="agorg-create-panel" class="sub-panel">
+            <h3>Initialize New AGOrg</h3>
+            <div class="helper">Create a new Master Directory and optionally instantiate several AGOs at once.</div>
+            <label class="field-label" for="agorg-create-dest">Destination Parent Folder</label>
+            <div class="row">
+              <input id="agorg-create-dest" placeholder="/home/irbsurfer/Projects/arqon" value="/home/irbsurfer/Projects/arqon" />
+              <button class="btn secondary" onclick="browseAgorgCreateDest()">Browse…</button>
+            </div>
+            <label class="field-label" for="agorg-create-name">New Master Directory Name</label>
+            <input id="agorg-create-name" placeholder="MyNewOrg" />
+            
+            <label class="field-label" for="agorg-create-siblings">Sibling AGOs to Create (one per line)</label>
+            <textarea id="agorg-create-siblings" class="batch-list" placeholder="Core&#10;Pilot&#10;Sense"></textarea>
+            
+            <div class="row" style="margin-top:10px;">
+              <label style="font-size:0.82rem;color:#a8b9e3;">
+                <input id="agorg-create-git" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+                git init each
+              </label>
+            </div>
+            
+            <div class="row">
+              <button class="btn" onclick="agorgBatchCreate()">Batch Create & Register</button>
+            </div>
           </div>
         </div>
       </div>
@@ -2919,8 +3221,10 @@ let auditCache = [];
 let streamPaused = false;
 let streamHandle = null;
 let latestCodexContractId = '';
+let currentTab = 'dashboard';
 
 function activatePanel(tabName) {
+  currentTab = tabName;
   for (const t of document.querySelectorAll('.tab')) t.classList.remove('active');
   for (const p of document.querySelectorAll('.panel')) p.classList.remove('active');
   const panel = document.getElementById(tabName);
@@ -2933,11 +3237,98 @@ for (const btn of document.querySelectorAll('.tab')) {
   btn.addEventListener('click', () => activatePanel(btn.dataset.tab));
 }
 
-if (agorgOpenBtn) {
-  agorgOpenBtn.addEventListener('click', () => {
-    activatePanel('agorg');
-    agorgShowActive();
+// Hero AGOrg Dropdown Logic
+async function toggleAgorgDropdown(event) {
+  event.stopPropagation();
+  const dropdown = document.getElementById('agorg-hero-dropdown');
+  const isActive = dropdown.classList.contains('active');
+  
+  // Close all other dropdowns if any
+  document.querySelectorAll('.agorg-dropdown').forEach(d => d.classList.remove('active'));
+  
+  if (!isActive) {
+    dropdown.classList.add('active');
+    await loadAgorgQuickNav();
+  }
+}
+
+async function loadAgorgQuickNav() {
+  const dropdown = document.getElementById('agorg-hero-dropdown');
+  dropdown.innerHTML = '<div class="agorg-drop-header">Loading registered repositories...</div>';
+  
+  try {
+    const agRes = await fetch('/api/agorg/list');
+    const agData = agRes.ok ? await agRes.json() : [];
+    
+    let html = '<div class="agorg-drop-item" style="font-weight:700;color:#6a7dff;" onclick="activatePanel(\'agorg\'); agorgShowActive();">⚙ Manage AGOrgs / Panel</div>';
+    
+    if (agData && agData.length > 0) {
+      html += '<div class="agorg-drop-header">AGOrgs</div>';
+      agData.forEach(ag => {
+        html += `<div class="agorg-drop-item" onclick="switchAgorgScope('${ag.id}')">
+          <span>${ag.name}</span>
+          <span class="type">ORG</span>
+        </div>`;
+      });
+    }
+
+    // Attempt to list AGOs if available in the database
+    const treeRes = await fetch('/api/agorg/tree');
+    const treeData = treeRes.ok ? await treeRes.json() : [];
+    if (treeData && treeData.length > 0) {
+      html += '<div class="agorg-drop-header">Sibling AGOs (Active Tree)</div>';
+      const agos = [];
+      const walk = (node) => {
+        (node.agos || []).forEach(a => agos.push(a));
+        (node.child_agorgs || []).forEach(walk);
+      };
+      treeData.forEach(walk);
+      // Remove duplicates by ID
+      const seen = new Set();
+      const uniqueAgos = agos.filter(a => {
+        if (seen.has(a.id)) return false;
+        seen.add(a.id);
+        return true;
+      });
+      uniqueAgos.forEach(ago => {
+        html += `<div class="agorg-drop-item" onclick="switchAgorgScope('${ago.id}')">
+          <span>${ago.name}</span>
+          <span class="type">AGO</span>
+        </div>`;
+      });
+    }
+    
+    dropdown.innerHTML = html || '<div class="agorg-drop-header">No registered repositories found.</div>';
+  } catch (err) {
+    console.error("QuickNav Error:", err);
+    dropdown.innerHTML = `<div class="agorg-drop-header" style="color:#ff6b6b;">Error: ${err.message}</div>`;
+  }
+}
+
+async function switchAgorgScope(id) {
+  const req = { id };
+  const res = await fetch('/api/agorg/use', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
   });
+  const data = await res.json();
+  refreshAgorgHeader();
+  if (currentTab === 'agorg') {
+    agorgTree();
+    agorgShowActive();
+  }
+  document.getElementById('agorg-hero-dropdown').classList.remove('active');
+}
+
+// Global click to close dropdown
+document.addEventListener('click', () => {
+  document.querySelectorAll('.agorg-dropdown').forEach(d => d.classList.remove('active'));
+});
+
+// Update the initial listener for agorgOpenBtn if it exists
+if (agorgOpenBtn) {
+  // It's now handled by inline onclick toggleAgorgDropdown(event)
 }
 
 function tags(v) { return v.split(',').map(s => s.trim()).filter(Boolean); }
@@ -3480,6 +3871,11 @@ async function depRun(action) {
     if (text.includes('RUNNING')) setBusStatus(true, 'bus shim reported RUNNING');
     if (text.includes('STOPPED')) setBusStatus(false, 'bus shim reported STOPPED');
   }
+  if (action === 'services-status' || action === 'services-start' || action === 'services-stop' || action === 'services-restart') {
+    if (typeof data.bus_running === 'boolean') {
+      setBusStatus(data.bus_running, data.bus_running ? 'service manager reported RUNNING' : 'service manager reported STOPPED');
+    }
+  }
   depActionOut.textContent = JSON.stringify(data, null, 2);
   if (depActionOutGlobal) {
     depActionOutGlobal.textContent = JSON.stringify(data, null, 2);
@@ -3500,14 +3896,22 @@ function updateDashChip(action, ok, data) {
   if (action === 'policy') setChip(dashPolicyChip, 'Policy: ' + suffix, level);
   if (action === 'hook-policy') setChip(dashHookChip, 'Hook: ' + suffix, level);
   if (action === 'drift') setChip(dashDriftChip, 'Drift: ' + suffix, level);
-  if (action === 'bus-status' || action === 'bus-start' || action === 'bus-stop') {
+  if (action === 'bus-status' || action === 'bus-start' || action === 'bus-stop' || action === 'bus-restart') {
     setChip(dashBusChip, 'Bus: ' + (ok ? 'RUNNING' : 'STOPPED'), ok ? 'ok' : 'fail');
   }
-  if (action === 'db-status' || action === 'db-start') {
+  if (action === 'db-status' || action === 'db-start' || action === 'db-restart') {
     setChip(dashDbChip, 'DB: ' + (ok ? 'RUNNING' : 'STOPPED'), ok ? 'ok' : 'fail');
   }
   if (action === 'db-stop') {
     setChip(dashDbChip, 'DB: ' + (ok ? 'STOPPED' : 'RUNNING'), ok ? 'ok' : 'fail');
+  }
+  if (action === 'services-status' || action === 'services-start' || action === 'services-stop' || action === 'services-restart') {
+    if (typeof data.bus_running === 'boolean') {
+      setChip(dashBusChip, 'Bus: ' + (data.bus_running ? 'RUNNING' : 'STOPPED'), data.bus_running ? 'ok' : 'fail');
+    }
+    if (typeof data.db_running === 'boolean') {
+      setChip(dashDbChip, 'DB: ' + (data.db_running ? 'RUNNING' : 'STOPPED'), data.db_running ? 'ok' : 'fail');
+    }
   }
   if (action === 'gate') setChip(dashGateChip, 'Gate: ' + suffix, level);
   if (action === 'push') setChip(dashPushChip, 'Push: ' + suffix, level);
@@ -3587,7 +3991,7 @@ async function agorgScanMaster(path) {
 }
 
 function renderHierarchy(items) {
-  const container = document.getElementById('agorg-hierarchy-view');
+  const container = document.getElementById('agorg-hierarchy-tree');
   container.innerHTML = '';
   items.forEach(item => {
     const el = document.createElement('div');
@@ -3774,6 +4178,15 @@ async function agorgTree() {
   out.textContent = text;
 }
 
+function activateSubPanel(panelId, btn) {
+  const parent = btn.parentElement;
+  Array.from(parent.querySelectorAll('.sub-tab')).forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const card = parent.parentElement;
+  Array.from(card.querySelectorAll('.sub-panel')).forEach(p => p.classList.remove('active'));
+  document.getElementById(panelId).classList.add('active');
+}
+
 async function pickDirectory(startDir) {
   const res = await fetch('/api/fs/pick-directory', {
     method: 'POST',
@@ -3785,13 +4198,53 @@ async function pickDirectory(startDir) {
 
 async function browseAgorgRoot() {
   const input = document.getElementById('agorg-root');
+  const nameInput = document.getElementById('agorg-name');
   const data = await pickDirectory(input.value);
   if (data && data.ok && data.path) {
     input.value = data.path;
+    if (!nameInput.value.trim()) {
+      const cleanPath = data.path.replace(/\/$/, '');
+      const parts = cleanPath.split('/');
+      nameInput.value = parts[parts.length - 1] || 'Arqon';
+    }
   } else {
     const text = JSON.stringify(data, null, 2);
     agorgOut.textContent = text;
     out.textContent = text;
+  }
+}
+
+async function browseAgorgCreateDest() {
+  const input = document.getElementById('agorg-create-dest');
+  const data = await pickDirectory(input.value);
+  if (data && data.ok && data.path) {
+    input.value = data.path;
+  }
+}
+
+async function agorgBatchCreate() {
+  const req = {
+    destination: document.getElementById('agorg-create-dest').value.trim(),
+    name: document.getElementById('agorg-create-name').value.trim(),
+    siblings: document.getElementById('agorg-create-siblings').value.split('\n').map(s => s.trim()).filter(s => !!s),
+    use_git: !!document.getElementById('agorg-create-git').checked
+  };
+  if (!req.destination || !req.name) {
+    alert("Destination and Name are required.");
+    return;
+  }
+  const res = await fetch('/api/agorg/batch-create', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+  if (data.ok) {
+    agorgList();
+    agorgTree();
   }
 }
 
@@ -3910,10 +4363,16 @@ function dashRunGate() { depRun('gate'); }
 function dashRunRepair() { depRun('repair'); }
 function dashStartBus() { depRun('bus-start'); }
 function dashStopBus() { depRun('bus-stop'); }
+function dashRestartBus() { depRun('bus-restart'); }
 function dashBusStatus() { depRun('bus-status'); }
 function dashDbStatus() { depRun('db-status'); }
 function dashDbStart() { depRun('db-start'); }
 function dashDbStop() { depRun('db-stop'); }
+function dashDbRestart() { depRun('db-restart'); }
+function dashServicesStatus() { depRun('services-status'); }
+function dashServicesStart() { depRun('services-start'); }
+function dashServicesStop() { depRun('services-stop'); }
+function dashServicesRestart() { depRun('services-restart'); }
 function dashRunPush() { depRun('push'); }
 
 async function dashExportEvidence() {
@@ -4045,159 +4504,6 @@ async function loadHistory() {
   renderOperationDetail();
 }
 
-async function agorgScanMaster(path) {
-  if (!path) path = document.getElementById('agorg-master').value.trim();
-  if (!path) return;
-  
-  const res = await fetch('/api/agorg/scan_master', {
-    method: 'POST',
-    headers: {'content-type':'application/json'},
-    body: JSON.stringify({ path })
-  });
-  const data = await res.json();
-  if (data.ok) {
-    renderHierarchy(data.items);
-  } else {
-    agorgOut.textContent = JSON.stringify(data, null, 2);
-  }
-}
-
-function renderHierarchy(items) {
-  const container = document.getElementById('agorg-hierarchy-view');
-  container.innerHTML = '';
-  items.forEach(item => {
-    const el = document.createElement('div');
-    el.className = 'tree-node';
-    if (item.kind === 'agorg') el.classList.add('node-agorg');
-    else if (item.kind === 'ago') el.classList.add('node-ago');
-    
-    el.innerHTML = `
-      <span class="icon">${item.kind === 'agorg' ? '🏢' : item.kind === 'ago' ? '📦' : '📁'}</span>
-      <span class="name" title="${item.path}">${item.name}</span>
-      <span class="status-dot ${item.is_registered ? 'registered' : 'unregistered'}" title="${item.is_registered ? 'Registered in Arqon' : 'Unregistered'}"></span>
-    `;
-    
-    el.onclick = () => {
-      document.querySelectorAll('.tree-node').forEach(n => n.classList.remove('selected'));
-      el.classList.add('selected');
-      // Load into Panel 1
-      document.getElementById('agorg-name').value = item.name;
-      document.getElementById('agorg-root').value = item.path;
-      // If it's none/unregistered, maybe show upgrade button?
-      if (!item.is_registered) {
-        agorgOut.textContent = `Directory: ${item.name}\nPath: ${item.path}\nStatus: Unregistered\nTip: Click "Import AGOrg" to register this as an Arqon entry.`;
-      }
-    };
-    
-    // Drag and Drop (Linkage)
-    el.draggable = true;
-    el.ondragstart = (e) => {
-      e.dataTransfer.setData('text/plain', JSON.stringify(item));
-    };
-    el.ondragover = (e) => { e.preventDefault(); el.classList.add('drag-over'); };
-    el.ondragleave = () => { el.classList.remove('drag-over'); };
-    el.ondrop = (e) => {
-      e.preventDefault();
-      el.classList.remove('drag-over');
-      const dragged = JSON.parse(e.dataTransfer.getData('text/plain'));
-      if (dragged.path === item.path) return;
-      
-      if (confirm(`Link "${dragged.name}" as a child of "${item.name}"?`)) {
-        agorgEditRelationship(item.path, null, [dragged.name]); // Simplified for now
-      }
-    };
-    
-    container.appendChild(el);
-  });
-}
-
-async function agorgEditRelationship(path, parent, children) {
-  const res = await fetch('/api/agorg/edit_relationship', {
-    method: 'POST',
-    headers: {'content-type':'application/json'},
-    body: JSON.stringify({ path, parent, children })
-  });
-  const data = await res.json();
-  agorgOut.textContent = JSON.stringify(data, null, 2);
-}
-
-async function agorgUpgradeAgo(path, name) {
-  const res = await fetch('/api/agorg/upgrade_ago', {
-    method: 'POST',
-    headers: {'content-type':'application/json'},
-    body: JSON.stringify({ path, name })
-  });
-  const data = await res.json();
-  agorgOut.textContent = JSON.stringify(data, null, 2);
-}
-
-async function agorgUpdate() {
-  const root = document.getElementById('agorg-root').value.trim();
-  const name = document.getElementById('agorg-name').value.trim();
-  const master = document.getElementById('agorg-master').value.trim();
-
-  // Find the ID from the active AGOrg or list
-  const activeRes = await fetch('/api/agorg/active');
-  const activeData = await activeRes.json();
-  if (!activeData.ok || !activeData.active) {
-    agorgOut.textContent = "Error: No active AGOrg selected for update";
-    return;
-  }
-  
-  const req = {
-    id: activeData.active.id,
-    name,
-    root,
-    master: master || null
-  };
-  
-  const res = await fetch('/api/agorg/update', {
-    method: 'POST',
-    headers: {'content-type':'application/json'},
-    body: JSON.stringify(req)
-  });
-  const data = await res.json();
-  agorgOut.textContent = JSON.stringify(data, null, 2);
-  refreshAgorgHeader();
-}
-
-async function agorgDelete() {
-  const activeRes = await fetch('/api/agorg/active');
-  const activeData = await activeRes.json();
-  if (!activeData.ok || !activeData.active) {
-    agorgOut.textContent = "Error: No active AGOrg selected for deletion";
-    return;
-  }
-  if (!confirm(`Are you sure you want to delete AGOrg "${activeData.active.name}" from the registry? (This does not delete files)`)) return;
-
-  const res = await fetch('/api/agorg/delete', {
-    method: 'POST',
-    headers: {'content-type':'application/json'},
-    body: JSON.stringify({ id: activeData.active.id })
-  });
-  const data = await res.json();
-  agorgOut.textContent = JSON.stringify(data, null, 2);
-  refreshAgorgHeader();
-}
-
-async function browseAgorgMaster() {
-  const start = document.getElementById('agorg-master').value || '/home';
-  const res = await fetch('/api/fs/pick-directory', {
-    method: 'POST',
-    headers: {'content-type':'application/json'},
-    body: JSON.stringify({ start_dir: start })
-  });
-  const data = await res.json();
-  if (data.ok && data.path) {
-    document.getElementById('agorg-master').value = data.path;
-    agorgScanMaster(data.path);
-  }
-}
-
-function clearAgorgResults() {
-  agorgOut.textContent = '(results cleared)';
-  agorgDiscoveryOut.textContent = '';
-}
 
 function attachStream() {
   streamHandle = new EventSource('/api/stream');
@@ -4241,7 +4547,7 @@ depLoadLogs();
 depRun('policy');
 depRun('hook-policy');
 depRun('drift');
-depRun('bus-status');
+depRun('services-status');
 refreshAgorgHeader();
 codexLoadContracts();
 setInterval(loadHistory, 30000);

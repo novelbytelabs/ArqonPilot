@@ -1903,11 +1903,31 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                     allow_mutations: args.ui_allow_mutations,
                     allowed_commands,
                 };
-                let bridge = tokio::spawn(async move { bus::run_bridge(&bridge_cfg).await });
+                let bridge: tokio::task::JoinHandle<Result<()>> = tokio::spawn(async move {
+                    let mut backoff_secs = 1u64;
+                    loop {
+                        match bus::run_bridge(&bridge_cfg).await {
+                            Ok(()) if bridge_cfg.once => return Ok(()),
+                            Ok(()) => {
+                                eprintln!(
+                                    "[pilot serve] bus bridge exited cleanly; reconnecting in {backoff_secs}s"
+                                );
+                            }
+                            Err(err) => {
+                                eprintln!(
+                                    "[pilot serve] bus bridge unavailable: {err}; retrying in {backoff_secs}s"
+                                );
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                        backoff_secs = (backoff_secs * 2).min(10);
+                    }
+                });
                 let ui = tokio::spawn(async move { serve_ui::run_ui_server(ui_cfg).await });
-                let (bridge_res, ui_res) = tokio::try_join!(bridge, ui)
-                    .map_err(|e| miette::miette!("Serve tasks failed: {e}"))?;
-                bridge_res?;
+                let ui_res = ui
+                    .await
+                    .map_err(|e| miette::miette!("UI task failed: {e}"))?;
+                bridge.abort();
                 ui_res?;
             } else {
                 bus::run_bridge(&cfg).await?;

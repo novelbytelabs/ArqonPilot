@@ -480,6 +480,49 @@ impl AgorgStore {
         Ok(())
     }
 
+    pub async fn init_agorg_batch(
+        &self,
+        dest_parent: &Path,
+        master_name: &str,
+        siblings: &[String],
+        use_git: bool,
+    ) -> Result<Agorg> {
+        let master_path = dest_parent.join(master_name);
+        fs::create_dir_all(&master_path).into_diagnostic()?;
+
+        // Primary AGOrg creation
+        let agorg = self
+            .create_agorg(master_name, &master_path, None, None, 4, true)
+            .await?;
+
+        for sib_name in siblings {
+            let sib_path = master_path.join(sib_name);
+            fs::create_dir_all(&sib_path).into_diagnostic()?;
+
+            if use_git {
+                let _ = tokio::process::Command::new("git")
+                    .arg("init")
+                    .current_dir(&sib_path)
+                    .spawn();
+            }
+
+            // Initialize pyproject.toml as an indicator
+            let pyproject = sib_path.join("pyproject.toml");
+            if !pyproject.exists() {
+                let content = format!(
+                    "[tool.arqon.relationships]\nparent = \"{}\"\nchildren = []\n",
+                    master_name
+                );
+                fs::write(pyproject, content).into_diagnostic()?;
+            }
+
+            self.upsert_ago(agorg.id, sib_name, &sib_path, Some(master_name), &[])
+                .await?;
+        }
+
+        Ok(agorg)
+    }
+
     async fn ensure_database_exists(&self) -> Result<()> {
         if self.dsn_override.is_none() {
             self.db.ensure_running().await?;
@@ -871,13 +914,13 @@ pub fn edit_relationship(
     let content = if pyproject_path.exists() {
         fs::read_to_string(&pyproject_path).into_diagnostic()?
     } else {
-        format!(
-            "[tool.arqon.relationships]\nparent = \"\"\nchildren = []\n"
-        )
+        format!("[tool.arqon.relationships]\nparent = \"\"\nchildren = []\n")
     };
 
-    let mut doc = content.parse::<toml_edit::DocumentMut>().into_diagnostic()?;
-    
+    let mut doc = content
+        .parse::<toml_edit::DocumentMut>()
+        .into_diagnostic()?;
+
     // Ensure tool.arqon.relationships exists
     if doc.get("tool").is_none() {
         doc.insert("tool", toml_edit::Item::Table(toml_edit::Table::new()));
@@ -888,7 +931,10 @@ pub fn edit_relationship(
     }
     let arqon = tool["arqon"].as_table_mut().unwrap();
     if arqon.get("relationships").is_none() {
-        arqon.insert("relationships", toml_edit::Item::Table(toml_edit::Table::new()));
+        arqon.insert(
+            "relationships",
+            toml_edit::Item::Table(toml_edit::Table::new()),
+        );
     }
     let rel = arqon["relationships"].as_table_mut().unwrap();
 
