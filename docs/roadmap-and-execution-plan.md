@@ -245,6 +245,7 @@ Progress update:
 
 1. Added `scripts/ui_smoke_check.sh` for Control Panel + API smoke validation (shim + serve + key endpoint/action checks).
 2. Updated operator/testing documentation to align with tab-level `Recommended Sequence` UX and explicit status-chip workflows.
+3. Added CI `ui-smoke` job in `.github/workflows/ci.yml` to run deterministic panel/API smoke checks on push/PR.
 
 ## Wave 15 (Production Release Gate)
 
