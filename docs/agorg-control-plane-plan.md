@@ -38,6 +38,23 @@ Arqon Pilot should run as a multi-organization control plane, not just a single-
    - Local Postgres only for current phase.
    - Pilot owns creation, migrations, and maintenance automatically.
 
+5. **Managed runtime contract (Wave 16 close)**
+   - Private runtime/data paths:
+     - `~/.arqon/pilot/db/data`
+     - `~/.arqon/pilot/run`
+     - `~/.arqon/pilot/db/postgres.log`
+   - Linux/macOS default endpoint: Unix socket in runtime dir.
+   - Windows default endpoint: local TCP with deterministic high-port fallback.
+   - Lifecycle is explicit and operator-visible:
+     - `pilot db ensure`
+     - `pilot db start`
+     - `pilot db stop`
+     - `pilot db status`
+   - Safety identity guard:
+     - DB must report `pilot_identity.system = arqon_pilot` before migrations.
+   - External DB override:
+     - `PILOT_AGORG_DATABASE_URL` disables managed startup and uses external DSN directly.
+
 ## Existing Contract (Already Present)
 
 The current relationship declaration exists in project metadata:

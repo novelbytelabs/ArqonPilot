@@ -86,6 +86,48 @@ pilot serve ... --ui-port 7788 --ui-allow-mutations
 pilot serve ... --ui-port 7788 --ui-allow-command pilot.branch.status --ui-allow-command pilot.multi.status
 ```
 
+## AGOrg Foundation (Wave 16)
+
+AGOrg state now uses a Pilot-managed isolated local Postgres runtime by default.
+
+Managed runtime defaults:
+- Pilot home: `~/.arqon/pilot/`
+- Data dir: `~/.arqon/pilot/db/data`
+- Runtime dir: `~/.arqon/pilot/run`
+- Log file: `~/.arqon/pilot/db/postgres.log`
+- DB name: `pilot_local`
+- Endpoint mode:
+  - Linux/macOS: Unix socket (`~/.arqon/pilot/run/postgres.sock`)
+  - Windows: local TCP (`127.0.0.1:9132` default with deterministic fallback)
+
+Managed DB commands:
+
+```bash
+pilot db ensure
+pilot db status
+pilot db start
+pilot db stop
+```
+
+Safety guard:
+- Pilot writes/validates a DB identity marker (`pilot_identity.system = arqon_pilot`).
+- If identity mismatches, schema migration is refused.
+
+Advanced override (disables managed runtime auto-start):
+- `PILOT_AGORG_DATABASE_URL`
+
+Core AGOrg commands:
+
+```bash
+pilot agorg create --name Arqon --root /home/irbsurfer/Projects/arqon/Arqon --default-scope
+pilot agorg list
+pilot agorg show
+pilot agorg use Arqon
+pilot agorg discover --root /home/irbsurfer/Projects/arqon --depth 4
+pilot agorg tree
+pilot agorg create-project --name Arqon --root /home/irbsurfer/Projects/arqon/Arqon --autoscan --import --default-scope
+```
+
 ## Critical Linux/Conda Runtime Step
 
 If `pilot` fails with a shared-library error like `libssl-*.so.10` not found, add the

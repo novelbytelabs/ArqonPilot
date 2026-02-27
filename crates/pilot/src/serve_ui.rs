@@ -1,3 +1,4 @@
+use crate::agorg::{self, AgorgStore};
 use crate::bus::{send_command_once, BusBridgeConfig};
 use axum::extract::{Query, State};
 use axum::http::{HeaderValue, StatusCode};
@@ -14,7 +15,7 @@ use std::convert::Infallible;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,6 +41,7 @@ struct UiState {
     allowed_commands: Option<HashSet<String>>,
     codex_contracts: Arc<Mutex<HashMap<String, CodexContractRecord>>>,
     codex_contracts_log: PathBuf,
+    agorg_store: AgorgStore,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +70,49 @@ struct CodexContractsQuery {
 #[derive(Debug, Deserialize)]
 struct CodexContractQuery {
     contract_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgUseRequest {
+    agorg: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgCreateRequest {
+    name: String,
+    root: String,
+    parent: Option<String>,
+    scan_depth: Option<usize>,
+    default_scope: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgCreateProjectRequest {
+    name: String,
+    root: String,
+    parent: Option<String>,
+    scan_depth: Option<usize>,
+    autoscan: Option<bool>,
+    import: Option<bool>,
+    default_scope: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgDiscoverRequest {
+    root: String,
+    depth: Option<usize>,
+    import_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgTreeQuery {
+    root: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgLinkRequest {
+    parent: String,
+    child: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,6 +177,13 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
     spawn_bus_telemetry_listener(cfg.bus.clone(), event_tx.clone());
     let codex_contracts_log = codex_contracts_log_path();
     let contract_seed = load_persisted_codex_contracts(&codex_contracts_log).unwrap_or_default();
+    let agorg_store = AgorgStore::from_env();
+    if let Err(e) = agorg_store.initialize().await {
+        eprintln!(
+            "Warning: AGOrg store initialization failed ({}). AGOrg API may be unavailable until fixed.",
+            e
+        );
+    }
     let state = Arc::new(UiState {
         bus: cfg.bus,
         events: event_tx,
@@ -139,6 +191,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         allowed_commands: cfg.allowed_commands,
         codex_contracts: Arc::new(Mutex::new(contract_seed)),
         codex_contracts_log,
+        agorg_store,
     });
 
     let app = Router::new()
@@ -149,6 +202,14 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/report", get(get_report_content))
         .route("/api/codex/contracts", get(get_codex_contracts))
         .route("/api/codex/contract", get(get_codex_contract))
+        .route("/api/agorg/list", get(api_agorg_list))
+        .route("/api/agorg/active", get(api_agorg_active))
+        .route("/api/agorg/create", post(api_agorg_create))
+        .route("/api/agorg/create_project", post(api_agorg_create_project))
+        .route("/api/agorg/use", post(api_agorg_use))
+        .route("/api/agorg/discover", post(api_agorg_discover))
+        .route("/api/agorg/tree", get(api_agorg_tree))
+        .route("/api/agorg/link", post(api_agorg_link))
         .route("/api/dependencies/run", post(run_dependency_action))
         .route("/api/dependencies/logs", get(get_dependency_logs))
         .route("/api/evidence/export", post(export_evidence_bundle))
@@ -296,6 +357,186 @@ async fn get_codex_contract(
     Json(json!({"ok": true, "contract": contract})).into_response()
 }
 
+async fn api_agorg_list(State(state): State<Arc<UiState>>) -> Response {
+    match state.agorg_store.list_agorgs().await {
+        Ok(items) => Json(json!({"ok": true, "agorgs": items})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn api_agorg_active(State(state): State<Arc<UiState>>) -> Response {
+    match state.agorg_store.get_active_agorg().await {
+        Ok(active) => Json(json!({"ok": true, "active": active})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn api_agorg_create(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgCreateRequest>,
+) -> Response {
+    let parent = match resolve_agorg_ref_optional(&state.agorg_store, req.parent.as_deref()).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    match state
+        .agorg_store
+        .create_agorg(
+            req.name.trim(),
+            Path::new(req.root.trim()),
+            parent,
+            req.scan_depth.unwrap_or(4) as i32,
+            req.default_scope.unwrap_or(false),
+        )
+        .await
+    {
+        Ok(ag) => Json(json!({"ok": true, "agorg": ag})).into_response(),
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_agorg_create_project(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgCreateProjectRequest>,
+) -> Response {
+    let parent = match resolve_agorg_ref_optional(&state.agorg_store, req.parent.as_deref()).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    match state
+        .agorg_store
+        .create_project(
+            req.name.trim(),
+            Path::new(req.root.trim()),
+            parent,
+            req.scan_depth.unwrap_or(4),
+            req.autoscan.unwrap_or(false),
+            req.default_scope.unwrap_or(false),
+        )
+        .await
+    {
+        Ok((agorg, scan)) => {
+            if req.import.unwrap_or(false) {
+                if let Some(ref s) = scan {
+                    if let Err(err) = state.agorg_store.import_discovery(agorg.id, s).await {
+                        return error_response(StatusCode::BAD_REQUEST, &err.to_string());
+                    }
+                }
+            }
+            Json(json!({"ok": true, "agorg": agorg, "discovery": scan})).into_response()
+        }
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_agorg_use(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgUseRequest>,
+) -> Response {
+    let id = match resolve_agorg_ref(&state.agorg_store, req.agorg.trim()).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    match state.agorg_store.set_active_agorg(id).await {
+        Ok(_) => Json(json!({"ok": true, "active_agorg_id": id.to_string()})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn api_agorg_discover(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgDiscoverRequest>,
+) -> Response {
+    let depth = req.depth.unwrap_or(4);
+    let scan = match agorg::discover_hierarchy(Path::new(req.root.trim()), depth) {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    if let Some(target) = req.import_to.as_deref() {
+        let id = match resolve_agorg_ref(&state.agorg_store, target.trim()).await {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        };
+        if let Err(err) = state.agorg_store.import_discovery(id, &scan).await {
+            return error_response(StatusCode::BAD_REQUEST, &err.to_string());
+        }
+    }
+    Json(json!({"ok": true, "discovery": scan})).into_response()
+}
+
+async fn api_agorg_tree(
+    State(state): State<Arc<UiState>>,
+    Query(q): Query<AgorgTreeQuery>,
+) -> Response {
+    let root_id = match q.root.as_deref() {
+        Some(value) => match resolve_agorg_ref(&state.agorg_store, value.trim()).await {
+            Ok(v) => Some(v),
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        },
+        None => None,
+    };
+    match state.agorg_store.tree(root_id).await {
+        Ok(tree) => Json(json!({"ok": true, "tree": tree})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn api_agorg_link(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgLinkRequest>,
+) -> Response {
+    let parent = match resolve_agorg_ref(&state.agorg_store, req.parent.trim()).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    let child = match resolve_agorg_ref(&state.agorg_store, req.child.trim()).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    match state.agorg_store.link_agorgs(parent, child).await {
+        Ok(_) => {
+            Json(json!({"ok": true, "parent": parent.to_string(), "child": child.to_string()}))
+                .into_response()
+        }
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn resolve_agorg_ref(store: &AgorgStore, input: &str) -> Result<uuid::Uuid> {
+    if let Ok(id) = uuid::Uuid::parse_str(input) {
+        if store.get_agorg(id).await?.is_some() {
+            return Ok(id);
+        }
+        return Err(miette::miette!("AGOrg UUID {} not found", id));
+    }
+    let list = store.list_agorgs().await?;
+    let mut found = list
+        .into_iter()
+        .filter(|a| a.name.eq_ignore_ascii_case(input))
+        .collect::<Vec<_>>();
+    if found.is_empty() {
+        return Err(miette::miette!("AGOrg '{}' not found", input));
+    }
+    if found.len() > 1 {
+        return Err(miette::miette!(
+            "AGOrg name '{}' is ambiguous; use UUID instead",
+            input
+        ));
+    }
+    Ok(found.remove(0).id)
+}
+
+async fn resolve_agorg_ref_optional(
+    store: &AgorgStore,
+    input: Option<&str>,
+) -> Result<Option<uuid::Uuid>> {
+    if let Some(v) = input {
+        Ok(Some(resolve_agorg_ref(store, v).await?))
+    } else {
+        Ok(None)
+    }
+}
+
 async fn run_dependency_action(
     State(state): State<Arc<UiState>>,
     Json(req): Json<DependencyActionRequest>,
@@ -304,12 +545,73 @@ async fn run_dependency_action(
     if action.is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "action is required");
     }
-    if action == "repair" && !state.allow_mutations {
-        return error_response(
-            StatusCode::FORBIDDEN,
-            "repair action blocked in read-only UI mode",
-        );
+    if matches!(action, "repair" | "db-start" | "db-stop") && !state.allow_mutations {
+        return error_response(StatusCode::FORBIDDEN, "action blocked in read-only UI mode");
     }
+    if action == "db-status" {
+        return match state.agorg_store.managed_db_status().await {
+            Ok(Some(status)) => Json(json!({
+                "ok": status.running,
+                "action": action,
+                "exit_code": 0,
+                "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
+                "stderr": ""
+            }))
+            .into_response(),
+            Ok(None) => Json(json!({
+                "ok": true,
+                "action": action,
+                "exit_code": 0,
+                "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
+                "stderr": ""
+            }))
+            .into_response(),
+            Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+        };
+    }
+    if action == "db-start" {
+        return match state.agorg_store.ensure_managed_db().await {
+            Ok(Some(status)) => Json(json!({
+                "ok": status.running,
+                "action": action,
+                "exit_code": 0,
+                "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
+                "stderr": ""
+            }))
+            .into_response(),
+            Ok(None) => Json(json!({
+                "ok": true,
+                "action": action,
+                "exit_code": 0,
+                "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
+                "stderr": ""
+            }))
+            .into_response(),
+            Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+        };
+    }
+    if action == "db-stop" {
+        return match state.agorg_store.stop_managed_db().await {
+            Ok(Some(status)) => Json(json!({
+                "ok": !status.running,
+                "action": action,
+                "exit_code": 0,
+                "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
+                "stderr": ""
+            }))
+            .into_response(),
+            Ok(None) => Json(json!({
+                "ok": true,
+                "action": action,
+                "exit_code": 0,
+                "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
+                "stderr": ""
+            }))
+            .into_response(),
+            Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+        };
+    }
+
     let result = match (action, req.json) {
         ("policy", true) => run_local_script("./scripts/verify_toolchain_policy.sh --json").await,
         ("policy", false) => run_local_script("./scripts/verify_toolchain_policy.sh").await,
@@ -1640,6 +1942,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <button class="tab" data-tab="dependencies">Dependencies</button>
     <button class="tab" data-tab="branch">Branch</button>
     <button class="tab" data-tab="multi">Multi</button>
+    <button class="tab" data-tab="agorg">AGOrg</button>
     <button class="tab" data-tab="telemetry">Telemetry</button>
     <button class="tab" data-tab="codex">Codex</button>
   </div>
@@ -1658,6 +1961,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <span id="dash-hook-chip" class="chip neutral">Hook: unknown</span>
           <span id="dash-drift-chip" class="chip neutral">Drift: unknown</span>
           <span id="dash-bus-chip" class="chip neutral">Bus: unknown</span>
+          <span id="dash-db-chip" class="chip neutral">DB: unknown</span>
           <span id="dash-gate-chip" class="chip neutral">Gate: unknown</span>
           <span id="dash-push-chip" class="chip neutral">Push: unknown</span>
         </div>
@@ -1670,6 +1974,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button class="btn secondary" onclick="dashStartBus()">Start Bus</button>
           <button class="btn secondary" onclick="dashStopBus()">Stop Bus</button>
           <button class="btn secondary" onclick="dashBusStatus()">Bus Status</button>
+          <button class="btn secondary" onclick="dashDbStatus()">DB Status</button>
+          <button class="btn secondary" onclick="dashDbStart()">DB Start</button>
+          <button class="btn secondary" onclick="dashDbStop()">DB Stop</button>
           <button class="btn secondary" onclick="dashExportEvidence()">Export Evidence</button>
         </div>
         <div class="row">
@@ -1947,6 +2254,69 @@ Recommended flow:
     </div>
   </section>
 
+  <section class="panel" id="agorg">
+    <div class="grid">
+      <div class="card">
+        <h3>Create AGOrg Project</h3>
+        <input id="agorg-name" placeholder="Arqon" value="Arqon" />
+        <input id="agorg-root" placeholder="/abs/path/to/agorg/root" value="/home/irbsurfer/Projects/arqon/Arqon" />
+        <input id="agorg-parent" placeholder="optional parent AGOrg (UUID or name)" />
+        <input id="agorg-depth" placeholder="scan depth" value="4" />
+        <div class="row">
+          <label style="font-size:0.82rem;color:#a8b9e3;">
+            <input id="agorg-autoscan" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+            autoscan
+          </label>
+          <label style="font-size:0.82rem;color:#a8b9e3;">
+            <input id="agorg-import" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+            import discovery
+          </label>
+          <label style="font-size:0.82rem;color:#a8b9e3;">
+            <input id="agorg-default" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+            set default scope
+          </label>
+        </div>
+        <button class="btn" onclick="agorgCreateProject()">Create Project</button>
+      </div>
+      <div class="card">
+        <h3>Scope and Registry</h3>
+        <div class="row">
+          <button class="btn secondary" onclick="agorgList()">List AGOrgs</button>
+          <button class="btn secondary" onclick="agorgShowActive()">Show Active</button>
+        </div>
+        <div class="row">
+          <input id="agorg-use-id" placeholder="AGOrg UUID or name" />
+          <button class="btn secondary" onclick="agorgUse()">Use Scope</button>
+        </div>
+        <div class="row">
+          <input id="agorg-link-parent" placeholder="parent AGOrg UUID or name" />
+          <input id="agorg-link-child" placeholder="child AGOrg UUID or name" />
+          <button class="btn secondary" onclick="agorgLink()">Link</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Discovery and Tree</h3>
+        <input id="agorg-discover-root" placeholder="/abs/path/to/discovery/root" value="/home/irbsurfer/Projects/arqon" />
+        <input id="agorg-discover-depth" placeholder="depth" value="4" />
+        <input id="agorg-discover-import-to" placeholder="optional AGOrg UUID/name for import" />
+        <div class="row">
+          <button class="btn secondary" onclick="agorgDiscover()">Discover</button>
+          <button class="btn secondary" onclick="agorgTree()">Tree</button>
+        </div>
+      </div>
+    </div>
+    <div class="status">
+      <div class="card">
+        <h3>AGOrg Response</h3>
+        <pre id="agorg-out">No AGOrg action run yet.</pre>
+      </div>
+      <div class="card">
+        <h3>Discovery / Tree Output</h3>
+        <pre id="agorg-discovery-out">No discovery output yet.</pre>
+      </div>
+    </div>
+  </section>
+
   <section class="panel" id="telemetry">
     <div class="grid">
       <div class="card">
@@ -2064,6 +2434,7 @@ const dashPolicyChip = document.getElementById('dash-policy-chip');
 const dashHookChip = document.getElementById('dash-hook-chip');
 const dashDriftChip = document.getElementById('dash-drift-chip');
 const dashBusChip = document.getElementById('dash-bus-chip');
+const dashDbChip = document.getElementById('dash-db-chip');
 const dashGateChip = document.getElementById('dash-gate-chip');
 const dashPushChip = document.getElementById('dash-push-chip');
 const dashOracleChip = document.getElementById('dash-oracle-chip');
@@ -2083,6 +2454,8 @@ const oracleQueryBtn = document.getElementById('oracle-query-btn');
 const healChip = document.getElementById('heal-chip');
 const healPlanBtn = document.getElementById('heal-plan-btn');
 const healRunBtn = document.getElementById('heal-run-btn');
+const agorgOut = document.getElementById('agorg-out');
+const agorgDiscoveryOut = document.getElementById('agorg-discovery-out');
 const BUS_HEALTH_KEY = 'pilot.bus.health.v1';
 const timelineState = new Map();
 let selectedOperationId = null;
@@ -2642,6 +3015,12 @@ function updateDashChip(action, ok, data) {
   if (action === 'bus-status' || action === 'bus-start' || action === 'bus-stop') {
     setChip(dashBusChip, 'Bus: ' + (ok ? 'RUNNING' : 'STOPPED'), ok ? 'ok' : 'fail');
   }
+  if (action === 'db-status' || action === 'db-start') {
+    setChip(dashDbChip, 'DB: ' + (ok ? 'RUNNING' : 'STOPPED'), ok ? 'ok' : 'fail');
+  }
+  if (action === 'db-stop') {
+    setChip(dashDbChip, 'DB: ' + (ok ? 'STOPPED' : 'RUNNING'), ok ? 'ok' : 'fail');
+  }
   if (action === 'gate') setChip(dashGateChip, 'Gate: ' + suffix, level);
   if (action === 'push') setChip(dashPushChip, 'Push: ' + suffix, level);
   if (!ok && data && data.error) {
@@ -2676,6 +3055,102 @@ async function depLoadLogs() {
   const res = await fetch('/api/dependencies/logs');
   const data = await res.json();
   depLogs.textContent = JSON.stringify(data, null, 2);
+}
+
+async function agorgCreateProject() {
+  const req = {
+    name: document.getElementById('agorg-name').value.trim(),
+    root: document.getElementById('agorg-root').value.trim(),
+    parent: document.getElementById('agorg-parent').value.trim() || null,
+    scan_depth: parseInt(document.getElementById('agorg-depth').value || '4', 10),
+    autoscan: !!document.getElementById('agorg-autoscan').checked,
+    import: !!document.getElementById('agorg-import').checked,
+    default_scope: !!document.getElementById('agorg-default').checked
+  };
+  const res = await fetch('/api/agorg/create_project', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+  if (data.discovery) {
+    agorgDiscoveryOut.textContent = JSON.stringify(data.discovery, null, 2);
+  }
+}
+
+async function agorgList() {
+  const res = await fetch('/api/agorg/list');
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+}
+
+async function agorgShowActive() {
+  const res = await fetch('/api/agorg/active');
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+}
+
+async function agorgUse() {
+  const req = { agorg: document.getElementById('agorg-use-id').value.trim() };
+  const res = await fetch('/api/agorg/use', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+}
+
+async function agorgLink() {
+  const req = {
+    parent: document.getElementById('agorg-link-parent').value.trim(),
+    child: document.getElementById('agorg-link-child').value.trim()
+  };
+  const res = await fetch('/api/agorg/link', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+}
+
+async function agorgDiscover() {
+  const req = {
+    root: document.getElementById('agorg-discover-root').value.trim(),
+    depth: parseInt(document.getElementById('agorg-discover-depth').value || '4', 10),
+    import_to: document.getElementById('agorg-discover-import-to').value.trim() || null
+  };
+  const res = await fetch('/api/agorg/discover', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgDiscoveryOut.textContent = text;
+  out.textContent = text;
+}
+
+async function agorgTree() {
+  const root = document.getElementById('agorg-use-id').value.trim();
+  const query = root ? ('?root=' + encodeURIComponent(root)) : '';
+  const res = await fetch('/api/agorg/tree' + query);
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgDiscoveryOut.textContent = text;
+  out.textContent = text;
 }
 
 function multiRegister() {
@@ -2770,6 +3245,9 @@ function dashRunRepair() { depRun('repair'); }
 function dashStartBus() { depRun('bus-start'); }
 function dashStopBus() { depRun('bus-stop'); }
 function dashBusStatus() { depRun('bus-status'); }
+function dashDbStatus() { depRun('db-status'); }
+function dashDbStart() { depRun('db-start'); }
+function dashDbStop() { depRun('db-stop'); }
 function dashRunPush() { depRun('push'); }
 
 async function dashExportEvidence() {
@@ -2941,6 +3419,7 @@ depRun('policy');
 depRun('hook-policy');
 depRun('drift');
 depRun('bus-status');
+depRun('db-status');
 codexLoadContracts();
 setInterval(loadHistory, 30000);
 </script>

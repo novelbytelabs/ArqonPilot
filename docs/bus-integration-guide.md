@@ -45,9 +45,17 @@ UI endpoints:
 - `GET /api/history` recent audit history
 - `GET /api/reports` list recent `~/.pilot/reports` artifacts
 - `GET /api/report?path=...` read one report file (bounded, path-validated)
-- `POST /api/dependencies/run` run dependency guardrail actions (`policy`, `hook-policy`, `gate`, `repair`, `push`)
+- `POST /api/dependencies/run` run dependency guardrail actions (`policy`, `hook-policy`, `gate`, `repair`, `push`, `db-status`, `db-start`, `db-stop`)
 - `GET /api/dependencies/logs` read recent pre-push gate logs
 - `POST /api/evidence/export` snapshot policy/history/reports/gate logs into an evidence bundle
+- `GET /api/agorg/list` list AGOrg scope records
+- `GET /api/agorg/active` fetch active AGOrg scope
+- `POST /api/agorg/create` create AGOrg
+- `POST /api/agorg/create_project` create AGOrg project with optional autoscan/import
+- `POST /api/agorg/use` switch active AGOrg scope
+- `POST /api/agorg/discover` discovery scan (configurable depth, optional import)
+- `GET /api/agorg/tree` render AGOrg/AGO graph tree
+- `POST /api/agorg/link` link AGOrg graph edges (cycle-safe)
 - `POST /api/codex/action` contract-driven lifecycle API (`preview`, `approve`, `execute`, `reconcile`) for `pilot.*` commands
 - `GET /api/codex/contracts` list persisted contract records (optional `status`, `limit`)
 - `GET /api/codex/contract?contract_id=...` fetch one contract for resume/replay
@@ -100,6 +108,7 @@ System Status panel controls:
 - `Repair`: runs lock repair workflow.
 - `Push Safe`: runs guarded push with classification summary.
 - `Start Bus` / `Stop Bus` / `Bus Status`: manage local ArqonBus shim lifecycle.
+- `DB Status` / `DB Start` / `DB Stop`: manage Pilot-managed AGOrg Postgres runtime.
 - `Export Evidence`: write evidence bundle to `~/.pilot/reports/evidence_bundle_<timestamp>.json`.
 
 Codex contract tab:

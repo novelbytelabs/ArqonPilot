@@ -2,6 +2,51 @@
 
 This page captures high-impact operational issues and exact fixes.
 
+## 0) Managed AGOrg DB does not start
+
+Symptoms:
+- `pilot db ensure` fails
+- AGOrg commands fail before action execution
+- UI `DB Status`/`DB Start` shows error
+
+Checks:
+
+```bash
+pilot db status
+which initdb
+which pg_ctl
+tail -n 120 ~/.arqon/pilot/db/postgres.log
+```
+
+Common causes:
+1. Missing local Postgres binaries (`initdb`, `pg_ctl`) on PATH.
+2. Corrupt/incomplete data directory at `~/.arqon/pilot/db/data`.
+3. Runtime dir permissions blocking socket creation (`~/.arqon/pilot/run`).
+
+Recovery:
+1. Stop managed DB:
+
+```bash
+pilot db stop
+```
+
+2. If data dir is corrupt, back it up and reinitialize:
+
+```bash
+mv ~/.arqon/pilot/db/data ~/.arqon/pilot/db/data.bak.$(date +%Y%m%d%H%M%S)
+pilot db ensure
+```
+
+3. Re-run AGOrg command:
+
+```bash
+pilot agorg list
+```
+
+Safety note:
+- Pilot enforces DB identity (`arqon_pilot`) before migrations. If you point
+  `PILOT_AGORG_DATABASE_URL` at a non-Pilot DB, initialization will fail by design.
+
 ## 1) Linux/Conda: `libssl-*.so.10` or `libcrypto-*.so.10` not found
 
 Symptom:

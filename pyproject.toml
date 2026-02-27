@@ -31,3 +31,8 @@ Repository = "https://github.com/novelbytelabs/ArqonPilot"
 bindings = "bin"
 manifest-path = "crates/pilot/Cargo.toml"
 strip = true
+
+
+[tool.arqon.relationships]
+parent = "Arqon"
+children = []

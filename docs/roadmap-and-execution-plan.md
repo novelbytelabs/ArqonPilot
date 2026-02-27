@@ -260,7 +260,7 @@ Exit criteria:
 1. Deterministic release with reproducible artifacts.
 2. Install/runbook validated in clean environment.
 
-## Wave 16 (AGOrg Scope and Multi-Organization Control Plane)
+## Wave 16 (AGOrg Scope and Multi-Organization Control Plane) - Completed
 
 Deliverables:
 
@@ -296,6 +296,27 @@ Exit criteria:
 Planning source:
 
 1. `docs/agorg-control-plane-plan.md`
+
+Progress update:
+
+1. Added AGOrg Postgres-backed foundation module in `crates/pilot/src/agorg.rs`.
+2. Added new CLI surface:
+   - `pilot agorg create|create-project|list|show|use|update|delete|discover|tree|link`
+3. Added Control Panel AGOrg API routes:
+   - `/api/agorg/list`, `/api/agorg/active`, `/api/agorg/create`, `/api/agorg/create_project`,
+     `/api/agorg/use`, `/api/agorg/discover`, `/api/agorg/tree`, `/api/agorg/link`
+4. Added AGOrg tab UI foundation with scope/project/discovery/tree controls.
+5. Added managed local DB runtime module in `crates/pilot/src/db_runtime.rs`:
+   - private runtime/data paths under `~/.arqon/pilot/`
+   - Linux/macOS Unix-socket default endpoint
+   - Windows local TCP fallback endpoint
+   - `pilot db ensure|start|stop|status` CLI lifecycle controls
+6. Switched AGOrg store default to managed runtime unless `PILOT_AGORG_DATABASE_URL` override is set.
+7. Added Pilot DB identity guard (`pilot_identity.system = arqon_pilot`) to block accidental migration against non-Pilot databases.
+8. Added Dashboard System Status DB controls:
+   - `DB Status`
+   - `DB Start`
+   - `DB Stop`
 
 ## Operational Rules
 

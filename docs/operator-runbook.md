@@ -105,6 +105,29 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
     - Use `Contracts (Resume / Replay)` to reload prior contracts, inspect status, and retry failed contracts.
     - Contract history persists at `~/.pilot/reports/codex_contracts.jsonl` and is restored when UI restarts.
 
+6. `AGOrg` tab (Wave 16 foundation)
+
+    - Use `Create AGOrg Project` to define scope + autoscan hierarchy.
+    - Use `List AGOrgs` and `Show Active` to verify current scope.
+    - Use `Use Scope` to switch Control Panel context.
+    - Use `Discover` to scan a root path with configurable depth.
+    - Use `Tree` to inspect AGOrg/AGO graph structure.
+    - Use `Link` for modular AGOrg composition (cycle-safe enforcement).
+    - Use System Status `DB Status`, `DB Start`, `DB Stop` to control managed AGOrg datastore.
+
+7. Managed DB operations (CLI)
+
+    - `pilot db ensure`
+    - `pilot db status`
+    - `pilot db start`
+    - `pilot db stop`
+
+Managed DB defaults:
+- data: `~/.arqon/pilot/db/data`
+- logs: `~/.arqon/pilot/db/postgres.log`
+- endpoint: Unix socket on Linux/macOS, local TCP fallback on Windows
+- identity guard: Pilot refuses migration if DB identity is not `arqon_pilot`
+
 ## 4. Controlled Apply Workflow
 
 Apply mode is allowed only for explicitly tagged pilot cohorts.

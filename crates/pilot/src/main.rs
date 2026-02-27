@@ -1,7 +1,11 @@
 #![allow(dead_code)]
+mod agorg;
 mod bus;
 mod config;
+mod db_runtime;
 mod serve_ui;
+use agorg::AgorgStore;
+use db_runtime::PilotDbManager;
 use pilot_branch as branch;
 use pilot_core::{
     append_audit_event, write_repo_outcomes_artifact, AuditEvent, CommandReport, RepoContext,
@@ -18,7 +22,7 @@ use pilot_secure as secure;
 
 use clap::{Args, Parser, Subcommand};
 use config::Config;
-use miette::{Context, IntoDiagnostic, Result};
+use miette::{miette, Context, IntoDiagnostic, Result};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -61,6 +65,10 @@ enum Commands {
     Branch(BranchArgs),
     /// Multi-repo registry and operations
     Multi(MultiArgs),
+    /// AGOrg/AGO control-plane operations
+    Agorg(AgorgArgs),
+    /// Managed local Postgres runtime operations
+    Db(DbArgs),
     /// Run Pilot as an ArqonBus command bridge
     Serve(ServeArgs),
 }
@@ -651,6 +659,139 @@ struct ServeArgs {
     /// Restrict UI/API to these commands only (repeatable)
     #[arg(long = "ui-allow-command")]
     ui_allow_commands: Vec<String>,
+}
+
+#[derive(Args)]
+struct AgorgArgs {
+    #[command(subcommand)]
+    command: AgorgCommands,
+}
+
+#[derive(Args)]
+struct DbArgs {
+    #[command(subcommand)]
+    command: DbCommands,
+}
+
+#[derive(Subcommand)]
+enum DbCommands {
+    /// Initialize and start managed local Postgres if needed
+    Ensure,
+    /// Start managed local Postgres
+    Start,
+    /// Stop managed local Postgres
+    Stop,
+    /// Show managed local Postgres status and DSN
+    Status,
+}
+
+#[derive(Subcommand)]
+enum AgorgCommands {
+    /// Create an AGOrg record
+    Create(AgorgCreateArgs),
+    /// Create an AGOrg project and optionally autoscan/import hierarchy
+    CreateProject(AgorgCreateProjectArgs),
+    /// List AGOrgs
+    List,
+    /// Show active AGOrg scope
+    Show,
+    /// Set active AGOrg scope
+    Use(AgorgUseArgs),
+    /// Update AGOrg metadata
+    Update(AgorgUpdateArgs),
+    /// Delete AGOrg
+    Delete(AgorgDeleteArgs),
+    /// Discover AGOrg/AGO hierarchy from root
+    Discover(AgorgDiscoverArgs),
+    /// Print AGOrg graph/tree
+    Tree(AgorgTreeArgs),
+    /// Link one AGOrg as child of another (cycle-safe)
+    Link(AgorgLinkArgs),
+}
+
+#[derive(Args, Clone)]
+struct AgorgCreateArgs {
+    #[arg(long)]
+    name: String,
+    #[arg(long)]
+    root: PathBuf,
+    #[arg(long)]
+    parent: Option<String>,
+    #[arg(long, default_value = "4")]
+    scan_depth: usize,
+    #[arg(long)]
+    default_scope: bool,
+}
+
+#[derive(Args, Clone)]
+struct AgorgCreateProjectArgs {
+    #[arg(long)]
+    name: String,
+    #[arg(long)]
+    root: PathBuf,
+    #[arg(long)]
+    parent: Option<String>,
+    #[arg(long, default_value = "4")]
+    scan_depth: usize,
+    #[arg(long)]
+    autoscan: bool,
+    #[arg(long)]
+    import: bool,
+    #[arg(long)]
+    default_scope: bool,
+}
+
+#[derive(Args, Clone)]
+struct AgorgUseArgs {
+    /// AGOrg UUID or name
+    agorg: String,
+}
+
+#[derive(Args, Clone)]
+struct AgorgUpdateArgs {
+    /// AGOrg UUID or name
+    agorg: String,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    root: Option<PathBuf>,
+    #[arg(long)]
+    scan_depth: Option<usize>,
+    #[arg(long)]
+    default_scope: bool,
+}
+
+#[derive(Args, Clone)]
+struct AgorgDeleteArgs {
+    /// AGOrg UUID or name
+    agorg: String,
+}
+
+#[derive(Args, Clone)]
+struct AgorgDiscoverArgs {
+    #[arg(long)]
+    root: PathBuf,
+    #[arg(long, default_value = "4")]
+    depth: usize,
+    #[arg(long)]
+    import_to: Option<String>,
+}
+
+#[derive(Args, Clone)]
+struct AgorgTreeArgs {
+    /// Optional AGOrg UUID or name for subtree root
+    #[arg(long)]
+    root: Option<String>,
+}
+
+#[derive(Args, Clone)]
+struct AgorgLinkArgs {
+    /// Parent AGOrg UUID or name
+    #[arg(long)]
+    parent: String,
+    /// Child AGOrg UUID or name
+    #[arg(long)]
+    child: String,
 }
 
 #[tokio::main]
@@ -1726,6 +1867,8 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                 },
             }
         }
+        Commands::Agorg(args) => run_agorg(args).await,
+        Commands::Db(args) => run_db(args).await,
         Commands::Serve(args) => {
             let cfg = bus::BusBridgeConfig {
                 ws_url: args.ws_url.clone(),
@@ -2052,7 +2195,305 @@ fn command_name(command: &Commands) -> &'static str {
                     command: MultiPrsCommands::Create(_),
                 }),
         }) => "multi.prs.create",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::Create(_),
+        }) => "agorg.create",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::CreateProject(_),
+        }) => "agorg.create_project",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::List,
+        }) => "agorg.list",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::Show,
+        }) => "agorg.show",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::Use(_),
+        }) => "agorg.use",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::Update(_),
+        }) => "agorg.update",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::Delete(_),
+        }) => "agorg.delete",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::Discover(_),
+        }) => "agorg.discover",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::Tree(_),
+        }) => "agorg.tree",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::Link(_),
+        }) => "agorg.link",
+        Commands::Db(DbArgs {
+            command: DbCommands::Ensure,
+        }) => "db.ensure",
+        Commands::Db(DbArgs {
+            command: DbCommands::Start,
+        }) => "db.start",
+        Commands::Db(DbArgs {
+            command: DbCommands::Stop,
+        }) => "db.stop",
+        Commands::Db(DbArgs {
+            command: DbCommands::Status,
+        }) => "db.status",
         Commands::Serve(_) => "serve",
+    }
+}
+
+async fn run_db(args: &DbArgs) -> Result<CommandReport> {
+    let manager = PilotDbManager::from_env();
+    match args.command {
+        DbCommands::Ensure => {
+            manager.ensure_ready().await?;
+            let status = manager.status().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&status).into_diagnostic()?
+            );
+            Ok(CommandReport::ok(
+                "db.ensure",
+                "Managed DB ensured and ready".to_string(),
+            ))
+        }
+        DbCommands::Start => {
+            manager.start().await?;
+            let status = manager.status().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&status).into_diagnostic()?
+            );
+            Ok(CommandReport::ok(
+                "db.start",
+                "Managed DB started".to_string(),
+            ))
+        }
+        DbCommands::Stop => {
+            manager.stop().await?;
+            let status = manager.status().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&status).into_diagnostic()?
+            );
+            Ok(CommandReport::ok(
+                "db.stop",
+                "Managed DB stopped".to_string(),
+            ))
+        }
+        DbCommands::Status => {
+            let status = manager.status().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&status).into_diagnostic()?
+            );
+            Ok(CommandReport::ok(
+                "db.status",
+                "Managed DB status".to_string(),
+            ))
+        }
+    }
+}
+
+async fn run_agorg(args: &AgorgArgs) -> Result<CommandReport> {
+    let store = AgorgStore::from_env();
+    store.initialize().await?;
+    match &args.command {
+        AgorgCommands::Create(args) => {
+            let parent = resolve_agorg_ref_optional(&store, args.parent.as_deref()).await?;
+            let ag = store
+                .create_agorg(
+                    &args.name,
+                    &args.root,
+                    parent,
+                    args.scan_depth as i32,
+                    args.default_scope,
+                )
+                .await?;
+            println!(
+                "Created AGOrg: {} ({}) root={} default_scope={}",
+                ag.name, ag.id, ag.root_path, ag.default_scope
+            );
+            Ok(CommandReport::ok(
+                "agorg.create",
+                format!("Created AGOrg {}", ag.name),
+            ))
+        }
+        AgorgCommands::CreateProject(args) => {
+            let parent = resolve_agorg_ref_optional(&store, args.parent.as_deref()).await?;
+            let (ag, discovered) = store
+                .create_project(
+                    &args.name,
+                    &args.root,
+                    parent,
+                    args.scan_depth,
+                    args.autoscan,
+                    args.default_scope,
+                )
+                .await?;
+            println!(
+                "Created AGOrg project: {} ({}) root={}",
+                ag.name, ag.id, ag.root_path
+            );
+            if args.import {
+                if let Some(scan) = discovered.as_ref() {
+                    store.import_discovery(ag.id, scan).await?;
+                    println!("Imported {} discovered candidates", scan.candidates.len());
+                } else {
+                    let scan = agorg::discover_hierarchy(&args.root, args.scan_depth)?;
+                    store.import_discovery(ag.id, &scan).await?;
+                    println!("Imported {} discovered candidates", scan.candidates.len());
+                }
+            }
+            Ok(CommandReport::ok(
+                "agorg.create_project",
+                format!("Created AGOrg project {}", ag.name),
+            ))
+        }
+        AgorgCommands::List => {
+            let list = store.list_agorgs().await?;
+            for item in &list {
+                println!(
+                    "{} | {} | root={} | parent={:?} | default={} | depth={}",
+                    item.id,
+                    item.name,
+                    item.root_path,
+                    item.parent_agorg_id,
+                    item.default_scope,
+                    item.scan_depth
+                );
+            }
+            Ok(CommandReport::ok(
+                "agorg.list",
+                format!("Listed {} AGOrgs", list.len()),
+            ))
+        }
+        AgorgCommands::Show => {
+            let active = store.get_active_agorg().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&active).into_diagnostic()?
+            );
+            Ok(CommandReport::ok(
+                "agorg.show",
+                if active.is_some() {
+                    "Active AGOrg found".to_string()
+                } else {
+                    "No active AGOrg set".to_string()
+                },
+            ))
+        }
+        AgorgCommands::Use(args) => {
+            let id = resolve_agorg_ref(&store, &args.agorg).await?;
+            store.set_active_agorg(id).await?;
+            println!("Active AGOrg set to {}", id);
+            Ok(CommandReport::ok(
+                "agorg.use",
+                format!("Active AGOrg set {}", id),
+            ))
+        }
+        AgorgCommands::Update(args) => {
+            let id = resolve_agorg_ref(&store, &args.agorg).await?;
+            let ag = store
+                .update_agorg(
+                    id,
+                    args.name.clone(),
+                    args.root.clone(),
+                    args.scan_depth.map(|d| d as i32),
+                    if args.default_scope { Some(true) } else { None },
+                )
+                .await?;
+            println!(
+                "Updated AGOrg: {} ({}) root={} default_scope={} depth={}",
+                ag.name, ag.id, ag.root_path, ag.default_scope, ag.scan_depth
+            );
+            Ok(CommandReport::ok(
+                "agorg.update",
+                format!("Updated AGOrg {}", ag.id),
+            ))
+        }
+        AgorgCommands::Delete(args) => {
+            let id = resolve_agorg_ref(&store, &args.agorg).await?;
+            let deleted = store.delete_agorg(id).await?;
+            println!("Deleted {} AGOrg rows", deleted);
+            Ok(CommandReport::ok(
+                "agorg.delete",
+                format!("Deleted {} row(s)", deleted),
+            ))
+        }
+        AgorgCommands::Discover(args) => {
+            let scan = agorg::discover_hierarchy(&args.root, args.depth)?;
+            if let Some(target) = &args.import_to {
+                let id = resolve_agorg_ref(&store, target).await?;
+                store.import_discovery(id, &scan).await?;
+                println!(
+                    "Imported discovery into {} ({} candidates)",
+                    id,
+                    scan.candidates.len()
+                );
+            }
+            println!("{}", serde_json::to_string_pretty(&scan).into_diagnostic()?);
+            Ok(CommandReport::ok(
+                "agorg.discover",
+                format!("Discovered {} candidates", scan.candidates.len()),
+            ))
+        }
+        AgorgCommands::Tree(args) => {
+            let root = match &args.root {
+                Some(v) => Some(resolve_agorg_ref(&store, v).await?),
+                None => None,
+            };
+            let tree = store.tree(root).await?;
+            println!("{}", serde_json::to_string_pretty(&tree).into_diagnostic()?);
+            Ok(CommandReport::ok(
+                "agorg.tree",
+                format!("Rendered {} root tree nodes", tree.len()),
+            ))
+        }
+        AgorgCommands::Link(args) => {
+            let parent = resolve_agorg_ref(&store, &args.parent).await?;
+            let child = resolve_agorg_ref(&store, &args.child).await?;
+            store.link_agorgs(parent, child).await?;
+            println!("Linked AGOrg {} -> {}", parent, child);
+            Ok(CommandReport::ok(
+                "agorg.link",
+                format!("Linked {} -> {}", parent, child),
+            ))
+        }
+    }
+}
+
+async fn resolve_agorg_ref(store: &AgorgStore, input: &str) -> Result<uuid::Uuid> {
+    if let Ok(id) = uuid::Uuid::parse_str(input) {
+        if store.get_agorg(id).await?.is_some() {
+            return Ok(id);
+        }
+        return Err(miette!("AGOrg UUID {} not found", id));
+    }
+    let list = store.list_agorgs().await?;
+    let mut found = list
+        .into_iter()
+        .filter(|a| a.name.eq_ignore_ascii_case(input))
+        .collect::<Vec<_>>();
+    if found.is_empty() {
+        return Err(miette!("AGOrg '{}' not found", input));
+    }
+    if found.len() > 1 {
+        return Err(miette!(
+            "AGOrg name '{}' is ambiguous; use UUID instead",
+            input
+        ));
+    }
+    Ok(found.remove(0).id)
+}
+
+async fn resolve_agorg_ref_optional(
+    store: &AgorgStore,
+    input: Option<&str>,
+) -> Result<Option<uuid::Uuid>> {
+    if let Some(v) = input {
+        Ok(Some(resolve_agorg_ref(store, v).await?))
+    } else {
+        Ok(None)
     }
 }
 
