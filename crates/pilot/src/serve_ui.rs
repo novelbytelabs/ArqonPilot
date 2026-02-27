@@ -1466,6 +1466,26 @@ const INDEX_HTML: &str = r#"<!doctype html>
       line-height: 1.45;
       margin-top: -4px;
     }
+    .sequence-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 8px;
+      border: 1px solid #2f436f;
+      border-radius: 10px;
+      background: rgba(10, 19, 33, 0.7);
+    }
+    .seq-step {
+      border-radius: 999px;
+      border: 1px solid #3a578a;
+      background: #152845;
+      color: #d5e4ff;
+      font-size: 0.76rem;
+      font-weight: 700;
+      padding: 4px 10px;
+      white-space: nowrap;
+    }
     .step {
       border: 1px solid #2f4975;
       border-radius: 10px;
@@ -1625,6 +1645,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </div>
 
   <section class="panel active" id="dashboard">
+    <div class="sequence-strip">
+      <span class="seq-step">Status -> Bus Health -> Oracle Query -> Heal Plan -> Heal Run</span>
+      <span class="seq-step">Branch Preview -> Multi Status -> DAG -> Staged Apply</span>
+      <span class="seq-step">Push Safe -> Timeline Verify</span>
+    </div>
     <div class="grid">
       <div class="card">
         <h3>System Status</h3>
@@ -1737,6 +1762,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </section>
 
   <section class="panel" id="oracle">
+    <div class="sequence-strip">
+      <span class="seq-step">Scan Index</span>
+      <span class="seq-step">Run Query</span>
+      <span class="seq-step">Open Report</span>
+    </div>
     <div class="grid">
       <div class="card">
         <h3>Oracle Scan / Query</h3>
@@ -1761,6 +1791,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </section>
 
   <section class="panel" id="heal">
+    <div class="sequence-strip">
+      <span class="seq-step">Plan Only</span>
+      <span class="seq-step">Review Response/Timeline</span>
+      <span class="seq-step">Run Heal</span>
+    </div>
     <div class="grid">
       <div class="card">
         <h3>Heal Controls</h3>
@@ -1858,6 +1893,12 @@ Recommended flow:
   </section>
 
   <section class="panel" id="multi">
+    <div class="sequence-strip">
+      <span class="seq-step">Register</span>
+      <span class="seq-step">List -> Status -> Order</span>
+      <span class="seq-step">DAG -> PR Plan</span>
+      <span class="seq-step">Staged Apply (Dry Run -> Execute)</span>
+    </div>
     <div class="grid">
       <div class="card">
         <h3>Register Repo</h3>

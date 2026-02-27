@@ -192,7 +192,7 @@ Progress update:
      - load prior contract into form
      - retry failed contract (`approve -> execute`) from the panel.
 
-## Wave 13 (Cross-Repo Orchestration) - In Progress (Core Implemented)
+## Wave 13 (Cross-Repo Orchestration) - Completed
 
 Deliverables:
 
@@ -205,7 +205,7 @@ Exit criteria:
 1. Multi-repo feature flow works end-to-end from Dashboard.
 2. Merge/release ordering is validated against dependency graph.
 
-Progress update:
+Completion summary:
 
 1. Added dependency DAG export/reporting:
      - `pilot multi dag [--group ... --tag ...] [--dry-run] [--output ...]`
@@ -217,6 +217,15 @@ Progress update:
      - `pilot.multi.dag`
      - `pilot.multi.apply`
 4. Added Multi tab controls for DAG and staged apply (dry-run + execute).
+5. Added explicit action lifecycle UX for high-impact operations:
+     - Multi: DAG + Staged Apply chips (`idle/running/success/failed`) with button lock/unlock.
+     - Oracle tab: Scan/Query chips and running-state controls.
+     - Heal tab: Plan/Run chips and running-state controls.
+     - Dashboard quick ops: Oracle/Heal chips and running-state controls.
+6. Added tab-level "Recommended Sequence" strips for Dashboard, Oracle, Heal, and Multi so operator flow is obvious at first glance.
+7. Hardened push reliability for DNS instability:
+     - `scripts/push_main.sh` now retries transient network failures for both fetch/push.
+     - final summary and failure classification remain deterministic after retry exhaustion.
 
 ## Wave 14 (Documentation and Testing Closure)
 
