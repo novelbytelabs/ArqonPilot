@@ -1734,9 +1734,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <div class="grid">
       <div class="card">
         <h3>Oracle Scan / Query</h3>
-        <button class="btn" onclick="oracleScan()">Scan Index</button>
+        <div class="chip-row">
+          <span id="oracle-chip" class="chip neutral">Oracle: idle</span>
+        </div>
+        <button id="oracle-scan-btn" class="btn" onclick="oracleScan()">Scan Index</button>
         <input id="oracle-query" placeholder="where is branch sync implemented?" />
-        <button class="btn secondary" onclick="oracleQuery()">Run Query</button>
+        <button id="oracle-query-btn" class="btn secondary" onclick="oracleQuery()">Run Query</button>
       </div>
       <div class="card">
         <h3>Oracle Reports</h3>
@@ -1754,6 +1757,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <div class="grid">
       <div class="card">
         <h3>Heal Controls</h3>
+        <div class="chip-row">
+          <span id="heal-chip" class="chip neutral">Heal: idle</span>
+        </div>
         <input id="heal-log-file" placeholder="test_output.json" value="test_output.json" />
         <input id="heal-target" placeholder="optional target file/crate" />
         <div class="row">
@@ -1765,8 +1771,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
           verbose output
         </label>
         <div class="row">
-          <button class="btn secondary" onclick="healPlan()">Plan Only</button>
-          <button class="btn" onclick="healRun()">Run Heal</button>
+          <button id="heal-plan-btn" class="btn secondary" onclick="healPlan()">Plan Only</button>
+          <button id="heal-run-btn" class="btn" onclick="healRun()">Run Heal</button>
         </div>
       </div>
       <div class="card">
@@ -2014,6 +2020,12 @@ const multiApplyChip = document.getElementById('multi-apply-chip');
 const multiDagBtn = document.getElementById('multi-dag-btn');
 const multiApplyDryBtn = document.getElementById('multi-apply-dry-btn');
 const multiApplyExecBtn = document.getElementById('multi-apply-exec-btn');
+const oracleChip = document.getElementById('oracle-chip');
+const oracleScanBtn = document.getElementById('oracle-scan-btn');
+const oracleQueryBtn = document.getElementById('oracle-query-btn');
+const healChip = document.getElementById('heal-chip');
+const healPlanBtn = document.getElementById('heal-plan-btn');
+const healRunBtn = document.getElementById('heal-run-btn');
 const BUS_HEALTH_KEY = 'pilot.bus.health.v1';
 const timelineState = new Map();
 let selectedOperationId = null;
@@ -2377,13 +2389,23 @@ function branchPrune() {
 function branchStatus() { run('pilot.branch.status', { group: null, tags: [] }); }
 
 function oracleScan() {
-  run('pilot.oracle.scan', {});
+  run('pilot.oracle.scan', {}, {
+    label: 'Oracle',
+    chip: oracleChip,
+    buttons: [oracleScanBtn, oracleQueryBtn],
+    runningLabel: 'Running...'
+  });
 }
 
 function oracleQuery() {
   run('pilot.oracle.query', {
     query: document.getElementById('oracle-query').value,
     cli: true
+  }, {
+    label: 'Oracle',
+    chip: oracleChip,
+    buttons: [oracleScanBtn, oracleQueryBtn],
+    runningLabel: 'Running...'
   });
 }
 
@@ -2410,11 +2432,21 @@ function healPayload(planOnly) {
 }
 
 function healPlan() {
-  run('pilot.heal.run', healPayload(true));
+  run('pilot.heal.run', healPayload(true), {
+    label: 'Heal',
+    chip: healChip,
+    buttons: [healPlanBtn, healRunBtn],
+    runningLabel: 'Running...'
+  });
 }
 
 function healRun() {
-  run('pilot.heal.run', healPayload(false));
+  run('pilot.heal.run', healPayload(false), {
+    label: 'Heal',
+    chip: healChip,
+    buttons: [healPlanBtn, healRunBtn],
+    runningLabel: 'Running...'
+  });
 }
 
 function dashHealPayload(planOnly) {
