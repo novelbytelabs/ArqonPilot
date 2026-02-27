@@ -1855,19 +1855,25 @@ Recommended flow:
       </div>
       <div class="card">
         <h3>List / Status / Order / DAG / PR Plan</h3>
+        <div class="chip-row">
+          <span id="multi-dag-chip" class="chip neutral">DAG: idle</span>
+        </div>
         <input id="multi-group" placeholder="core" />
         <input id="multi-tags" placeholder="apply-pilot,wave7" />
         <div class="row">
           <button class="btn secondary" onclick="multiList()">List</button>
           <button class="btn secondary" onclick="multiStatus()">Status</button>
           <button class="btn secondary" onclick="multiOrder()">Order</button>
-          <button class="btn secondary" onclick="multiDag()">DAG</button>
+          <button id="multi-dag-btn" class="btn secondary" onclick="multiDag()">DAG</button>
         </div>
         <button class="btn" onclick="multiPrsCreate()">PR Plan (Dry Run)</button>
       </div>
       <div class="card">
         <h3>Staged Apply (Dependency-Aware)</h3>
         <div class="helper">Runs branch creation in dependency stages. Default is dry-run preview.</div>
+        <div class="chip-row">
+          <span id="multi-apply-chip" class="chip neutral">Staged Apply: idle</span>
+        </div>
         <input id="multi-apply-branch" placeholder="feat/pilot-wave13" value="feat/pilot-wave13" />
         <input id="multi-apply-base" placeholder="dev" value="dev" />
         <input id="multi-apply-pr-base" placeholder="main" value="main" />
@@ -1877,8 +1883,8 @@ Recommended flow:
           Continue on failure
         </label>
         <div class="row">
-          <button class="btn secondary" onclick="multiApplyDryRun()">Staged Apply (Dry Run)</button>
-          <button class="btn" onclick="multiApplyExecute()">Staged Apply (Execute)</button>
+          <button id="multi-apply-dry-btn" class="btn secondary" onclick="multiApplyDryRun()">Staged Apply (Dry Run)</button>
+          <button id="multi-apply-exec-btn" class="btn" onclick="multiApplyExecute()">Staged Apply (Execute)</button>
         </div>
       </div>
     </div>
@@ -2003,6 +2009,11 @@ const dashDriftChip = document.getElementById('dash-drift-chip');
 const dashBusChip = document.getElementById('dash-bus-chip');
 const dashGateChip = document.getElementById('dash-gate-chip');
 const dashPushChip = document.getElementById('dash-push-chip');
+const multiDagChip = document.getElementById('multi-dag-chip');
+const multiApplyChip = document.getElementById('multi-apply-chip');
+const multiDagBtn = document.getElementById('multi-dag-btn');
+const multiApplyDryBtn = document.getElementById('multi-apply-dry-btn');
+const multiApplyExecBtn = document.getElementById('multi-apply-exec-btn');
 const BUS_HEALTH_KEY = 'pilot.bus.health.v1';
 const timelineState = new Map();
 let selectedOperationId = null;
@@ -2021,8 +2032,37 @@ for (const btn of document.querySelectorAll('.tab')) {
 }
 
 function tags(v) { return v.split(',').map(s => s.trim()).filter(Boolean); }
-async function run(command, payload) {
+function setButtonBusy(btn, busy, runningLabel) {
+  if (!btn) return;
+  if (!btn.dataset.defaultLabel) {
+    btn.dataset.defaultLabel = btn.textContent || '';
+  }
+  btn.disabled = !!busy;
+  if (busy && runningLabel) {
+    btn.textContent = runningLabel;
+  } else {
+    btn.textContent = btn.dataset.defaultLabel;
+  }
+}
+
+function setChipState(chip, label, state, suffix) {
+  if (!chip) return;
+  let level = 'neutral';
+  if (state === 'running') level = 'warn';
+  if (state === 'success') level = 'ok';
+  if (state === 'failed') level = 'fail';
+  chip.className = 'chip ' + level;
+  const detail = suffix ? (': ' + suffix) : '';
+  chip.textContent = label + detail;
+}
+
+async function run(command, payload, opts = {}) {
+  const label = opts.label || command;
+  const chip = opts.chip || null;
+  const buttons = Array.isArray(opts.buttons) ? opts.buttons : [];
   payload.schema_version = 1;
+  setChipState(chip, label, 'running', 'running');
+  for (const b of buttons) setButtonBusy(b, true, opts.runningLabel || null);
   out.textContent = JSON.stringify({status: "running", command, payload}, null, 2);
   if (dashStatusOut) {
     dashStatusOut.textContent = out.textContent;
@@ -2042,8 +2082,11 @@ async function run(command, payload) {
     if (dashStatusOut) {
       dashStatusOut.textContent = JSON.stringify(data, null, 2);
     }
+    const ok = !!data.ok;
+    setChipState(chip, label, ok ? 'success' : 'failed', ok ? 'success' : 'failed');
     appendLive({ source: 'ui_command', command, ok: !!data.ok, status: res.status });
     loadHistory();
+    return data;
   } catch (err) {
     const msg = (err && err.name === 'AbortError')
       ? 'Request timed out. Check ArqonBus bridge health and try again.'
@@ -2051,7 +2094,11 @@ async function run(command, payload) {
     const payloadErr = { ok: false, error: msg, command };
     out.textContent = JSON.stringify(payloadErr, null, 2);
     if (dashStatusOut) dashStatusOut.textContent = out.textContent;
+    setChipState(chip, label, 'failed', 'failed');
     appendLive({ source: 'ui_command', command, ok: false, error: msg });
+    return payloadErr;
+  } finally {
+    for (const b of buttons) setButtonBusy(b, false, null);
   }
 }
 
@@ -2540,6 +2587,11 @@ function multiDag() {
     group: document.getElementById('multi-group').value || null,
     tags: tags(document.getElementById('multi-tags').value),
     dry_run: true
+  }, {
+    label: 'DAG',
+    chip: multiDagChip,
+    buttons: [multiDagBtn],
+    runningLabel: 'DAG running...'
   });
 }
 function multiPrsCreate() {
@@ -2569,12 +2621,22 @@ function multiApplyPayload(apply) {
 
 function multiApplyDryRun() {
   const payload = multiApplyPayload(false);
-  run('pilot.multi.apply', payload);
+  run('pilot.multi.apply', payload, {
+    label: 'Staged Apply',
+    chip: multiApplyChip,
+    buttons: [multiApplyDryBtn, multiApplyExecBtn],
+    runningLabel: 'Running...'
+  });
 }
 
 function multiApplyExecute() {
   const payload = multiApplyPayload(true);
-  run('pilot.multi.apply', payload);
+  run('pilot.multi.apply', payload, {
+    label: 'Staged Apply',
+    chip: multiApplyChip,
+    buttons: [multiApplyDryBtn, multiApplyExecBtn],
+    runningLabel: 'Running...'
+  });
 }
 
 function dashBranchCreate() {
