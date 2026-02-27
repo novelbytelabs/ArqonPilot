@@ -1,6 +1,6 @@
 <div class="pilot-hero">
   <div class="pilot-hero-title">Arqon Pilot</div>
-  <p class="pilot-hero-subtitle">Monorepo Developer Experience.<br/>Multi-repo power.</p>
+  <p class="pilot-hero-subtitle">A Monorepo with<br/>Multi-repo power.</p>
   <p class="pilot-hero-copy">The local control plane for Arqon's ecosystem:<br/>orchestrate branches, enforce policy, self-heal failures, and push safely across the fleet.</p>
 
   <div class="pilot-pill-row">
@@ -30,16 +30,16 @@ operate like one cohesive engineering system.
 ### Arqon-Specific Value
 
 - **Fleet-Wide Orchestration**
-  - `multi`, `branch`, and `navigate` let you coordinate branches, dependency order,
+    - `multi`, `branch`, and `navigate` let you coordinate branches, dependency order,
     and release motion across multiple Arqon repos from one command/UI surface.
 - **Shift-Left CI/CD Governance**
-  - Policy, hook, and pre-push gates run locally first, preventing predictable CI failures
+    - Policy, hook, and pre-push gates run locally first, preventing predictable CI failures
     before code leaves your workstation.
 - **Self-Healing and Repair**
-  - Heal workflows surface failures, build context, and execute controlled repair loops
+    - Heal workflows surface failures, build context, and execute controlled repair loops
     with audit artifacts.
 - **Push Safe as Default**
-  - `Push Safe` validates policy, hook integrity, and gate state before pushing, replacing
+    - `Push Safe` validates policy, hook integrity, and gate state before pushing, replacing
     push-and-pray with deterministic preflight.
 
 ## Capabilities
