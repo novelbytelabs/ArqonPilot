@@ -33,6 +33,13 @@ cargo check -p pilot --locked
 cargo run -p pilot -- --help
 ```
 
+If your shell `pilot` points to an older installed binary, use the local wrapper to force the repo build:
+
+```bash
+./scripts/pilot_local.sh --help
+./scripts/pilot_local.sh db status
+```
+
 ## ArqonBus Bridge
 
 Use `pilot serve` to expose Branch and Multi operations through ArqonBus command lanes:
@@ -97,16 +104,16 @@ Managed runtime defaults:
 - Log file: `~/.arqon/pilot/db/postgres.log`
 - DB name: `pilot_local`
 - Endpoint mode:
-  - Linux/macOS: Unix socket (`~/.arqon/pilot/run/postgres.sock`)
+  - Linux/macOS: Unix socket directory (`~/.arqon/pilot/run`) with socket file `.s.PGSQL.9132`
   - Windows: local TCP (`127.0.0.1:9132` default with deterministic fallback)
 
 Managed DB commands:
 
 ```bash
-pilot db ensure
-pilot db status
-pilot db start
-pilot db stop
+./scripts/pilot_local.sh db ensure
+./scripts/pilot_local.sh db status
+./scripts/pilot_local.sh db start
+./scripts/pilot_local.sh db stop
 ```
 
 Safety guard:
@@ -119,13 +126,13 @@ Advanced override (disables managed runtime auto-start):
 Core AGOrg commands:
 
 ```bash
-pilot agorg create --name Arqon --root /home/irbsurfer/Projects/arqon/Arqon --default-scope
-pilot agorg list
-pilot agorg show
-pilot agorg use Arqon
-pilot agorg discover --root /home/irbsurfer/Projects/arqon --depth 4
-pilot agorg tree
-pilot agorg create-project --name Arqon --root /home/irbsurfer/Projects/arqon/Arqon --autoscan --import --default-scope
+./scripts/pilot_local.sh agorg create --name Arqon --root /home/irbsurfer/Projects/arqon/Arqon --default-scope
+./scripts/pilot_local.sh agorg list
+./scripts/pilot_local.sh agorg show
+./scripts/pilot_local.sh agorg use Arqon
+./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4
+./scripts/pilot_local.sh agorg tree
+./scripts/pilot_local.sh agorg create-project --name Arqon --root /home/irbsurfer/Projects/arqon/Arqon --autoscan --import --default-scope
 ```
 
 ## Critical Linux/Conda Runtime Step

@@ -116,6 +116,11 @@ struct AgorgLinkRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct FsPickDirectoryRequest {
+    start_dir: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ReportPathQuery {
     path: String,
     max_bytes: Option<usize>,
@@ -210,6 +215,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/agorg/discover", post(api_agorg_discover))
         .route("/api/agorg/tree", get(api_agorg_tree))
         .route("/api/agorg/link", post(api_agorg_link))
+        .route("/api/fs/pick-directory", post(api_fs_pick_directory))
         .route("/api/dependencies/run", post(run_dependency_action))
         .route("/api/dependencies/logs", get(get_dependency_logs))
         .route("/api/evidence/export", post(export_evidence_bundle))
@@ -502,6 +508,62 @@ async fn api_agorg_link(
     }
 }
 
+async fn api_fs_pick_directory(Json(req): Json<FsPickDirectoryRequest>) -> Response {
+    match pick_directory(req.start_dir.as_deref()).await {
+        Ok(path) => Json(json!({"ok": true, "path": path})).into_response(),
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn pick_directory(start_dir: Option<&str>) -> Result<String> {
+    let seed = start_dir.unwrap_or("/home");
+    let mut zenity = TokioCommand::new("zenity");
+    zenity
+        .arg("--file-selection")
+        .arg("--directory")
+        .arg("--title=Select AGOrg Folder")
+        .arg("--filename")
+        .arg(seed);
+    match zenity.output().await {
+        Ok(output) => {
+            if output.status.success() {
+                let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if selected.is_empty() {
+                    return Err(miette::miette!("No folder selected"));
+                }
+                return Ok(selected);
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(miette::miette!("Failed to run zenity: {}", e)),
+    }
+
+    let mut kdialog = TokioCommand::new("kdialog");
+    kdialog
+        .arg("--getexistingdirectory")
+        .arg(seed)
+        .arg("Select AGOrg Folder");
+    match kdialog.output().await {
+        Ok(output) => {
+            if output.status.success() {
+                let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if selected.is_empty() {
+                    return Err(miette::miette!("No folder selected"));
+                }
+                return Ok(selected);
+            }
+            Err(miette::miette!(
+                "Folder selection canceled or failed (kdialog exit {})",
+                output.status.code().unwrap_or(1)
+            ))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(miette::miette!(
+            "No folder picker available. Install `zenity` or `kdialog`."
+        )),
+        Err(e) => Err(miette::miette!("Failed to run kdialog: {}", e)),
+    }
+}
+
 async fn resolve_agorg_ref(store: &AgorgStore, input: &str) -> Result<uuid::Uuid> {
     if let Ok(id) = uuid::Uuid::parse_str(input) {
         if store.get_agorg(id).await?.is_some() {
@@ -509,13 +571,24 @@ async fn resolve_agorg_ref(store: &AgorgStore, input: &str) -> Result<uuid::Uuid
         }
         return Err(miette::miette!("AGOrg UUID {} not found", id));
     }
+    let canonical_input = fs::canonicalize(input)
+        .ok()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| input.to_string());
     let list = store.list_agorgs().await?;
     let mut found = list
         .into_iter()
-        .filter(|a| a.name.eq_ignore_ascii_case(input))
+        .filter(|a| {
+            a.name.eq_ignore_ascii_case(input)
+                || a.root_path == input
+                || a.root_path == canonical_input
+        })
         .collect::<Vec<_>>();
     if found.is_empty() {
-        return Err(miette::miette!("AGOrg '{}' not found", input));
+        return Err(miette::miette!(
+            "AGOrg '{}' not found (expected UUID, name, or root path)",
+            input
+        ));
     }
     if found.len() > 1 {
         return Err(miette::miette!(
@@ -550,65 +623,143 @@ async fn run_dependency_action(
     }
     if action == "db-status" {
         return match state.agorg_store.managed_db_status().await {
-            Ok(Some(status)) => Json(json!({
-                "ok": status.running,
-                "action": action,
-                "exit_code": 0,
-                "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
-                "stderr": ""
-            }))
-            .into_response(),
-            Ok(None) => Json(json!({
-                "ok": true,
-                "action": action,
-                "exit_code": 0,
-                "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
-                "stderr": ""
-            }))
-            .into_response(),
-            Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+            Ok(Some(status)) => {
+                let ok = status.running;
+                let body = json!({
+                    "ok": ok,
+                    "action": action,
+                    "exit_code": 0,
+                    "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
+                    "stderr": ""
+                });
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": ok,
+                    "exit_code": 0
+                }));
+                Json(body).into_response()
+            }
+            Ok(None) => {
+                let body = json!({
+                    "ok": true,
+                    "action": action,
+                    "exit_code": 0,
+                    "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
+                    "stderr": ""
+                });
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": true,
+                    "exit_code": 0
+                }));
+                Json(body).into_response()
+            }
+            Err(err) => {
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": false,
+                    "exit_code": 1,
+                    "error": err.to_string()
+                }));
+                error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string())
+            }
         };
     }
     if action == "db-start" {
         return match state.agorg_store.ensure_managed_db().await {
-            Ok(Some(status)) => Json(json!({
-                "ok": status.running,
-                "action": action,
-                "exit_code": 0,
-                "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
-                "stderr": ""
-            }))
-            .into_response(),
-            Ok(None) => Json(json!({
-                "ok": true,
-                "action": action,
-                "exit_code": 0,
-                "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
-                "stderr": ""
-            }))
-            .into_response(),
-            Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+            Ok(Some(status)) => {
+                let ok = status.running;
+                let body = json!({
+                    "ok": ok,
+                    "action": action,
+                    "exit_code": 0,
+                    "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
+                    "stderr": ""
+                });
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": ok,
+                    "exit_code": 0
+                }));
+                Json(body).into_response()
+            }
+            Ok(None) => {
+                let body = json!({
+                    "ok": true,
+                    "action": action,
+                    "exit_code": 0,
+                    "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
+                    "stderr": ""
+                });
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": true,
+                    "exit_code": 0
+                }));
+                Json(body).into_response()
+            }
+            Err(err) => {
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": false,
+                    "exit_code": 1,
+                    "error": err.to_string()
+                }));
+                error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string())
+            }
         };
     }
     if action == "db-stop" {
         return match state.agorg_store.stop_managed_db().await {
-            Ok(Some(status)) => Json(json!({
-                "ok": !status.running,
-                "action": action,
-                "exit_code": 0,
-                "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
-                "stderr": ""
-            }))
-            .into_response(),
-            Ok(None) => Json(json!({
-                "ok": true,
-                "action": action,
-                "exit_code": 0,
-                "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
-                "stderr": ""
-            }))
-            .into_response(),
-            Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+            Ok(Some(status)) => {
+                let ok = !status.running;
+                let body = json!({
+                    "ok": ok,
+                    "action": action,
+                    "exit_code": 0,
+                    "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
+                    "stderr": ""
+                });
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": ok,
+                    "exit_code": 0
+                }));
+                Json(body).into_response()
+            }
+            Ok(None) => {
+                let body = json!({
+                    "ok": true,
+                    "action": action,
+                    "exit_code": 0,
+                    "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
+                    "stderr": ""
+                });
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": true,
+                    "exit_code": 0
+                }));
+                Json(body).into_response()
+            }
+            Err(err) => {
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": false,
+                    "exit_code": 1,
+                    "error": err.to_string()
+                }));
+                error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string())
+            }
         };
     }
 
@@ -1645,9 +1796,30 @@ const INDEX_HTML: &str = r#"<!doctype html>
       margin-top: 10px;
       display: flex;
       align-items: center;
-      gap: 8px;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
       font-size: 0.86rem;
       color: #b8c8ef;
+    }
+    .status-left, .status-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status-right {
+      border: 1px solid #3a578a;
+      background: #152845;
+      color: #dbe7ff;
+      border-radius: 999px;
+      padding: 4px 10px;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.15s ease;
+    }
+    .status-right:hover {
+      border-color: #5b7cc0;
+      box-shadow: 0 0 0 2px rgba(90, 124, 200, 0.25);
     }
     .bus-chip {
       border-radius: 999px;
@@ -1666,6 +1838,16 @@ const INDEX_HTML: &str = r#"<!doctype html>
       color: #ffb9b9;
       border-color: #aa4c4c;
       background: #351919;
+    }
+    .agorg-chip.active {
+      color: #b7f7ca;
+      border-color: #2f965d;
+      background: #113022;
+    }
+    .agorg-chip.none {
+      color: #ffe6a6;
+      border-color: #997a33;
+      background: #2f2610;
     }
     h1 { margin: 0; font-size: 2rem; line-height: 1.1; letter-spacing: 0.01em; }
     h2 { margin: 0; font-size: 1rem; color: var(--muted); font-weight: 500; }
@@ -1930,8 +2112,14 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <h1>Arqon Pilot Control Panel</h1>
     <h2 class="muted">Oracle + Heal + Dependencies + Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</h2>
     <div class="bus-status-row">
-      ArqonBus:
-      <span id="bus-status-chip" class="bus-chip disconnected">DISCONNECTED</span>
+      <div class="status-left">
+        ArqonBus:
+        <span id="bus-status-chip" class="bus-chip disconnected">DISCONNECTED</span>
+      </div>
+      <button id="agorg-open-btn" class="status-right" type="button" title="Open AGOrg panel">
+        AGOrg:
+        <span id="agorg-status-chip" class="bus-chip agorg-chip none">NO ACTIVE</span>
+      </button>
     </div>
   </div>
 
@@ -1942,7 +2130,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <button class="tab" data-tab="dependencies">Dependencies</button>
     <button class="tab" data-tab="branch">Branch</button>
     <button class="tab" data-tab="multi">Multi</button>
-    <button class="tab" data-tab="agorg">AGOrg</button>
     <button class="tab" data-tab="telemetry">Telemetry</button>
     <button class="tab" data-tab="codex">Codex</button>
   </div>
@@ -2258,9 +2445,19 @@ Recommended flow:
     <div class="grid">
       <div class="card">
         <h3>Create AGOrg Project</h3>
+        <label class="field-label" for="agorg-name">AGOrg Name</label>
         <input id="agorg-name" placeholder="Arqon" value="Arqon" />
-        <input id="agorg-root" placeholder="/abs/path/to/agorg/root" value="/home/irbsurfer/Projects/arqon/Arqon" />
-        <input id="agorg-parent" placeholder="optional parent AGOrg (UUID or name)" />
+        <label class="field-label" for="agorg-root">AGOrg Root Path</label>
+        <div class="row">
+          <input id="agorg-root" placeholder="/abs/path/to/agorg/root" value="/home/irbsurfer/Projects/arqon/Arqon" />
+          <button class="btn secondary" onclick="browseAgorgRoot()">Browse…</button>
+        </div>
+        <label class="field-label" for="agorg-parent">Parent AGOrg (Optional: UUID, Name, or Path)</label>
+        <div class="row">
+          <input id="agorg-parent" placeholder="optional parent AGOrg (UUID, name, or path)" />
+          <button class="btn secondary" onclick="browseAgorgParent()">Browse…</button>
+        </div>
+        <label class="field-label" for="agorg-depth">Scan Depth</label>
         <input id="agorg-depth" placeholder="scan depth" value="4" />
         <div class="row">
           <label style="font-size:0.82rem;color:#a8b9e3;">
@@ -2284,20 +2481,29 @@ Recommended flow:
           <button class="btn secondary" onclick="agorgList()">List AGOrgs</button>
           <button class="btn secondary" onclick="agorgShowActive()">Show Active</button>
         </div>
+        <label class="field-label" for="agorg-use-id">Use Scope (UUID or Name)</label>
         <div class="row">
           <input id="agorg-use-id" placeholder="AGOrg UUID or name" />
           <button class="btn secondary" onclick="agorgUse()">Use Scope</button>
         </div>
+        <label class="field-label" for="agorg-link-parent">Link Parent AGOrg</label>
+        <input id="agorg-link-parent" placeholder="parent AGOrg UUID or name" />
+        <label class="field-label" for="agorg-link-child">Link Child AGOrg</label>
+        <input id="agorg-link-child" placeholder="child AGOrg UUID or name" />
         <div class="row">
-          <input id="agorg-link-parent" placeholder="parent AGOrg UUID or name" />
-          <input id="agorg-link-child" placeholder="child AGOrg UUID or name" />
           <button class="btn secondary" onclick="agorgLink()">Link</button>
         </div>
       </div>
       <div class="card">
         <h3>Discovery and Tree</h3>
-        <input id="agorg-discover-root" placeholder="/abs/path/to/discovery/root" value="/home/irbsurfer/Projects/arqon" />
+        <label class="field-label" for="agorg-discover-root">Discovery Root</label>
+        <div class="row">
+          <input id="agorg-discover-root" placeholder="/abs/path/to/discovery/root" value="/home/irbsurfer/Projects/arqon" />
+          <button class="btn secondary" onclick="browseDiscoverRoot()">Browse…</button>
+        </div>
+        <label class="field-label" for="agorg-discover-depth">Discovery Depth</label>
         <input id="agorg-discover-depth" placeholder="depth" value="4" />
+        <label class="field-label" for="agorg-discover-import-to">Import To AGOrg (Optional)</label>
         <input id="agorg-discover-import-to" placeholder="optional AGOrg UUID/name for import" />
         <div class="row">
           <button class="btn secondary" onclick="agorgDiscover()">Discover</button>
@@ -2409,6 +2615,8 @@ Recommended flow:
 const out = document.getElementById('out');
 const liveStream = document.getElementById('live-stream');
 const busStatusChip = document.getElementById('bus-status-chip');
+const agorgOpenBtn = document.getElementById('agorg-open-btn');
+const agorgStatusChip = document.getElementById('agorg-status-chip');
 const opDetailMeta = document.getElementById('op-detail-meta');
 const opDetailArtifact = document.getElementById('op-detail-artifact');
 const opDetail = document.getElementById('op-detail');
@@ -2464,12 +2672,23 @@ let streamPaused = false;
 let streamHandle = null;
 let latestCodexContractId = '';
 
+function activatePanel(tabName) {
+  for (const t of document.querySelectorAll('.tab')) t.classList.remove('active');
+  for (const p of document.querySelectorAll('.panel')) p.classList.remove('active');
+  const panel = document.getElementById(tabName);
+  if (panel) panel.classList.add('active');
+  const tabBtn = document.querySelector('.tab[data-tab="' + tabName + '"]');
+  if (tabBtn) tabBtn.classList.add('active');
+}
+
 for (const btn of document.querySelectorAll('.tab')) {
-  btn.addEventListener('click', () => {
-    for (const t of document.querySelectorAll('.tab')) t.classList.remove('active');
-    for (const p of document.querySelectorAll('.panel')) p.classList.remove('active');
-    btn.classList.add('active');
-    document.getElementById(btn.dataset.tab).classList.add('active');
+  btn.addEventListener('click', () => activatePanel(btn.dataset.tab));
+}
+
+if (agorgOpenBtn) {
+  agorgOpenBtn.addEventListener('click', () => {
+    activatePanel('agorg');
+    agorgShowActive();
   });
 }
 
@@ -2593,6 +2812,27 @@ function setBusStatus(connected, note) {
   } catch (_) {}
   if (note) {
     opDetailMeta.textContent = note;
+  }
+}
+
+function setAgorgStatus(label, active) {
+  if (!agorgStatusChip) return;
+  agorgStatusChip.textContent = label;
+  agorgStatusChip.className = 'bus-chip agorg-chip ' + (active ? 'active' : 'none');
+}
+
+async function refreshAgorgHeader() {
+  try {
+    const res = await fetch('/api/agorg/active');
+    const data = await res.json();
+    const active = data && data.ok && data.active ? data.active : null;
+    if (active && active.name) {
+      setAgorgStatus(active.name, true);
+    } else {
+      setAgorgStatus('NO ACTIVE', false);
+    }
+  } catch (_) {
+    setAgorgStatus('UNAVAILABLE', false);
   }
 }
 
@@ -3079,6 +3319,7 @@ async function agorgCreateProject() {
   if (data.discovery) {
     agorgDiscoveryOut.textContent = JSON.stringify(data.discovery, null, 2);
   }
+  refreshAgorgHeader();
 }
 
 async function agorgList() {
@@ -3095,6 +3336,7 @@ async function agorgShowActive() {
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
   out.textContent = text;
+  refreshAgorgHeader();
 }
 
 async function agorgUse() {
@@ -3108,6 +3350,7 @@ async function agorgUse() {
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
   out.textContent = text;
+  refreshAgorgHeader();
 }
 
 async function agorgLink() {
@@ -3151,6 +3394,51 @@ async function agorgTree() {
   const text = JSON.stringify(data, null, 2);
   agorgDiscoveryOut.textContent = text;
   out.textContent = text;
+}
+
+async function pickDirectory(startDir) {
+  const res = await fetch('/api/fs/pick-directory', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ start_dir: startDir || null })
+  });
+  return res.json();
+}
+
+async function browseAgorgRoot() {
+  const input = document.getElementById('agorg-root');
+  const data = await pickDirectory(input.value);
+  if (data && data.ok && data.path) {
+    input.value = data.path;
+  } else {
+    const text = JSON.stringify(data, null, 2);
+    agorgOut.textContent = text;
+    out.textContent = text;
+  }
+}
+
+async function browseDiscoverRoot() {
+  const input = document.getElementById('agorg-discover-root');
+  const data = await pickDirectory(input.value);
+  if (data && data.ok && data.path) {
+    input.value = data.path;
+  } else {
+    const text = JSON.stringify(data, null, 2);
+    agorgOut.textContent = text;
+    out.textContent = text;
+  }
+}
+
+async function browseAgorgParent() {
+  const input = document.getElementById('agorg-parent');
+  const data = await pickDirectory(input.value);
+  if (data && data.ok && data.path) {
+    input.value = data.path;
+  } else {
+    const text = JSON.stringify(data, null, 2);
+    agorgOut.textContent = text;
+    out.textContent = text;
+  }
 }
 
 function multiRegister() {
@@ -3393,6 +3681,9 @@ function attachStream() {
       } else {
         setBusStatus(true);
       }
+      if (parsed && parsed.source === 'dependency_action' && parsed.action) {
+        updateDashChip(parsed.action, !!parsed.success, parsed);
+      }
       appendLive(parsed);
     } catch (_) {
       appendLive({ raw: evt.data });
@@ -3419,7 +3710,7 @@ depRun('policy');
 depRun('hook-policy');
 depRun('drift');
 depRun('bus-status');
-depRun('db-status');
+refreshAgorgHeader();
 codexLoadContracts();
 setInterval(loadHistory, 30000);
 </script>

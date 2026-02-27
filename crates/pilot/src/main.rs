@@ -2469,13 +2469,24 @@ async fn resolve_agorg_ref(store: &AgorgStore, input: &str) -> Result<uuid::Uuid
         }
         return Err(miette!("AGOrg UUID {} not found", id));
     }
+    let canonical_input = fs::canonicalize(input)
+        .ok()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| input.to_string());
     let list = store.list_agorgs().await?;
     let mut found = list
         .into_iter()
-        .filter(|a| a.name.eq_ignore_ascii_case(input))
+        .filter(|a| {
+            a.name.eq_ignore_ascii_case(input)
+                || a.root_path == input
+                || a.root_path == canonical_input
+        })
         .collect::<Vec<_>>();
     if found.is_empty() {
-        return Err(miette!("AGOrg '{}' not found", input));
+        return Err(miette!(
+            "AGOrg '{}' not found (expected UUID, name, or root path)",
+            input
+        ));
     }
     if found.len() > 1 {
         return Err(miette!(

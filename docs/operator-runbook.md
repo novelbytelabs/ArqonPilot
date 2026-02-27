@@ -9,6 +9,7 @@ This runbook defines the standard operating procedure for running Arqon Pilot ac
 - Protobuf/protoc pinned at `4.25.8` / `25.8`.
 - Pilot binary built from current repo:
     - `cargo build -p pilot`
+    - `./scripts/pilot_local.sh` for command execution without PATH ambiguity
 - Workspace state path:
     - `~/.pilot/workspace.db`
     - `~/.pilot/audit.jsonl`
@@ -117,10 +118,10 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
 
 7. Managed DB operations (CLI)
 
-    - `pilot db ensure`
-    - `pilot db status`
-    - `pilot db start`
-    - `pilot db stop`
+    - `./scripts/pilot_local.sh db ensure`
+    - `./scripts/pilot_local.sh db status`
+    - `./scripts/pilot_local.sh db start`
+    - `./scripts/pilot_local.sh db stop`
 
 Managed DB defaults:
 - data: `~/.arqon/pilot/db/data`

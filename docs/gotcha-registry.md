@@ -128,6 +128,53 @@ Keep this file current whenever a new failure class appears.
   2. Fix payload JSON and required fields.
   3. If execution requires mutation, run `pilot serve ... --ui-allow-mutations`.
 
+## G-010: Shell is running stale installed `pilot` binary
+
+- Signature:
+  - `error: unrecognized subcommand 'db'`
+  - missing newer commands in `pilot --help`
+- Cause:
+  - `pilot` resolves to an older package binary in environment PATH (for example conda env), not the repo build.
+- Recovery:
+  1. `which pilot`
+  2. Run from repo wrapper:
+     - `./scripts/pilot_local.sh --help`
+     - `./scripts/pilot_local.sh db status`
+  3. Optionally reinstall package in the environment after release.
+
+## G-011: Managed DB startup fails with `postgres.log` permission denied
+
+- Signature:
+  - `cannot create ~/.arqon/pilot/db/postgres.log: Permission denied`
+  - `pg_ctl: could not start server`
+- Cause:
+  - local file permission/ownership mismatch for Pilot DB log path.
+- Recovery:
+  1. `chmod u+rw ~/.arqon/pilot/db/postgres.log || true`
+  2. `chmod u+rwx ~/.arqon/pilot/db || true`
+  3. `rm -f ~/.arqon/pilot/db/postgres.log`
+  4. `./scripts/pilot_local.sh db start`
+  5. `./scripts/pilot_local.sh db status`
+
+## G-012: DB running but AGOrg commands fail with socket `os error 2`
+
+- Signature:
+  - `./scripts/pilot_local.sh db status` reports `"running": true`
+  - `./scripts/pilot_local.sh agorg list` fails with:
+    - `No such file or directory (os error 2)`
+- Cause:
+  - Unix-socket DSN missing `port`; Postgres client falls back to default socket port `5432`
+    while Pilot-managed DB runs on `9132`.
+- Recovery:
+  1. Confirm DSN includes socket host and port:
+     - `./scripts/pilot_local.sh db status`
+  2. Ensure DSN contains `port=9132` (or configured `PILOT_DB_PORT`).
+  3. Restart managed DB:
+     - `./scripts/pilot_local.sh db stop`
+     - `./scripts/pilot_local.sh db start`
+  4. Re-run:
+     - `./scripts/pilot_local.sh agorg list`
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`

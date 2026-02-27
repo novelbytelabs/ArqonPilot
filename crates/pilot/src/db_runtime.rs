@@ -1,6 +1,7 @@
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::Serialize;
 use std::fs;
+use std::fs::OpenOptions;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -40,8 +41,10 @@ impl PilotDbManager {
         let root_dir = pilot_home.join("db");
         let data_dir = root_dir.join("data");
         let run_dir = pilot_home.join("run");
-        let log_file = root_dir.join("postgres.log");
-        let socket_dir = run_dir.join("postgres.sock");
+        let log_file = std::env::var("PILOT_DB_LOG_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| run_dir.join("postgres.log"));
+        let socket_dir = run_dir.clone();
         let db_name =
             std::env::var("PILOT_DB_NAME").unwrap_or_else(|_| DEFAULT_DB_NAME.to_string());
         let user = std::env::var("PILOT_DB_USER")
@@ -79,8 +82,9 @@ impl PilotDbManager {
             )
         } else {
             format!(
-                "host={} user={} dbname={}",
+                "host={} port={} user={} dbname={}",
                 self.socket_dir.display(),
+                self.port,
                 self.user,
                 self.db_name
             )
@@ -95,8 +99,9 @@ impl PilotDbManager {
             )
         } else {
             format!(
-                "host={} user={} dbname=postgres",
+                "host={} port={} user={} dbname=postgres",
                 self.socket_dir.display(),
+                self.port,
                 self.user
             )
         }
@@ -127,11 +132,13 @@ impl PilotDbManager {
 
     pub async fn start(&self) -> Result<()> {
         self.ensure_initialized().await?;
-        let mut cmd = Command::new("pg_ctl");
+        let pg_ctl = resolve_postgres_bin("pg_ctl")?;
+        let log_file = self.select_log_file()?;
+        let mut cmd = Command::new(pg_ctl);
         cmd.arg("-D")
             .arg(&self.data_dir)
             .arg("-l")
-            .arg(&self.log_file)
+            .arg(&log_file)
             .arg("start")
             .arg("-w")
             .arg("-t")
@@ -142,7 +149,7 @@ impl PilotDbManager {
         }
         run_checked(
             cmd,
-            "Failed to start managed Postgres. Ensure `pg_ctl` exists.",
+            "Failed to start managed Postgres. Ensure `pg_ctl` exists and log path is writable.",
         )
         .await?;
         Ok(())
@@ -155,7 +162,8 @@ impl PilotDbManager {
         if !self.is_running().await? {
             return Ok(());
         }
-        let mut cmd = Command::new("pg_ctl");
+        let pg_ctl = resolve_postgres_bin("pg_ctl")?;
+        let mut cmd = Command::new(pg_ctl);
         cmd.arg("-D")
             .arg(&self.data_dir)
             .arg("stop")
@@ -171,6 +179,9 @@ impl PilotDbManager {
     pub async fn status(&self) -> Result<DbStatus> {
         self.ensure_layout()?;
         let initialized = self.data_dir.join("PG_VERSION").exists();
+        let log_file = self
+            .select_log_file()
+            .unwrap_or_else(|_| self.log_file.clone());
         let running = if initialized {
             self.is_running().await.unwrap_or(false)
         } else {
@@ -179,7 +190,7 @@ impl PilotDbManager {
         let endpoint = if cfg!(windows) {
             format!("127.0.0.1:{}", self.port)
         } else {
-            self.socket_dir.display().to_string()
+            format!("{}/.s.PGSQL.{}", self.socket_dir.display(), self.port)
         };
         Ok(DbStatus {
             initialized,
@@ -188,7 +199,7 @@ impl PilotDbManager {
             endpoint,
             dsn: self.target_dsn(),
             data_dir: self.data_dir.display().to_string(),
-            log_file: self.log_file.display().to_string(),
+            log_file: log_file.display().to_string(),
         })
     }
 
@@ -201,8 +212,30 @@ impl PilotDbManager {
         Ok(())
     }
 
+    fn select_log_file(&self) -> Result<PathBuf> {
+        let primary = self.log_file.clone();
+        if path_writable(&primary) {
+            return Ok(primary);
+        }
+        let run_fallback = self.run_dir.join("postgres.log");
+        if path_writable(&run_fallback) {
+            return Ok(run_fallback);
+        }
+        let tmp_fallback = PathBuf::from("/tmp").join("arqon_pilot_postgres.log");
+        if path_writable(&tmp_fallback) {
+            return Ok(tmp_fallback);
+        }
+        Err(miette!(
+            "No writable Postgres log path found (tried {}, {}, {})",
+            self.log_file.display(),
+            run_fallback.display(),
+            tmp_fallback.display()
+        ))
+    }
+
     async fn run_initdb(&self) -> Result<()> {
-        let mut cmd = Command::new("initdb");
+        let initdb = resolve_postgres_bin("initdb")?;
+        let mut cmd = Command::new(initdb);
         cmd.arg("-D")
             .arg(&self.data_dir)
             .arg("-U")
@@ -219,7 +252,11 @@ impl PilotDbManager {
     }
 
     async fn is_running(&self) -> Result<bool> {
-        let mut cmd = Command::new("pg_ctl");
+        let pg_ctl = match resolve_postgres_bin("pg_ctl") {
+            Ok(path) => path,
+            Err(_) => return Ok(false),
+        };
+        let mut cmd = Command::new(pg_ctl);
         cmd.arg("-D").arg(&self.data_dir).arg("status");
         let output = cmd.output().await.into_diagnostic()?;
         Ok(output.status.success())
@@ -286,4 +323,61 @@ fn truncate_tail(input: &str, max: usize) -> String {
     }
     let start = input.len() - max;
     format!("...{}", &input[start..])
+}
+
+fn path_writable(path: &PathBuf) -> bool {
+    if let Some(parent) = path.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return false;
+        }
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .is_ok()
+}
+
+fn resolve_postgres_bin(bin: &str) -> Result<String> {
+    let env_key = format!("PILOT_{}_BIN", bin.to_ascii_uppercase());
+    if let Ok(path) = std::env::var(&env_key) {
+        if !path.trim().is_empty() && PathBuf::from(&path).exists() {
+            return Ok(path);
+        }
+    }
+    if let Some(path_hit) = resolve_from_path(bin) {
+        return Ok(path_hit);
+    }
+    if let Some(path_hit) = resolve_from_ubuntu_layout(bin) {
+        return Ok(path_hit);
+    }
+    Err(miette!(
+        "Postgres binary '{}' not found. Install local server tools (Ubuntu: `sudo apt-get install postgresql`) or set {}=/absolute/path/{}",
+        bin,
+        env_key,
+        bin
+    ))
+}
+
+fn resolve_from_path(bin: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(bin);
+        if candidate.exists() {
+            return Some(candidate.display().to_string());
+        }
+    }
+    None
+}
+
+fn resolve_from_ubuntu_layout(bin: &str) -> Option<String> {
+    let root = PathBuf::from("/usr/lib/postgresql");
+    let entries = fs::read_dir(root).ok()?;
+    let mut candidates: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path().join("bin").join(bin))
+        .filter(|p| p.exists())
+        .collect();
+    candidates.sort();
+    candidates.pop().map(|p| p.display().to_string())
 }

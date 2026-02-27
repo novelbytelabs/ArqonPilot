@@ -12,7 +12,7 @@ Symptoms:
 Checks:
 
 ```bash
-pilot db status
+./scripts/pilot_local.sh db status
 which initdb
 which pg_ctl
 tail -n 120 ~/.arqon/pilot/db/postgres.log
@@ -22,25 +22,57 @@ Common causes:
 1. Missing local Postgres binaries (`initdb`, `pg_ctl`) on PATH.
 2. Corrupt/incomplete data directory at `~/.arqon/pilot/db/data`.
 3. Runtime dir permissions blocking socket creation (`~/.arqon/pilot/run`).
+4. Unix-socket port mismatch (DSN defaults to `5432` if `port` is omitted).
 
 Recovery:
 1. Stop managed DB:
 
 ```bash
-pilot db stop
+./scripts/pilot_local.sh db stop
 ```
 
 2. If data dir is corrupt, back it up and reinitialize:
 
 ```bash
 mv ~/.arqon/pilot/db/data ~/.arqon/pilot/db/data.bak.$(date +%Y%m%d%H%M%S)
-pilot db ensure
+./scripts/pilot_local.sh db ensure
 ```
 
 3. Re-run AGOrg command:
 
 ```bash
-pilot agorg list
+./scripts/pilot_local.sh agorg list
+```
+
+Known socket-port gotcha:
+- If DB status is `running: true` but AGOrg commands fail with:
+  - `No such file or directory (os error 2)`
+- Verify `db status` DSN includes `port=9132` (or your configured `PILOT_DB_PORT`):
+
+```bash
+./scripts/pilot_local.sh db status
+# dsn should include: host=/home/<you>/.arqon/pilot/run port=9132 ...
+```
+
+If port is missing in DSN, use latest `main` (fix included) and restart:
+
+```bash
+./scripts/pilot_local.sh db stop
+./scripts/pilot_local.sh db start
+./scripts/pilot_local.sh agorg list
+```
+
+Known Linux gotcha:
+- If startup fails with:
+  - `cannot create ~/.arqon/pilot/db/postgres.log: Permission denied`
+- Recover with:
+
+```bash
+chmod u+rw ~/.arqon/pilot/db/postgres.log || true
+chmod u+rwx ~/.arqon/pilot/db || true
+rm -f ~/.arqon/pilot/db/postgres.log
+./scripts/pilot_local.sh db start
+./scripts/pilot_local.sh db status
 ```
 
 Safety note:
@@ -102,6 +134,26 @@ cargo run -p pilot -- serve --help
 ```
 
 2. Install an updated package version that includes `serve`.
+
+## 2.1) `pilot db` is unrecognized
+
+Symptom:
+
+```bash
+error: unrecognized subcommand 'db'
+```
+
+Cause:
+- Your shell is invoking an older installed `pilot` binary instead of this repo build.
+
+Fix:
+
+```bash
+which pilot
+cd ~/Projects/arqon/ArqonPilot
+./scripts/pilot_local.sh --help
+./scripts/pilot_local.sh db status
+```
 
 ## 3) ArqonBus reachable but no responses in UI
 

@@ -106,6 +106,51 @@ In this model, relationship metadata belongs to repos (AGOs), where `parent` poi
 6. Persist discovery method metadata (`manual`, `autoscan`, `rescan`).
 7. Respect configured scan depth during discovery.
 
+## 3.1) Reconciliation and AGOrg Policy Conformance (Tomorrow Focus)
+
+After loading a primary AGOrg and discovering AGOs, Pilot must support a guided
+reconciliation workflow so the whole ecosystem converges to AGOrg policy.
+
+Goals:
+
+1. Detect policy drift across all discovered AGOs.
+2. Reconcile duplicates and ambiguous repo records safely.
+3. Normalize partial candidates (folders that look like AGOs but are not fully configured).
+4. Produce a deterministic, auditable reconciliation report before apply.
+
+Required checks:
+
+1. Duplicate detection:
+   - same canonical repo path registered more than once
+   - same repo name mapped to different roots
+2. Candidate quality checks:
+   - git repo present but missing expected Arqon metadata
+   - missing `[tool.arqon.relationships]` block in `pyproject.toml`
+3. Policy conformance checks:
+   - branch policy mismatch (default base/pr branches, naming standards)
+   - dependency management policy mismatch (group/tags/dependency edges)
+   - scope mismatch (repo appears outside selected AGOrg boundary)
+
+Reconciliation UX requirements:
+
+1. `Discovery Results` should classify each item:
+   - `conformant`
+   - `needs_reconciliation`
+   - `missing_metadata`
+   - `duplicate`
+2. Operator can choose per-item action:
+   - `register as AGO`
+   - `merge with existing record`
+   - `mark as nested AGOrg`
+   - `ignore`
+   - `open for manual review`
+3. A final `Apply Reconciliation` step executes all approved fixes and stores an artifact report.
+
+Non-goals for first pass:
+
+1. Auto-editing arbitrary repo files without explicit approval.
+2. Auto-merging conflicting graph links without operator confirmation.
+
 ## 4) State, Preferences, and Profiles
 
 Each AGOrg stores:

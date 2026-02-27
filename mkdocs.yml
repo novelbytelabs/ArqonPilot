@@ -47,6 +47,8 @@ nav:
   - Testing Strategy: "testing-strategy.md"
   - Operator Runbook: "operator-runbook.md"
   - Branch Management Guide: "branch-management-guide.md"
+  - Tutorials:
+      - AGOrg Interface: "tutorial/agorg-interface.md"
 
 markdown_extensions:
   - attr_list

@@ -318,6 +318,28 @@ Progress update:
    - `DB Start`
    - `DB Stop`
 
+## Wave 17 (AGOrg Reconciliation and Policy Conformance) - Planned
+
+Deliverables:
+
+1. AGOrg reconciliation engine for discovered AGO candidates.
+2. Duplicate/ambiguity detection across AGOrg registry.
+3. Metadata conformance checks for AGO discovery candidates:
+   - missing `[tool.arqon.relationships]` in `pyproject.toml`
+   - repo looks like AGO but lacks required relationship settings
+4. Policy conformance checks:
+   - branch management policy alignment
+   - dependency management and multi-repo edge alignment
+5. Guided reconciliation UI in Dashboard/AGOrg surface with per-item actions.
+6. Deterministic reconciliation artifact report (preview + apply outcomes).
+
+Exit criteria:
+
+1. Operator can load an AGOrg and run reconciliation in one flow.
+2. System flags duplicates and non-conformant AGO candidates with explicit reasons.
+3. Operator can apply selected reconciliation actions without destructive defaults.
+4. Reconciliation output is persisted and auditable.
+
 ## Operational Rules
 
 1. Never bypass frozen policy constants.
