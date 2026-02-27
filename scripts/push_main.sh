@@ -117,6 +117,7 @@ summarize_result() {
   local push_rc="$2"
   local gate_rc="$3"
   local end_ts duration warn_count err_count
+  local auth401_count=0
   local before_state after_state before_behind before_ahead after_behind after_ahead
   local likely_cause="none"
 
@@ -127,7 +128,6 @@ summarize_result() {
   # GitHub HTTPS push commonly logs an initial HTTP/2 401 challenge before credential retry.
   # Treat it as expected when push actually succeeded.
   if [[ "$push_rc" -eq 0 ]]; then
-    local auth401_count
     auth401_count="$(count_matches 'HTTP/2 401' "$LOG_FILE")"
     if [[ "$auth401_count" -gt 0 ]]; then
       err_count="$((err_count - auth401_count))"
@@ -156,6 +156,7 @@ summarize_result() {
   echo "git_push_rc:           $push_rc"
   echo "warnings_in_log:       $warn_count"
   echo "errors_in_log:         $err_count"
+  echo "auth_challenge_events: $auth401_count"
   echo "divergence_after_push: behind=${after_behind:-0} ahead=${after_ahead:-0}"
   echo "likely_cause:          $likely_cause"
   echo "full_log:              $LOG_FILE"
