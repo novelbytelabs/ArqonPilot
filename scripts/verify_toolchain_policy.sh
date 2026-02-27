@@ -153,6 +153,8 @@ fi
 
 log "[policy] packaging lane pin"
 run_check "packaging_lane_pin" search_pattern "toolchain:\\s*\"${PILOT_PACKAGING_RUST_VERSION//./\\.}\"" .github/workflows/pypi.yml || true
+run_check "packaging_post_publish_verify_testpypi" search_pattern 'scripts/verify_pypi_release\.sh --index testpypi' .github/workflows/pypi.yml || true
+run_check "packaging_post_publish_verify_pypi" search_pattern 'scripts/verify_pypi_release\.sh --index pypi' .github/workflows/pypi.yml || true
 
 log "[policy] protobuf/protoc freeze pin"
 run_check "packaging_protoc_pin" search_pattern "protoc-${PILOT_PROTOC_VERSION//./\\.}-linux-x86_64\\.zip" .github/workflows/pypi.yml || true

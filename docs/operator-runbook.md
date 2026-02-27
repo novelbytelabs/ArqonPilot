@@ -136,3 +136,5 @@ Before cutting `pilot-v1-rc1`:
 3. wave acceptance docs updated
 4. dogfooding + controlled apply evidence documented
 5. audit/report artifacts present and interpretable
+6. if publishing, verify index visibility:
+    - `./scripts/verify_pypi_release.sh --index pypi`

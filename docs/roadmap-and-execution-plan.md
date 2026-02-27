@@ -107,7 +107,7 @@ Completion notes:
 3. Added CI `packaging-parity` job in `.github/workflows/ci.yml` to catch packaging drift before publish.
 4. Strengthened policy checks so CI must retain both lane pins and packaging check step.
 
-## Wave 11 (Guardrails and Dependencies System) - In Progress (Near Close)
+## Wave 11 (Guardrails and Dependencies System) - Completed
 Deliverables:
 
 1. Dependencies/Guardrails tab in UI.
@@ -140,10 +140,15 @@ Progress update:
 8. Added `Export Evidence` action and `/api/evidence/export` endpoint to generate evidence bundles in `~/.pilot/reports`.
 9. Hardened push summary to separate expected GitHub auth challenges (`auth_challenge_events`) from real errors.
 
-Remaining to close Wave 11:
+Wave 11 closure notes:
 
-1. Add automated post-publish PyPI visibility verification gate to release workflow.
-2. Verify CI lane parity continuously for lock drift classes (`icu_*`, `globset`, `blake3/constant_time_eq`, `time/*`).
+1. Added automated post-publish visibility checks in `.github/workflows/pypi.yml`:
+     - `Verify release visibility (TestPyPI)`
+     - `Verify release visibility (PyPI)`
+     using `scripts/verify_pypi_release.sh`.
+2. Added explicit drift-family checks in CI for both lanes in `.github/workflows/ci.yml`:
+     - `Drift Family Scan (Core Lock)` in core + packaging-parity jobs
+     - `Drift Family Scan (Packaging Lock Report)` JSON report in packaging-parity.
 
 ## Wave 12 (Codex Ops Integration) - In Progress
 Deliverables:

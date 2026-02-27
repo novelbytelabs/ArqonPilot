@@ -76,3 +76,11 @@ jobs:
           packages-dir: dist/
           skip-existing: true
           password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Verify release visibility (TestPyPI)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
+        run: ./scripts/verify_pypi_release.sh --index testpypi
+
+      - name: Verify release visibility (PyPI)
+        if: (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi') || github.event_name == 'push'
+        run: ./scripts/verify_pypi_release.sh --index pypi

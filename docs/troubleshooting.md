@@ -260,6 +260,20 @@ Use the diagnostic wrapper instead of raw push:
 ./scripts/push_main.sh
 ```
 
+## 8) Publish succeeded but package/version not visible yet
+
+Symptom:
+
+- PyPI/TestPyPI publish step reports success, but install/index lookups still fail briefly.
+
+Use the release visibility verifier with retries:
+
+```bash
+./scripts/verify_pypi_release.sh --index pypi
+# or
+./scripts/verify_pypi_release.sh --index testpypi
+```
+
 The summary now includes:
 1. classified cause (`prepush_gate_failed`, `auth_or_token`, `non_fast_forward_or_remote_ahead`, `dns_or_name_resolution`, etc.)
 2. explicit remediation steps based on that classification.
