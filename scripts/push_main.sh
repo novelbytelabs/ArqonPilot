@@ -31,6 +31,10 @@ echo "[push-safe] branch=$BRANCH remote=$REMOTE"
 echo "[push-safe] current_branch=$CURRENT_BRANCH"
 echo "[push-safe] log file: $LOG_FILE"
 
+PUSH_NET_RETRIES="${PUSH_NET_RETRIES:-6}"
+PUSH_NET_RETRY_DELAY_SEC="${PUSH_NET_RETRY_DELAY_SEC:-8}"
+TRANSIENT_NET_PATTERN='Could not resolve host|Temporary failure in name resolution|Name or service not known|timed out|connection reset|Failed to connect|network is unreachable|TLS handshake timeout|Connection timed out'
+
 count_matches() {
   local pattern="$1"
   local file="$2"
@@ -63,6 +67,41 @@ classify_failure() {
   fi
 
   echo "$cause"
+}
+
+run_with_net_retry() {
+  local label="$1"
+  local max_attempts="$2"
+  shift 2
+
+  local attempt rc
+  local tmp_out
+  tmp_out="$(mktemp -t "push_main_${label}_XXXX.log")"
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    echo "[$label] attempt ${attempt}/${max_attempts}"
+    set +e
+    "$@" 2>&1 | tee "$tmp_out"
+    rc=${PIPESTATUS[0]}
+    set -e
+
+    if [[ "$rc" -eq 0 ]]; then
+      rm -f "$tmp_out"
+      return 0
+    fi
+
+    if grep -Eiq "$TRANSIENT_NET_PATTERN" "$tmp_out" && [[ "$attempt" -lt "$max_attempts" ]]; then
+      echo "[$label] transient network failure detected; retrying in ${PUSH_NET_RETRY_DELAY_SEC}s..."
+      sleep "$PUSH_NET_RETRY_DELAY_SEC"
+      continue
+    fi
+
+    rm -f "$tmp_out"
+    return "$rc"
+  done
+
+  rm -f "$tmp_out"
+  return 1
 }
 
 print_remediation() {
@@ -180,7 +219,15 @@ if [[ "$CURRENT_BRANCH" != "$BRANCH" ]]; then
 fi
 
 echo "[push-safe] fetch remote state"
-git fetch "$REMOTE"
+set +e
+run_with_net_retry "git-fetch" "$PUSH_NET_RETRIES" git fetch "$REMOTE"
+fetch_rc=$?
+set -e
+if [[ "$fetch_rc" -ne 0 ]]; then
+  echo "[push-safe] FAILED (git fetch)"
+  summarize_result "FAILED" "$fetch_rc" 98
+  exit "$fetch_rc"
+fi
 git status -sb
 
 echo "[push-safe] pre-push gate"
@@ -196,7 +243,7 @@ fi
 
 echo "[push-safe] push (verbose diagnostics)"
 set +e
-GIT_TRACE=1 GIT_CURL_VERBOSE=1 git push "$REMOTE" "${BRANCH}:${BRANCH}"
+run_with_net_retry "git-push" "$PUSH_NET_RETRIES" env GIT_TRACE=1 GIT_CURL_VERBOSE=1 git push "$REMOTE" "${BRANCH}:${BRANCH}"
 rc=$?
 set -e
 

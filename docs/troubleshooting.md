@@ -305,6 +305,11 @@ What it does:
 Defaults:
 - Push target defaults to your current checked-out branch.
 - To push `main` explicitly: `./scripts/push_main.sh main`.
+- Transient network retry defaults:
+  - `PUSH_NET_RETRIES=6`
+  - `PUSH_NET_RETRY_DELAY_SEC=8`
+- Override per run if needed:
+  - `PUSH_NET_RETRIES=10 PUSH_NET_RETRY_DELAY_SEC=5 ./scripts/push_main.sh main`
 
 Interpretation note:
 - `auth_challenge_events > 0` with `git_push_rc=0` and `result=SUCCESS` is expected behavior and not an error condition.
