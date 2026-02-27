@@ -6,46 +6,43 @@ This document captures the long-term AGOrg vision and the implementation plan so
 
 Arqon Pilot should run as a multi-organization control plane, not just a single-repo tool.
 
-1. An `AGOrg` (Artificial General Organization) is the top-level project system (example: `Arqon`).
-2. An `AGO` (Artificial General Organism) is a child repo in that AGOrg (examples: `ArqonBus`, `ArqonCore`, `ArqonPilot`).
-3. An AGOrg has no parent repo; it is the parent entity for its AGOs.
-4. Each AGO belongs to exactly one AGOrg parent.
-5. An AGOrg may contain:
-   - only AGOs, or
-   - nested AGOrgs plus AGOs.
-6. Nested AGOrgs are still organizational children, not repo parents.
-5. The Control Panel must be scoped to one active AGOrg at a time, with the ability to switch instantly.
-6. Multiple Pilot instances can run concurrently, each bound to different AGOrgs/scopes.
+1.  **Master AGOrg Directory (Flat Fleet)**: All components (AGOrgs and AGOs) must reside as siblings within a shared parent directory (Master Directory).
+    - *Canonical Example*: `~/Projects/arqon/`.
+    - *The Rule*: AGOrgs and AGOs can only be neighbors; nesting repositories inside other repositories is strictly forbidden.
+2.  **Import over Create**: We primarily **Import** existing ecosystems from the Master Directory. Onboarding assumes an existing structure that Pilot validates and manages.
+3.  **Linkage over Containment**: AGOrgs consist of **Links** to sibling repositories (AGOs) and other AGOrgs. Containment is logical/virtual via metadata, not physical via nesting.
+4.  **Coexistence**: Multiple AGOrgs can coexist and overlapping hierarchies can be established within the same Master Directory. 
+5.  **Auditability**: If a directory (`.git` or `pyproject.toml` boundary) lacks Arqon metadata, it is NOT part of the AGOrg registry. Pilot provides an "Upgrade" flow to make directories compliant.
+6.  **Contextual Scope**: The Control Panel is scoped to one active Master AGOrg at a time, switching the entire operational boundary instantly.
 
 ## Final Architecture Decisions (Locked)
 
 1. **Identity model**
-   - AGOrg primary key: UUID.
-   - AGOrg root path must be unique per AGOrg record.
+     - AGOrg primary key: UUID.
+     - AGOrg root path must be unique per AGOrg record.
 
-2. **Discovery scan policy**
-   - Discovery depth is configurable.
-   - Scan engine must support bounded recursive traversal.
+2. **Discovery scan policy (Flat Fleet Enforcement)**
+     - Discovery depth is configurable, but the script **MUST stop recursion** at any repository boundary (`.git` or `pyproject.toml`).
+     - Repositories cannot be nested; if a directory is needed outside the Master Directory, a **symbolic link** must be used within the parent to maintain the flat namespace.
 
-3. **Composition model**
-   - AGOrgs are modular and recombinable.
-   - A single AGOrg may be linked into multiple parent AGOrgs.
-   - This is a directed graph model, not a strict tree.
-   - Linking is permissive except for cycle creation.
-   - Validation rule: reject any link that introduces a circular path.
+3. **Linkage model**
+     - AGOrgs are modular and recombinable.
+     - Relationships are defined as **Links** (edges) in the database and mirrored in `pyproject.toml`.
+     - "Parent" relationships are links of orientation, not mandatory physical nesting.
+     - **Upgrade flow**: Any AGO (repo) can be upgraded to an AGOrg to enable its own linkage ecosystem.
 
 4. **Database mode (initial)**
-   - Local Postgres only for current phase.
-   - Pilot owns creation, migrations, and maintenance automatically.
+     - Local Postgres only for current phase.
+     - Pilot owns creation, migrations, and maintenance automatically.
 
 5. **Managed runtime contract (Wave 16 close)**
-   - Private runtime/data paths:
+     - Private runtime/data paths:
      - `~/.arqon/pilot/db/data`
      - `~/.arqon/pilot/run`
      - `~/.arqon/pilot/db/postgres.log`
-   - Linux/macOS default endpoint: Unix socket in runtime dir.
-   - Windows default endpoint: local TCP with deterministic high-port fallback.
-   - Lifecycle is explicit and operator-visible:
+     - Linux/macOS default endpoint: Unix socket in runtime dir.
+     - Windows default endpoint: local TCP with deterministic high-port fallback.
+     - Lifecycle is explicit and operator-visible:
      - `pilot db ensure`
      - `pilot db start`
      - `pilot db stop`
@@ -86,10 +83,10 @@ In this model, relationship metadata belongs to repos (AGOs), where `parent` poi
 ### Create AGOrg Project (Required UX)
 
 1. Add a `Create AGOrg Project` flow with:
-   - AGOrg name
-   - root path (browse button + input field)
-   - optional parent AGOrg selector (for nested AGOrg)
-   - initial scan toggle (`AutoScan hierarchy now`)
+     - AGOrg name
+     - root path (browse button + input field)
+     - optional parent AGOrg selector (for nested AGOrg)
+     - initial scan toggle (`AutoScan hierarchy now`)
 2. On create, persist AGOrg and optionally execute discovery immediately.
 3. Show preview of discovered AGOrg/AGO hierarchy before final save.
 
@@ -99,9 +96,9 @@ In this model, relationship metadata belongs to repos (AGOs), where `parent` poi
 2. Add `Discover` action that scans directory trees.
 3. Identify AGOrg and AGO candidates by relationship metadata and repo structure.
 4. Build a hierarchy/graph view:
-   - AGOrg nodes
-   - nested AGOrg nodes
-   - AGO leaf nodes
+     - AGOrg nodes
+     - nested AGOrg nodes
+     - AGO leaf nodes
 5. Show discovery results and allow selective registration/import.
 6. Persist discovery method metadata (`manual`, `autoscan`, `rescan`).
 7. Respect configured scan depth during discovery.
@@ -121,29 +118,29 @@ Goals:
 Required checks:
 
 1. Duplicate detection:
-   - same canonical repo path registered more than once
-   - same repo name mapped to different roots
+     - same canonical repo path registered more than once
+     - same repo name mapped to different roots
 2. Candidate quality checks:
-   - git repo present but missing expected Arqon metadata
-   - missing `[tool.arqon.relationships]` block in `pyproject.toml`
+     - git repo present but missing expected Arqon metadata
+     - missing `[tool.arqon.relationships]` block in `pyproject.toml`
 3. Policy conformance checks:
-   - branch policy mismatch (default base/pr branches, naming standards)
-   - dependency management policy mismatch (group/tags/dependency edges)
-   - scope mismatch (repo appears outside selected AGOrg boundary)
+     - branch policy mismatch (default base/pr branches, naming standards)
+     - dependency management policy mismatch (group/tags/dependency edges)
+     - scope mismatch (repo appears outside selected AGOrg boundary)
 
 Reconciliation UX requirements:
 
 1. `Discovery Results` should classify each item:
-   - `conformant`
-   - `needs_reconciliation`
-   - `missing_metadata`
-   - `duplicate`
+     - `conformant`
+     - `needs_reconciliation`
+     - `missing_metadata`
+     - `duplicate`
 2. Operator can choose per-item action:
-   - `register as AGO`
-   - `merge with existing record`
-   - `mark as nested AGOrg`
-   - `ignore`
-   - `open for manual review`
+     - `register as AGO`
+     - `merge with existing record`
+     - `mark as nested AGOrg`
+     - `ignore`
+     - `open for manual review`
 3. A final `Apply Reconciliation` step executes all approved fixes and stores an artifact report.
 
 Non-goals for first pass:
@@ -175,16 +172,28 @@ Initial default target:
 
 ## New top-level surfaces
 
-1. `AGOrg` tab:
-   - `Scope` (current AGOrg)
-   - `Registry` (saved AGOrgs)
-   - `Discovery` (scan/import)
-   - `Preferences` (per-AGOrg profile/settings)
+## 1) AGOrg Management (3-Panel System)
+
+The AGOrg tab is organized into three persistent functional panels:
+
+1.  **Panel 1: AGOrg Settings (CRUD)**:
+     - **Import**: Onboard an existing Master Directory.
+     - **Settings**: Modify metadata for the active AGOrg.
+     - **Management**: List, Create, and Delete AGOrg records.
+2.  **Panel 2: Interactive Hierarchy**:
+     - Displays the current Master Directory tree.
+     - Click any node (AGOrg or AGO) to deep-dive into its specific settings.
+     - Drag-and-drop support: Reposition repositories to update their `pyproject.toml` lineage automatically.
+     - "Upgrade" toggle to promote an AGO to an AGOrg.
+3.  **Panel 3: Results Display**:
+     - Real-time JSON output from all AGOrg operations.
+     - **Word Wrap Enabled**: JSON must wrap and not clip.
+     - Persistent "COPY" and "CLEAR" utilities.
 
 2. `Dashboard` integration:
-   - active AGOrg badge in header
-   - quick AGOrg switch dropdown
-   - explicit scope indicator on mutating actions
+     - active AGOrg badge in header
+     - quick AGOrg switch dropdown
+     - explicit scope indicator on mutating actions
 
 ## Guardrails
 

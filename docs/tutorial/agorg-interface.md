@@ -20,6 +20,9 @@ In the **Create AGOrg Project** card:
 1.  **AGOrg Name**: Enter a human-readable name for your organization (e.g., `Arqon`, `MyProject`).
 2.  **AGOrg Root Path**: Enter the absolute path to the directory containing your repositories.
     - *Tip*: Click the **Browse…** button to use your system's native folder picker.
+    - > [!IMPORTANT]
+      > **Flat Fleet Architecture**: Pilot operates on a "Flat Fleet" model. The **Root Path** should be the shared parent directory of your repositories (e.g., `~/Projects/arqon/`). 
+      > Once Pilot finds a repository boundary (like `.git`), it will stop recursing. This preserves repository integrity and prevents unintentional nesting.
 3.  **Parent AGOrg (Optional)**: If this organization is a child of another AGOrg (for nested hierarchies), enter the parent's UUID, Name, or Path. Creating a link here defines this AGOrg as a nested child in the organization tree. You can also use the **Browse…** button here.
 4.  **Scan Depth**: Set how deep Pilot should search for repositories within the root path. The default is `4`.
 

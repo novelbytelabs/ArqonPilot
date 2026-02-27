@@ -14,6 +14,7 @@ pub struct Agorg {
     pub id: Uuid,
     pub name: String,
     pub root_path: String,
+    pub master_path: Option<String>,
     pub parent_agorg_id: Option<Uuid>,
     pub default_scope: bool,
     pub scan_depth: i32,
@@ -33,9 +34,10 @@ pub struct AgoRecord {
 pub struct DiscoverCandidate {
     pub name: String,
     pub path: String,
-    pub kind: String,
+    pub kind: String, // "agorg", "ago", "none"
     pub parent_hint: Option<String>,
     pub children_hints: Vec<String>,
+    pub is_registered: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +117,7 @@ impl AgorgStore {
         &self,
         name: &str,
         root_path: &Path,
+        master_path: Option<&str>,
         parent_agorg_id: Option<Uuid>,
         scan_depth: i32,
         set_default: bool,
@@ -133,14 +136,21 @@ impl AgorgStore {
         let id = Uuid::new_v4();
         let row = client
             .query_one(
-                "INSERT INTO agorgs (id, name, root_path, parent_agorg_id, default_scope, scan_depth)
-                 VALUES ($1, $2, $3, $4, $5, $6)
-                 RETURNING id, name, root_path, parent_agorg_id, default_scope, scan_depth",
-                &[&id, &name, &canonical, &parent_agorg_id, &set_default, &scan_depth],
+                "INSERT INTO agorgs (id, name, root_path, master_path, parent_agorg_id, default_scope, scan_depth)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 ON CONFLICT (root_path) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    master_path = EXCLUDED.master_path,
+                    parent_agorg_id = EXCLUDED.parent_agorg_id,
+                    default_scope = EXCLUDED.default_scope,
+                    scan_depth = EXCLUDED.scan_depth,
+                    updated_at = NOW()
+                 RETURNING id, name, root_path, master_path, parent_agorg_id, default_scope, scan_depth",
+                &[&id, &name, &canonical, &master_path, &parent_agorg_id, &set_default, &scan_depth],
             )
             .await
             .into_diagnostic()
-            .with_context(|| format!("Failed creating AGOrg '{}'", name))?;
+            .with_context(|| format!("Failed creating/updating AGOrg '{}'", name))?;
 
         if set_default {
             self.set_active_agorg(id).await?;
@@ -154,6 +164,7 @@ impl AgorgStore {
         id: Uuid,
         name: Option<String>,
         root_path: Option<PathBuf>,
+        master_path: Option<String>,
         scan_depth: Option<i32>,
         set_default: Option<bool>,
     ) -> Result<Agorg> {
@@ -176,12 +187,13 @@ impl AgorgStore {
                 "UPDATE agorgs
                  SET name = COALESCE($2, name),
                      root_path = CASE WHEN $3 <> '' THEN $3 ELSE root_path END,
-                     scan_depth = COALESCE($4, scan_depth),
-                     default_scope = COALESCE($5, default_scope),
+                     master_path = COALESCE($4, master_path),
+                     scan_depth = COALESCE($5, scan_depth),
+                     default_scope = COALESCE($6, default_scope),
                      updated_at = NOW()
                  WHERE id = $1
-                 RETURNING id, name, root_path, parent_agorg_id, default_scope, scan_depth",
-                &[&id, &name, &root, &scan_depth, &set_default],
+                 RETURNING id, name, root_path, master_path, parent_agorg_id, default_scope, scan_depth",
+                &[&id, &name, &root, &master_path, &scan_depth, &set_default],
             )
             .await
             .into_diagnostic()
@@ -208,7 +220,7 @@ impl AgorgStore {
         let client = self.connect().await?;
         let rows = client
             .query(
-                "SELECT id, name, root_path, parent_agorg_id, default_scope, scan_depth
+                "SELECT id, name, root_path, master_path, parent_agorg_id, default_scope, scan_depth
                  FROM agorgs
                  ORDER BY name ASC",
                 &[],
@@ -259,7 +271,7 @@ impl AgorgStore {
         let client = self.connect().await?;
         let row = client
             .query_opt(
-                "SELECT id, name, root_path, parent_agorg_id, default_scope, scan_depth
+                "SELECT id, name, root_path, master_path, parent_agorg_id, default_scope, scan_depth
                  FROM agorgs
                  WHERE id = $1",
                 &[&id],
@@ -431,13 +443,14 @@ impl AgorgStore {
         &self,
         name: &str,
         root: &Path,
+        master: Option<&str>,
         parent: Option<Uuid>,
         scan_depth: usize,
         autoscan: bool,
         set_default: bool,
     ) -> Result<(Agorg, Option<DiscoverResult>)> {
         let agorg = self
-            .create_agorg(name, root, parent, scan_depth as i32, set_default)
+            .create_agorg(name, root, master, parent, scan_depth as i32, set_default)
             .await?;
         let discovered = if autoscan {
             let scan = discover_hierarchy(root, scan_depth)?;
@@ -532,6 +545,7 @@ impl AgorgStore {
                   id UUID PRIMARY KEY,
                   name TEXT NOT NULL,
                   root_path TEXT NOT NULL UNIQUE,
+                  master_path TEXT NULL,
                   parent_agorg_id UUID NULL,
                   default_scope BOOLEAN NOT NULL DEFAULT FALSE,
                   scan_depth INT NOT NULL DEFAULT 4,
@@ -632,6 +646,7 @@ pub fn discover_hierarchy(root: &Path, depth: usize) -> Result<DiscoverResult> {
         kind: "agorg".to_string(),
         parent_hint: None,
         children_hints: Vec::new(),
+        is_registered: false,
     });
 
     for (name, path, rel) in repos {
@@ -651,6 +666,7 @@ pub fn discover_hierarchy(root: &Path, depth: usize) -> Result<DiscoverResult> {
             kind,
             parent_hint,
             children_hints: children,
+            is_registered: false,
         });
     }
 
@@ -700,8 +716,9 @@ fn walk_dirs(
             if has_repo_marker {
                 let rel = parse_relationships(&path).ok().flatten();
                 repos.push((name.to_string(), path.clone(), rel));
+            } else {
+                recurse(&path, max_depth, at_depth + 1, repos)?;
             }
-            recurse(&path, max_depth, at_depth + 1, repos)?;
         }
         Ok(())
     }
@@ -747,9 +764,10 @@ fn row_to_agorg(row: &tokio_postgres::Row) -> Agorg {
         id: row.get(0),
         name: row.get(1),
         root_path: row.get(2),
-        parent_agorg_id: row.get(3),
-        default_scope: row.get(4),
-        scan_depth: row.get(5),
+        master_path: row.get(3),
+        parent_agorg_id: row.get(4),
+        default_scope: row.get(5),
+        scan_depth: row.get(6),
     }
 }
 
@@ -789,6 +807,118 @@ fn validate_db_identifier(name: &str) -> Result<()> {
             "Database name '{}' must contain only letters, digits, underscore",
             name
         ));
+    }
+    Ok(())
+}
+
+pub fn scan_master_directory(master_path: &Path) -> Result<Vec<DiscoverCandidate>> {
+    let mut candidates = Vec::new();
+    let read = fs::read_dir(master_path)
+        .into_diagnostic()
+        .with_context(|| format!("Failed to read master directory {}", master_path.display()))?;
+
+    for entry in read {
+        let entry = entry.into_diagnostic()?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if name.starts_with('.') || name == "target" || name == "node_modules" {
+            continue;
+        }
+
+        let has_repo = path.join(".git").exists() || path.join("pyproject.toml").exists();
+        let mut kind = "none".to_string();
+        let mut parent_hint = None;
+        let mut children_hints = Vec::new();
+
+        if has_repo {
+            kind = "ago".to_string();
+            if let Ok(Some(rel)) = parse_relationships(&path) {
+                parent_hint = rel.parent;
+                children_hints = rel.children;
+                if !children_hints.is_empty() {
+                    kind = "agorg".to_string();
+                }
+            }
+        }
+
+        candidates.push(DiscoverCandidate {
+            name,
+            path: path.display().to_string(),
+            kind,
+            parent_hint,
+            children_hints,
+            is_registered: false, // Updated by caller using DB
+        });
+    }
+
+    candidates.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(candidates)
+}
+
+pub fn edit_relationship(
+    repo_path: &Path,
+    parent: Option<String>,
+    children: Vec<String>,
+) -> Result<()> {
+    let pyproject_path = repo_path.join("pyproject.toml");
+    let content = if pyproject_path.exists() {
+        fs::read_to_string(&pyproject_path).into_diagnostic()?
+    } else {
+        format!(
+            "[tool.arqon.relationships]\nparent = \"\"\nchildren = []\n"
+        )
+    };
+
+    let mut doc = content.parse::<toml_edit::DocumentMut>().into_diagnostic()?;
+    
+    // Ensure tool.arqon.relationships exists
+    if doc.get("tool").is_none() {
+        doc.insert("tool", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let tool = doc["tool"].as_table_mut().unwrap();
+    if tool.get("arqon").is_none() {
+        tool.insert("arqon", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let arqon = tool["arqon"].as_table_mut().unwrap();
+    if arqon.get("relationships").is_none() {
+        arqon.insert("relationships", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let rel = arqon["relationships"].as_table_mut().unwrap();
+
+    if let Some(p) = parent {
+        rel.insert("parent", toml_edit::value(p));
+    } else {
+        rel.remove("parent");
+    }
+
+    let mut children_arr = toml_edit::Array::new();
+    for child in children {
+        children_arr.push(child);
+    }
+    rel.insert("children", toml_edit::value(children_arr));
+
+    fs::write(&pyproject_path, doc.to_string()).into_diagnostic()?;
+    Ok(())
+}
+
+pub fn upgrade_ago(repo_path: &Path, name: &str) -> Result<()> {
+    let pyproject_path = repo_path.join("pyproject.toml");
+    if pyproject_path.exists() {
+        // Just ensure relationships exist
+        edit_relationship(repo_path, None, Vec::new())?;
+    } else {
+        let content = format!(
+            "[project]\nname = \"{}\"\nversion = \"0.1.0\"\n\n[tool.arqon.relationships]\nparent = \"\"\nchildren = []\n",
+            name
+        );
+        fs::write(&pyproject_path, content).into_diagnostic()?;
     }
     Ok(())
 }

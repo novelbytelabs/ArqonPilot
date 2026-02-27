@@ -716,6 +716,8 @@ struct AgorgCreateArgs {
     #[arg(long)]
     root: PathBuf,
     #[arg(long)]
+    master: Option<String>,
+    #[arg(long)]
     parent: Option<String>,
     #[arg(long, default_value = "4")]
     scan_depth: usize,
@@ -729,6 +731,8 @@ struct AgorgCreateProjectArgs {
     name: String,
     #[arg(long)]
     root: PathBuf,
+    #[arg(long)]
+    master: Option<String>,
     #[arg(long)]
     parent: Option<String>,
     #[arg(long, default_value = "4")]
@@ -755,6 +759,8 @@ struct AgorgUpdateArgs {
     name: Option<String>,
     #[arg(long)]
     root: Option<PathBuf>,
+    #[arg(long)]
+    master: Option<String>,
     #[arg(long)]
     scan_depth: Option<usize>,
     #[arg(long)]
@@ -2304,6 +2310,7 @@ async fn run_agorg(args: &AgorgArgs) -> Result<CommandReport> {
                 .create_agorg(
                     &args.name,
                     &args.root,
+                    args.master.as_deref(),
                     parent,
                     args.scan_depth as i32,
                     args.default_scope,
@@ -2324,6 +2331,7 @@ async fn run_agorg(args: &AgorgArgs) -> Result<CommandReport> {
                 .create_project(
                     &args.name,
                     &args.root,
+                    args.master.as_deref(),
                     parent,
                     args.scan_depth,
                     args.autoscan,
@@ -2398,6 +2406,7 @@ async fn run_agorg(args: &AgorgArgs) -> Result<CommandReport> {
                     id,
                     args.name.clone(),
                     args.root.clone(),
+                    args.master.clone(),
                     args.scan_depth.map(|d| d as i32),
                     if args.default_scope { Some(true) } else { None },
                 )

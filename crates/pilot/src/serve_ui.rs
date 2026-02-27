@@ -1,4 +1,5 @@
 use crate::agorg::{self, AgorgStore};
+use uuid::Uuid;
 use crate::bus::{send_command_once, BusBridgeConfig};
 use axum::extract::{Query, State};
 use axum::http::{HeaderValue, StatusCode};
@@ -83,6 +84,7 @@ struct AgorgUseRequest {
 struct AgorgCreateRequest {
     name: String,
     root: String,
+    master: Option<String>,
     parent: Option<String>,
     scan_depth: Option<usize>,
     default_scope: Option<bool>,
@@ -92,11 +94,45 @@ struct AgorgCreateRequest {
 struct AgorgCreateProjectRequest {
     name: String,
     root: String,
+    master: Option<String>,
     parent: Option<String>,
     scan_depth: Option<usize>,
     autoscan: Option<bool>,
     import: Option<bool>,
     default_scope: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgUpdateRequest {
+    id: Uuid,
+    name: Option<String>,
+    root: Option<String>,
+    master: Option<String>,
+    scan_depth: Option<usize>,
+    default_scope: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgDeleteRequest {
+    id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgScanMasterRequest {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgUpgradeRequest {
+    path: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgEditRelationshipRequest {
+    path: String,
+    parent: Option<String>,
+    children: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -213,10 +249,15 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/agorg/active", get(api_agorg_active))
         .route("/api/agorg/create", post(api_agorg_create))
         .route("/api/agorg/create_project", post(api_agorg_create_project))
+        .route("/api/agorg/update", post(api_agorg_update))
+        .route("/api/agorg/delete", post(api_agorg_delete))
         .route("/api/agorg/use", post(api_agorg_use))
         .route("/api/agorg/discover", post(api_agorg_discover))
         .route("/api/agorg/tree", get(api_agorg_tree))
         .route("/api/agorg/link", post(api_agorg_link))
+        .route("/api/agorg/scan_master", post(api_agorg_scan_master))
+        .route("/api/agorg/upgrade_ago", post(api_agorg_upgrade_ago))
+        .route("/api/agorg/edit_relationship", post(api_agorg_edit_relationship))
         .route("/api/fs/pick-directory", post(api_fs_pick_directory))
         .route("/api/dependencies/run", post(run_dependency_action))
         .route("/api/dependencies/logs", get(get_dependency_logs))
@@ -400,6 +441,7 @@ async fn api_agorg_create(
         .create_agorg(
             req.name.trim(),
             Path::new(req.root.trim()),
+            req.master.as_deref().map(|s| s.trim()),
             parent,
             req.scan_depth.unwrap_or(4) as i32,
             req.default_scope.unwrap_or(false),
@@ -424,6 +466,7 @@ async fn api_agorg_create_project(
         .create_project(
             req.name.trim(),
             Path::new(req.root.trim()),
+            req.master.as_deref().map(|s| s.trim()),
             parent,
             req.scan_depth.unwrap_or(4),
             req.autoscan.unwrap_or(false),
@@ -514,6 +557,76 @@ async fn api_agorg_link(
             Json(json!({"ok": true, "parent": parent.to_string(), "child": child.to_string()}))
                 .into_response()
         }
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_agorg_update(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgUpdateRequest>,
+) -> Response {
+    match state
+        .agorg_store
+        .update_agorg(
+            req.id,
+            req.name,
+            req.root.map(PathBuf::from),
+            req.master,
+            req.scan_depth.map(|d| d as i32),
+            req.default_scope,
+        )
+        .await
+    {
+        Ok(ag) => Json(json!({"ok": true, "agorg": ag})).into_response(),
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_agorg_delete(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgDeleteRequest>,
+) -> Response {
+    match state.agorg_store.delete_agorg(req.id).await {
+        Ok(count) => Json(json!({"ok": true, "deleted_count": count})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn api_agorg_scan_master(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgScanMasterRequest>,
+) -> Response {
+    match agorg::scan_master_directory(Path::new(req.path.trim())) {
+        Ok(mut candidates) => {
+            // Enrich with "registered" status from DB
+            if let Ok(registered) = state.agorg_store.list_agorgs().await {
+                let paths: HashSet<_> = registered.iter().map(|a| a.root_path.clone()).collect();
+                for c in &mut candidates {
+                    c.is_registered = paths.contains(&c.path);
+                }
+            }
+            Json(json!({"ok": true, "items": candidates})).into_response()
+        }
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_agorg_upgrade_ago(
+    State(_state): State<Arc<UiState>>,
+    Json(req): Json<AgorgUpgradeRequest>,
+) -> Response {
+    match agorg::upgrade_ago(Path::new(req.path.trim()), &req.name) {
+        Ok(_) => Json(json!({"ok": true})).into_response(),
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_agorg_edit_relationship(
+    State(_state): State<Arc<UiState>>,
+    Json(req): Json<AgorgEditRelationshipRequest>,
+) -> Response {
+    match agorg::edit_relationship(Path::new(req.path.trim()), req.parent, req.children) {
+        Ok(_) => Json(json!({"ok": true})).into_response(),
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
     }
 }
@@ -2007,10 +2120,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
       border: 1px solid #2d426c;
       border-radius: 10px;
       padding: 12px;
-      max-height: 340px;
+      max-height: 480px;
       overflow: auto;
       font-size: 0.84rem;
       line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-all;
     }
     .timeline {
       display: flex;
@@ -2108,9 +2223,32 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .chip.fail { border-color: #9e3f3f; background: #341616; color: #ffb2b2; }
     .chip.warn { border-color: #997a33; background: #2f2610; color: #ffe6a6; }
     .chip.neutral { border-color: #3a578a; background: #152845; color: #d5e4ff; }
+    .pre-wrap { position: relative; }
+    .pre-actions {
+      position: absolute; top: 10px; right: 20px;
+      display: flex; gap: 6px; opacity: 0.35; transition: opacity 0.2s; z-index: 20;
+    }
+    .pre-wrap:hover .pre-actions { opacity: 1; }
+    .action-btn {
+      background: rgba(30, 45, 80, 0.85); border: 1px solid #355285; color: #dbe7ff;
+      border-radius: 6px; padding: 4px 9px; font-size: 0.72rem; font-weight: 700;
+      cursor: pointer; backdrop-filter: blur(4px); transition: all 0.1s ease;
+    }
+    .action-btn:hover { background: #4f63dc; color: #fff; border-color: #5c74ef; }
+    .action-btn:active { transform: scale(0.95); }
     .dep-ok { color: #b6f7cb; }
     .dep-fail { color: #ffb2b2; }
     .muted { color: var(--muted); margin-top: 7px; }
+    .three-panel-layout { display: flex; gap: 20px; align-items: flex-start; }
+    .panel-left { flex: 1; min-width: 0; }
+    .panel-center { flex: 1.5; min-width: 0; border-left: 1px solid #2f436f; border-right: 1px solid #2f436f; padding: 0 20px; }
+    .panel-right { flex: 1; min-width: 0; }
+    .tree-node { cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: background 0.2s; }
+    .tree-node:hover { background: rgba(109, 125, 255, 0.15); }
+    .tree-node.selected { background: rgba(109, 125, 255, 0.3); border: 1px solid #6a7dff; }
+    .tree-node.agorg { color: #9dc7ff; font-weight: 700; }
+    .tree-node.ago { color: #b6f7cb; }
+    .tree-node.none { color: #8ca0cf; font-style: italic; }
     @media (max-width: 980px) {
       .grid, .status { grid-template-columns: 1fr; }
       h1 { font-size: 1.72rem; }
@@ -2182,7 +2320,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <input id="dash-push-remote" placeholder="origin" value="origin" />
           <button class="btn" onclick="dashRunPush()">Push Safe</button>
         </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-status-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-status-out')">CLEAR</button>
+        </div>
         <pre id="dash-status-out">ready</pre>
+      </div>
       </div>
 
       <div class="card">
@@ -2252,7 +2396,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <h3>Operation Detail</h3>
         <div id="op-detail-meta" class="muted">Select a timeline item</div>
         <div id="op-detail-artifact" class="muted"></div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('op-detail', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('op-detail')">CLEAR</button>
+        </div>
         <pre id="op-detail">[]</pre>
+      </div>
       </div>
     </div>
 
@@ -2262,7 +2412,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <button id="stream-toggle" class="btn secondary" onclick="toggleStream()">Pause Stream</button>
         <button class="btn secondary" onclick="clearLive()">Clear</button>
       </div>
+    <div class="pre-wrap">
+      <div class="pre-actions">
+        <button class="action-btn" onclick="copyToClipboard('live-stream', this)">COPY</button>
+        <button class="action-btn" onclick="clearElement('live-stream')">CLEAR</button>
+      </div>
       <pre id="live-stream">[]</pre>
+    </div>
     </div>
   </section>
 
@@ -2290,7 +2446,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button class="btn secondary" onclick="oracleViewReport()">View</button>
         </div>
         <select id="oracle-report-select"></select>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('oracle-report-content', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('oracle-report-content')">CLEAR</button>
+        </div>
         <pre id="oracle-report-content">No report selected.</pre>
+      </div>
       </div>
     </div>
   </section>
@@ -2364,12 +2526,24 @@ Recommended flow:
           <button class="btn secondary" onclick="depRun('gate')">Run Gate</button>
           <button class="btn" onclick="depRun('repair')">Repair Lock (No Gate)</button>
         </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dep-action-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dep-action-out')">CLEAR</button>
+        </div>
         <pre id="dep-action-out">No dependency action run yet.</pre>
+      </div>
       </div>
       <div class="card">
         <h3>Recent Gate Logs</h3>
         <button class="btn secondary" onclick="depLoadLogs()">Refresh Logs</button>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dep-logs', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dep-logs')">CLEAR</button>
+        </div>
         <pre id="dep-logs">[]</pre>
+      </div>
       </div>
     </div>
   </section>
@@ -2453,83 +2627,96 @@ Recommended flow:
   </section>
 
   <section class="panel" id="agorg">
-    <div class="grid">
-      <div class="card">
-        <h3>Create AGOrg Project</h3>
-        <label class="field-label" for="agorg-name">AGOrg Name</label>
-        <input id="agorg-name" placeholder="Arqon" value="Arqon" />
-        <label class="field-label" for="agorg-root">AGOrg Root Path</label>
-        <div class="row">
-          <input id="agorg-root" placeholder="/abs/path/to/agorg/root" value="/home/irbsurfer/Projects/arqon/Arqon" />
-          <button class="btn secondary" onclick="browseAgorgRoot()">Browse…</button>
+    <div class="three-panel-layout">
+      <!-- Panel 1: Settings/CRUD -->
+      <div class="panel-left">
+        <div class="card">
+          <h3>Import AGOrg</h3>
+          <div class="helper">Onboard a Master Directory. All AGOs/AGOrgs must exist as siblings within this space.</div>
+          <label class="field-label" for="agorg-master">AGOrg Master Directory</label>
+          <div class="row">
+            <input id="agorg-master" placeholder="/path/to/parent/dir" value="/home/irbsurfer/Projects/arqon" />
+            <button class="btn secondary" onclick="browseMasterDir()">Browse…</button>
+          </div>
+          <label class="field-label" for="agorg-name">AGOrg Name</label>
+          <input id="agorg-name" placeholder="Arqon" value="Arqon" />
+          <label class="field-label" for="agorg-root">AGOrg Root Path (Active)</label>
+          <div class="row">
+            <input id="agorg-root" placeholder="/path/to/org/repo" value="/home/irbsurfer/Projects/arqon" />
+            <button class="btn secondary" onclick="browseAgorgRoot()">Browse…</button>
+          </div>
+          <label class="field-label" for="agorg-depth">Discovery Depth</label>
+          <input id="agorg-depth" placeholder="scan depth" value="4" />
+          <div class="row">
+            <label style="font-size:0.82rem;color:#a8b9e3;">
+              <input id="agorg-autoscan" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+              autoscan
+            </label>
+            <label style="font-size:0.82rem;color:#a8b9e3;">
+              <input id="agorg-import" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+              import discovery
+            </label>
+            <label style="font-size:0.82rem;color:#a8b9e3;">
+              <input id="agorg-default" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+              set default scope
+            </label>
+          </div>
+          <div class="row">
+            <button class="btn" onclick="agorgCreateProject()">Import</button>
+            <button class="btn secondary" onclick="agorgUpdate()">Update</button>
+            <button class="btn secondary" onclick="agorgDelete()">Delete</button>
+          </div>
         </div>
-        <label class="field-label" for="agorg-parent">Parent AGOrg (Optional: UUID, Name, or Path)</label>
-        <div class="row">
-          <input id="agorg-parent" placeholder="optional parent AGOrg (UUID, name, or path)" />
-          <button class="btn secondary" onclick="browseAgorgParent()">Browse…</button>
-        </div>
-        <label class="field-label" for="agorg-depth">Scan Depth</label>
-        <input id="agorg-depth" placeholder="scan depth" value="4" />
-        <div class="row">
-          <label style="font-size:0.82rem;color:#a8b9e3;">
-            <input id="agorg-autoscan" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-            autoscan
-          </label>
-          <label style="font-size:0.82rem;color:#a8b9e3;">
-            <input id="agorg-import" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-            import discovery
-          </label>
-          <label style="font-size:0.82rem;color:#a8b9e3;">
-            <input id="agorg-default" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-            set default scope
-          </label>
-        </div>
-        <button class="btn" onclick="agorgCreateProject()">Create Project</button>
-      </div>
-      <div class="card">
-        <h3>Scope and Registry</h3>
-        <div class="row">
-          <button class="btn secondary" onclick="agorgList()">List AGOrgs</button>
-          <button class="btn secondary" onclick="agorgShowActive()">Show Active</button>
-        </div>
-        <label class="field-label" for="agorg-use-id">Use Scope (UUID or Name)</label>
-        <div class="row">
-          <input id="agorg-use-id" placeholder="AGOrg UUID or name" />
-          <button class="btn secondary" onclick="agorgUse()">Use Scope</button>
-        </div>
-        <label class="field-label" for="agorg-link-parent">Link Parent AGOrg</label>
-        <input id="agorg-link-parent" placeholder="parent AGOrg UUID or name" />
-        <label class="field-label" for="agorg-link-child">Link Child AGOrg</label>
-        <input id="agorg-link-child" placeholder="child AGOrg UUID or name" />
-        <div class="row">
-          <button class="btn secondary" onclick="agorgLink()">Link</button>
-        </div>
-      </div>
-      <div class="card">
-        <h3>Discovery and Tree</h3>
-        <label class="field-label" for="agorg-discover-root">Discovery Root</label>
-        <div class="row">
-          <input id="agorg-discover-root" placeholder="/abs/path/to/discovery/root" value="/home/irbsurfer/Projects/arqon" />
-          <button class="btn secondary" onclick="browseDiscoverRoot()">Browse…</button>
-        </div>
-        <label class="field-label" for="agorg-discover-depth">Discovery Depth</label>
-        <input id="agorg-discover-depth" placeholder="depth" value="4" />
-        <label class="field-label" for="agorg-discover-import-to">Import To AGOrg (Optional)</label>
-        <input id="agorg-discover-import-to" placeholder="optional AGOrg UUID/name for import" />
-        <div class="row">
-          <button class="btn secondary" onclick="agorgDiscover()">Discover</button>
-          <button class="btn secondary" onclick="agorgTree()">Tree</button>
+        <div class="card">
+          <h3>Registry and Scope</h3>
+          <div class="row">
+            <button class="btn secondary" onclick="agorgList()">List Saved</button>
+            <button class="btn secondary" onclick="agorgShowActive()">Active Scope</button>
+          </div>
+          <label class="field-label" for="agorg-use-id">Switch Scope (UUID or Name)</label>
+          <div class="row">
+            <input id="agorg-use-id" placeholder="UUID or name" />
+            <button class="btn secondary" onclick="agorgUse()">Switch</button>
+          </div>
         </div>
       </div>
-    </div>
-    <div class="status">
-      <div class="card">
-        <h3>AGOrg Response</h3>
-        <pre id="agorg-out">No AGOrg action run yet.</pre>
+
+      <!-- Panel 2: Interactive Hierarchy -->
+      <div class="panel-center">
+        <div class="card">
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <h3 style="margin:0">Master Hierarchy</h3>
+            <button class="btn secondary" onclick="agorgScanMaster()">Scan Master</button>
+          </div>
+          <div class="helper">Interactive view of all siblings in the Master Directory. Click to select; drag to link (TODO).</div>
+          <div id="agorg-hierarchy-tree" class="timeline" style="max-height: 800px; padding: 10px; border: 1px solid #2d426c; border-radius: 10px; background: rgba(0,0,0,0.2);">
+            <div class="tl-empty">No hierarchy loaded. Click "Scan Master" or "Import".</div>
+          </div>
+        </div>
       </div>
-      <div class="card">
-        <h3>Discovery / Tree Output</h3>
-        <pre id="agorg-discovery-out">No discovery output yet.</pre>
+
+      <!-- Panel 3: Results Display -->
+      <div class="panel-right">
+        <div class="card">
+          <h3>AGOrg Response</h3>
+          <div class="pre-wrap">
+            <div class="pre-actions">
+              <button class="action-btn" onclick="copyToClipboard('agorg-out', this)">COPY</button>
+              <button class="action-btn" onclick="clearElement('agorg-out')">CLEAR</button>
+            </div>
+            <pre id="agorg-out">ready</pre>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Discovery Output</h3>
+          <div class="pre-wrap">
+            <div class="pre-actions">
+              <button class="action-btn" onclick="copyToClipboard('agorg-discovery-out', this)">COPY</button>
+              <button class="action-btn" onclick="clearElement('agorg-discovery-out')">CLEAR</button>
+            </div>
+            <pre id="agorg-discovery-out">[]</pre>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -2541,7 +2728,13 @@ Recommended flow:
         <div class="row">
           <button class="btn secondary" onclick="syncTelemetryMirror()">Refresh Mirror</button>
         </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('telemetry-mirror', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('telemetry-mirror')">CLEAR</button>
+        </div>
         <pre id="telemetry-mirror">[]</pre>
+      </div>
       </div>
       <div class="card">
         <h3>Telemetry Mode</h3>
@@ -2594,7 +2787,13 @@ Recommended flow:
       </div>
       <div class="card">
         <h3>Codex Response</h3>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('codex-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('codex-out')">CLEAR</button>
+        </div>
         <pre id="codex-out">No Codex action run yet.</pre>
+      </div>
         <h3>Contracts (Resume / Replay)</h3>
         <div class="helper">Choose a past contract to reload state, then continue with approve/execute/reconcile.</div>
         <label class="field-label" for="codex-contract-filter">Filter by Status (optional)</label>
@@ -2606,7 +2805,13 @@ Recommended flow:
         </div>
         <label class="field-label" for="codex-contract-select">Available Contracts</label>
         <select id="codex-contract-select"></select>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('codex-contracts-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('codex-contracts-out')">CLEAR</button>
+        </div>
         <pre id="codex-contracts-out">No contracts loaded yet.</pre>
+      </div>
       </div>
     </div>
   </section>
@@ -2614,15 +2819,47 @@ Recommended flow:
   <div class="status">
     <div class="card">
       <h3>Response</h3>
+    <div class="pre-wrap">
+      <div class="pre-actions">
+        <button class="action-btn" onclick="copyToClipboard('out', this)">COPY</button>
+        <button class="action-btn" onclick="clearElement('out')">CLEAR</button>
+      </div>
       <pre id="out">ready</pre>
+    </div>
     </div>
     <div class="card">
       <h3>Dependencies Action Output</h3>
+    <div class="pre-wrap">
+      <div class="pre-actions">
+        <button class="action-btn" onclick="copyToClipboard('dep-action-out-global', this)">COPY</button>
+        <button class="action-btn" onclick="clearElement('dep-action-out-global')">CLEAR</button>
+      </div>
       <pre id="dep-action-out-global">No dependency action run yet.</pre>
+    </div>
     </div>
   </div>
 </div>
 <script>
+function copyToClipboard(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const text = el.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'COPIED';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
+}
+function clearElement(id) {
+  const el = document.getElementById(id);
+  if (el) {
+    if (id.includes('stream') || id.includes('mirror') || id.includes('logs')) {
+      el.textContent = '[]';
+    } else {
+      el.textContent = '';
+    }
+  }
+}
 const out = document.getElementById('out');
 const liveStream = document.getElementById('live-stream');
 const busStatusChip = document.getElementById('bus-status-chip');
@@ -3312,10 +3549,11 @@ async function agorgCreateProject() {
   const req = {
     name: document.getElementById('agorg-name').value.trim(),
     root: document.getElementById('agorg-root').value.trim(),
+    master: document.getElementById('agorg-master').value.trim() || null,
     parent: document.getElementById('agorg-parent').value.trim() || null,
     scan_depth: parseInt(document.getElementById('agorg-depth').value || '4', 10),
-    autoscan: !!document.getElementById('agorg-autoscan').checked,
-    import: !!document.getElementById('agorg-import').checked,
+    autoscan: true, // Always scan for fleet model
+    import: true,   // Default to import for fleet model
     default_scope: !!document.getElementById('agorg-default').checked
   };
   const res = await fetch('/api/agorg/create_project', {
@@ -3324,13 +3562,142 @@ async function agorgCreateProject() {
     body: JSON.stringify(req)
   });
   const data = await res.json();
-  const text = JSON.stringify(data, null, 2);
-  agorgOut.textContent = text;
-  out.textContent = text;
-  if (data.discovery) {
-    agorgDiscoveryOut.textContent = JSON.stringify(data.discovery, null, 2);
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+  if (data.ok && data.agorg && data.agorg.master_path) {
+    agorgScanMaster(data.agorg.master_path);
   }
   refreshAgorgHeader();
+}
+
+async function agorgScanMaster(path) {
+  if (!path) path = document.getElementById('agorg-master').value.trim();
+  if (!path) return;
+  
+  const res = await fetch('/api/agorg/scan_master', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ path })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    renderHierarchy(data.items);
+  } else {
+    agorgOut.textContent = JSON.stringify(data, null, 2);
+  }
+}
+
+function renderHierarchy(items) {
+  const container = document.getElementById('agorg-hierarchy-view');
+  container.innerHTML = '';
+  items.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'tree-node';
+    if (item.kind === 'agorg') el.classList.add('node-agorg');
+    else if (item.kind === 'ago') el.classList.add('node-ago');
+    
+    el.innerHTML = `
+      <span class="icon">${item.kind === 'agorg' ? '🏢' : item.kind === 'ago' ? '📦' : '📁'}</span>
+      <span class="name">${item.name}</span>
+      <span class="status-dot ${item.is_registered ? 'registered' : 'unregistered'}"></span>
+    `;
+    
+    el.onclick = () => {
+      document.querySelectorAll('.tree-node').forEach(n => n.classList.remove('selected'));
+      el.classList.add('selected');
+      // Load into Panel 1
+      document.getElementById('agorg-name').value = item.name;
+      document.getElementById('agorg-root').value = item.path;
+      // If it's none/unregistered, maybe show upgrade button?
+      if (!item.is_registered) {
+        agorgOut.textContent = `Directory: ${item.name}\nPath: ${item.path}\nStatus: Unregistered\nTip: Click "Import AGOrg" to register this as an Arqon entry.`;
+      }
+    };
+    
+    // Drag and Drop (Linkage)
+    el.draggable = true;
+    el.ondragstart = (e) => {
+      e.dataTransfer.setData('text/plain', JSON.stringify(item));
+    };
+    el.ondragover = (e) => { e.preventDefault(); el.classList.add('drag-over'); };
+    el.ondragleave = () => { el.classList.remove('drag-over'); };
+    el.ondrop = (e) => {
+      e.preventDefault();
+      el.classList.remove('drag-over');
+      const dragged = JSON.parse(e.dataTransfer.getData('text/plain'));
+      if (dragged.path === item.path) return;
+      
+      if (confirm(`Link "${dragged.name}" as a child of "${item.name}"?`)) {
+        agorgEditRelationship(item.path, null, [dragged.name]); // Simplified for now
+      }
+    };
+    
+    container.appendChild(el);
+  });
+}
+
+async function agorgEditRelationship(path, parent, children) {
+  const res = await fetch('/api/agorg/edit_relationship', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ path, parent, children })
+  });
+  const data = await res.json();
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+}
+
+async function agorgUpgradeAgo(path, name) {
+  const res = await fetch('/api/agorg/upgrade_ago', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ path, name })
+  });
+  const data = await res.json();
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+}
+
+async function agorgUpdate() {
+  const req = {
+    id: null, // Need to track selected ID
+    name: document.getElementById('agorg-name').value.trim(),
+    root: document.getElementById('agorg-root').value.trim(),
+    master: document.getElementById('agorg-master').value.trim()
+  };
+  // Finding the ID from some state or active
+  const activeRes = await fetch('/api/agorg/active');
+  const activeData = await activeRes.json();
+  if (!activeRes.ok || !activeData.active) {
+     agorgOut.textContent = "Error: No active AGOrg selected for update";
+     return;
+  }
+  req.id = activeData.active.id;
+  
+  const res = await fetch('/api/agorg/update', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+  refreshAgorgHeader();
+}
+
+async function browseAgorgMaster() {
+  const start = document.getElementById('agorg-master').value || '/home';
+  const res = await fetch('/api/fs/pick-directory', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ start_dir: start })
+  });
+  const data = await res.json();
+  if (data.ok && data.path) {
+    document.getElementById('agorg-master').value = data.path;
+    agorgScanMaster(data.path);
+  }
+}
+
+function clearAgorgResults() {
+  agorgOut.textContent = '(results cleared)';
+  agorgDiscoveryOut.textContent = '';
 }
 
 async function agorgList() {
@@ -3676,6 +4043,160 @@ async function loadHistory() {
   const data = await res.json();
   auditCache = (data && data.events) ? data.events : [];
   renderOperationDetail();
+}
+
+async function agorgScanMaster(path) {
+  if (!path) path = document.getElementById('agorg-master').value.trim();
+  if (!path) return;
+  
+  const res = await fetch('/api/agorg/scan_master', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ path })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    renderHierarchy(data.items);
+  } else {
+    agorgOut.textContent = JSON.stringify(data, null, 2);
+  }
+}
+
+function renderHierarchy(items) {
+  const container = document.getElementById('agorg-hierarchy-view');
+  container.innerHTML = '';
+  items.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'tree-node';
+    if (item.kind === 'agorg') el.classList.add('node-agorg');
+    else if (item.kind === 'ago') el.classList.add('node-ago');
+    
+    el.innerHTML = `
+      <span class="icon">${item.kind === 'agorg' ? '🏢' : item.kind === 'ago' ? '📦' : '📁'}</span>
+      <span class="name" title="${item.path}">${item.name}</span>
+      <span class="status-dot ${item.is_registered ? 'registered' : 'unregistered'}" title="${item.is_registered ? 'Registered in Arqon' : 'Unregistered'}"></span>
+    `;
+    
+    el.onclick = () => {
+      document.querySelectorAll('.tree-node').forEach(n => n.classList.remove('selected'));
+      el.classList.add('selected');
+      // Load into Panel 1
+      document.getElementById('agorg-name').value = item.name;
+      document.getElementById('agorg-root').value = item.path;
+      // If it's none/unregistered, maybe show upgrade button?
+      if (!item.is_registered) {
+        agorgOut.textContent = `Directory: ${item.name}\nPath: ${item.path}\nStatus: Unregistered\nTip: Click "Import AGOrg" to register this as an Arqon entry.`;
+      }
+    };
+    
+    // Drag and Drop (Linkage)
+    el.draggable = true;
+    el.ondragstart = (e) => {
+      e.dataTransfer.setData('text/plain', JSON.stringify(item));
+    };
+    el.ondragover = (e) => { e.preventDefault(); el.classList.add('drag-over'); };
+    el.ondragleave = () => { el.classList.remove('drag-over'); };
+    el.ondrop = (e) => {
+      e.preventDefault();
+      el.classList.remove('drag-over');
+      const dragged = JSON.parse(e.dataTransfer.getData('text/plain'));
+      if (dragged.path === item.path) return;
+      
+      if (confirm(`Link "${dragged.name}" as a child of "${item.name}"?`)) {
+        agorgEditRelationship(item.path, null, [dragged.name]); // Simplified for now
+      }
+    };
+    
+    container.appendChild(el);
+  });
+}
+
+async function agorgEditRelationship(path, parent, children) {
+  const res = await fetch('/api/agorg/edit_relationship', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ path, parent, children })
+  });
+  const data = await res.json();
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+}
+
+async function agorgUpgradeAgo(path, name) {
+  const res = await fetch('/api/agorg/upgrade_ago', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ path, name })
+  });
+  const data = await res.json();
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+}
+
+async function agorgUpdate() {
+  const root = document.getElementById('agorg-root').value.trim();
+  const name = document.getElementById('agorg-name').value.trim();
+  const master = document.getElementById('agorg-master').value.trim();
+
+  // Find the ID from the active AGOrg or list
+  const activeRes = await fetch('/api/agorg/active');
+  const activeData = await activeRes.json();
+  if (!activeData.ok || !activeData.active) {
+    agorgOut.textContent = "Error: No active AGOrg selected for update";
+    return;
+  }
+  
+  const req = {
+    id: activeData.active.id,
+    name,
+    root,
+    master: master || null
+  };
+  
+  const res = await fetch('/api/agorg/update', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+  refreshAgorgHeader();
+}
+
+async function agorgDelete() {
+  const activeRes = await fetch('/api/agorg/active');
+  const activeData = await activeRes.json();
+  if (!activeData.ok || !activeData.active) {
+    agorgOut.textContent = "Error: No active AGOrg selected for deletion";
+    return;
+  }
+  if (!confirm(`Are you sure you want to delete AGOrg "${activeData.active.name}" from the registry? (This does not delete files)`)) return;
+
+  const res = await fetch('/api/agorg/delete', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ id: activeData.active.id })
+  });
+  const data = await res.json();
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+  refreshAgorgHeader();
+}
+
+async function browseAgorgMaster() {
+  const start = document.getElementById('agorg-master').value || '/home';
+  const res = await fetch('/api/fs/pick-directory', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ start_dir: start })
+  });
+  const data = await res.json();
+  if (data.ok && data.path) {
+    document.getElementById('agorg-master').value = data.path;
+    agorgScanMaster(data.path);
+  }
+}
+
+function clearAgorgResults() {
+  agorgOut.textContent = '(results cleared)';
+  agorgDiscoveryOut.textContent = '';
 }
 
 function attachStream() {
