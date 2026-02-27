@@ -150,7 +150,7 @@ Wave 11 closure notes:
      - `Drift Family Scan (Core Lock)` in core + packaging-parity jobs
      - `Drift Family Scan (Packaging Lock Report)` JSON report in packaging-parity.
 
-## Wave 12 (Codex Ops Integration) - In Progress
+## Wave 12 (Codex Ops Integration) - Completed
 Deliverables:
 
 1. Codex action contract:
@@ -181,6 +181,16 @@ Progress update:
      - read-only mutation protection
      - stateful contract lifecycle (`previewed -> approved -> executed|failed -> reconciled`)
      - telemetry events for preview/approved/start/complete/fail/reconciled.
+3. Added durable Codex contract persistence:
+     - contracts append to `~/.pilot/reports/codex_contracts.jsonl`
+     - startup reload restores contract state for session resume.
+4. Added Codex contract query APIs:
+     - `GET /api/codex/contracts` (filterable by status)
+     - `GET /api/codex/contract?contract_id=...`
+5. Added UI replay/resume controls:
+     - refresh contract list
+     - load prior contract into form
+     - retry failed contract (`approve -> execute`) from the panel.
 
 ## Wave 13 (Cross-Repo Orchestration)
 

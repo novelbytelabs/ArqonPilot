@@ -49,6 +49,8 @@ UI endpoints:
 - `GET /api/dependencies/logs` read recent pre-push gate logs
 - `POST /api/evidence/export` snapshot policy/history/reports/gate logs into an evidence bundle
 - `POST /api/codex/action` contract-driven lifecycle API (`preview`, `approve`, `execute`, `reconcile`) for `pilot.*` commands
+- `GET /api/codex/contracts` list persisted contract records (optional `status`, `limit`)
+- `GET /api/codex/contract?contract_id=...` fetch one contract for resume/replay
 - `GET /api/stream` live telemetry stream (SSE)
 
 Control model:
@@ -101,6 +103,8 @@ Codex contract tab:
 - `Approve Contract`: lock in a previewed contract before execution.
 - `Execute Contract`: run an approved contract (subject to UI mutation and allowlist policy) with telemetry events.
 - `Reconcile Contract`: capture post-execution verification and notes for auditable closure.
+- `Contracts (Resume / Replay)`: load persisted contracts, inspect state, and retry failed contracts (`approve -> execute`).
+- Contract persistence file: `~/.pilot/reports/codex_contracts.jsonl` (restored at UI start).
 
 Run one message and exit:
 

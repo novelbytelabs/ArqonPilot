@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +39,7 @@ struct UiState {
     allow_mutations: bool,
     allowed_commands: Option<HashSet<String>>,
     codex_contracts: Arc<Mutex<HashMap<String, CodexContractRecord>>>,
+    codex_contracts_log: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,6 +57,17 @@ struct UiCommandResponse {
 #[derive(Debug, Deserialize)]
 struct ReportsQuery {
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexContractsQuery {
+    limit: Option<usize>,
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexContractQuery {
+    contract_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,12 +130,15 @@ struct CodexContractRecord {
 pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
     let (event_tx, _) = broadcast::channel(512);
     spawn_bus_telemetry_listener(cfg.bus.clone(), event_tx.clone());
+    let codex_contracts_log = codex_contracts_log_path();
+    let contract_seed = load_persisted_codex_contracts(&codex_contracts_log).unwrap_or_default();
     let state = Arc::new(UiState {
         bus: cfg.bus,
         events: event_tx,
         allow_mutations: cfg.allow_mutations,
         allowed_commands: cfg.allowed_commands,
-        codex_contracts: Arc::new(Mutex::new(HashMap::new())),
+        codex_contracts: Arc::new(Mutex::new(contract_seed)),
+        codex_contracts_log,
     });
 
     let app = Router::new()
@@ -130,6 +147,8 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/history", get(get_history))
         .route("/api/reports", get(get_reports))
         .route("/api/report", get(get_report_content))
+        .route("/api/codex/contracts", get(get_codex_contracts))
+        .route("/api/codex/contract", get(get_codex_contract))
         .route("/api/dependencies/run", post(run_dependency_action))
         .route("/api/dependencies/logs", get(get_dependency_logs))
         .route("/api/evidence/export", post(export_evidence_bundle))
@@ -231,6 +250,50 @@ async fn get_report_content(Query(q): Query<ReportPathQuery>) -> Response {
         }
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
     }
+}
+
+async fn get_codex_contracts(
+    State(state): State<Arc<UiState>>,
+    Query(q): Query<CodexContractsQuery>,
+) -> Response {
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let status_filter = q.status.as_deref().map(str::trim).unwrap_or("");
+    let status_filter = if status_filter.is_empty() {
+        None
+    } else {
+        Some(status_filter.to_ascii_lowercase())
+    };
+
+    let contracts = state.codex_contracts.lock().await;
+    let mut items: Vec<CodexContractRecord> = contracts
+        .values()
+        .filter(|c| {
+            if let Some(s) = status_filter.as_ref() {
+                c.status.eq_ignore_ascii_case(s)
+            } else {
+                true
+            }
+        })
+        .cloned()
+        .collect();
+    items.sort_by(|a, b| b.updated_at_unix.cmp(&a.updated_at_unix));
+    items.truncate(limit);
+    Json(json!({"ok": true, "contracts": items})).into_response()
+}
+
+async fn get_codex_contract(
+    State(state): State<Arc<UiState>>,
+    Query(q): Query<CodexContractQuery>,
+) -> Response {
+    let id = q.contract_id.trim();
+    if id.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "contract_id is required");
+    }
+    let contracts = state.codex_contracts.lock().await;
+    let Some(contract) = contracts.get(id) else {
+        return error_response(StatusCode::NOT_FOUND, "contract_id not found");
+    };
+    Json(json!({"ok": true, "contract": contract})).into_response()
 }
 
 async fn run_dependency_action(
@@ -475,6 +538,14 @@ async fn run_codex_action(
             let mut contracts = state.codex_contracts.lock().await;
             contracts.insert(contract_id.clone(), contract.clone());
         }
+        if let Err(err) = append_codex_contract_record(&state.codex_contracts_log, &contract) {
+            let _ = state.events.send(json!({
+                "source": "codex_action",
+                "phase": "persist_warning",
+                "contract_id": contract.contract_id,
+                "error": err.to_string()
+            }));
+        }
         let _ = state.events.send(json!({
             "source": "codex_action",
             "phase": "preview",
@@ -497,10 +568,13 @@ async fn run_codex_action(
         let Some(contract) = contracts.get_mut(&contract_id) else {
             return error_response(StatusCode::NOT_FOUND, "contract_id not found");
         };
-        if contract.status != "previewed" && contract.status != "approved" {
+        if contract.status != "previewed"
+            && contract.status != "approved"
+            && contract.status != "failed"
+        {
             return error_response(
                 StatusCode::CONFLICT,
-                "contract must be in previewed/approved state",
+                "contract must be in previewed/approved/failed state",
             );
         }
         if let Some(v) = req
@@ -523,6 +597,16 @@ async fn run_codex_action(
         contract.status = "approved".to_string();
         contract.updated_at_unix = now_unix();
         let response_contract = contract.clone();
+        if let Err(err) =
+            append_codex_contract_record(&state.codex_contracts_log, &response_contract)
+        {
+            let _ = state.events.send(json!({
+                "source": "codex_action",
+                "phase": "persist_warning",
+                "contract_id": response_contract.contract_id,
+                "error": err.to_string()
+            }));
+        }
         let _ = state.events.send(json!({
             "source": "codex_action",
             "phase": "approved",
@@ -603,6 +687,15 @@ async fn run_codex_action(
                     "command": updated.command,
                     "success": true
                 }));
+                if let Err(err) = append_codex_contract_record(&state.codex_contracts_log, &updated)
+                {
+                    let _ = state.events.send(json!({
+                        "source": "codex_action",
+                        "phase": "persist_warning",
+                        "contract_id": updated.contract_id,
+                        "error": err.to_string()
+                    }));
+                }
                 return Json(json!({"ok": true, "contract": updated, "response": response}))
                     .into_response();
             }
@@ -625,6 +718,16 @@ async fn run_codex_action(
                     "error": err.to_string()
                 }));
                 if let Some(contract) = updated {
+                    if let Err(persist_err) =
+                        append_codex_contract_record(&state.codex_contracts_log, &contract)
+                    {
+                        let _ = state.events.send(json!({
+                            "source": "codex_action",
+                            "phase": "persist_warning",
+                            "contract_id": contract.contract_id,
+                            "error": persist_err.to_string()
+                        }));
+                    }
                     return Json(
                         json!({"ok": false, "contract": contract, "error": err.to_string()}),
                     )
@@ -707,6 +810,14 @@ async fn run_codex_action(
         "contract_id": updated.contract_id,
         "command": updated.command
     }));
+    if let Err(err) = append_codex_contract_record(&state.codex_contracts_log, &updated) {
+        let _ = state.events.send(json!({
+            "source": "codex_action",
+            "phase": "persist_warning",
+            "contract_id": updated.contract_id,
+            "error": err.to_string()
+        }));
+    }
     Json(json!({
         "ok": true,
         "contract": updated,
@@ -730,6 +841,55 @@ fn new_codex_contract_id() -> String {
     format!("codex-{}", nanos)
 }
 
+fn codex_contracts_log_path() -> PathBuf {
+    reports_root().join("codex_contracts.jsonl")
+}
+
+fn append_codex_contract_record(
+    path: &PathBuf,
+    record: &CodexContractRecord,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    let line = serde_json::to_string(record)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    writeln!(file, "{}", line)?;
+    Ok(())
+}
+
+fn load_persisted_codex_contracts(
+    path: &PathBuf,
+) -> std::io::Result<HashMap<String, CodexContractRecord>> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    let file = OpenOptions::new().read(true).open(path)?;
+    let reader = BufReader::new(file);
+    let mut contracts = HashMap::new();
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Result<CodexContractRecord> = serde_json::from_str(trimmed);
+        if let Ok(record) = parsed {
+            let replace = contracts
+                .get(&record.contract_id)
+                .map(|current: &CodexContractRecord| {
+                    current.updated_at_unix <= record.updated_at_unix
+                })
+                .unwrap_or(true);
+            if replace {
+                contracts.insert(record.contract_id.clone(), record);
+            }
+        }
+    }
+    Ok(contracts)
+}
+
 fn is_safe_cli_token(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
@@ -738,7 +898,14 @@ fn is_safe_cli_token(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_safe_cli_token;
+    use super::{
+        append_codex_contract_record, is_safe_cli_token, load_persisted_codex_contracts,
+        CodexContractRecord,
+    };
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn test_safe_cli_token() {
@@ -750,6 +917,52 @@ mod tests {
         assert!(!is_safe_cli_token("main;rm -rf /"));
         assert!(!is_safe_cli_token("origin && whoami"));
         assert!(!is_safe_cli_token("bad token"));
+    }
+
+    #[test]
+    fn test_codex_contract_persistence_roundtrip() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("pilot_codex_test_{}", nanos));
+        fs::create_dir_all(&base).unwrap();
+        let path = base.join("codex_contracts.jsonl");
+
+        let c1 = CodexContractRecord {
+            contract_id: "codex-1".to_string(),
+            status: "previewed".to_string(),
+            intent: "intent".to_string(),
+            command: "pilot.multi.status".to_string(),
+            payload_original: json!({"schema_version":1}),
+            payload_normalized: json!({"schema_version":1}),
+            mutating_command: false,
+            expected_effect: None,
+            rollback_strategy: None,
+            verify_command: None,
+            verify_payload: json!({"schema_version":1}),
+            execute_response: None,
+            verify_response: None,
+            last_error: None,
+            reconcile_notes: None,
+            created_at_unix: 1,
+            updated_at_unix: 1,
+        };
+        let mut c2 = c1.clone();
+        c2.status = "executed".to_string();
+        c2.updated_at_unix = 3;
+        c2.execute_response = Some(json!({"ok":true}));
+
+        append_codex_contract_record(&path, &c1).unwrap();
+        append_codex_contract_record(&path, &c2).unwrap();
+
+        let loaded: HashMap<String, CodexContractRecord> =
+            load_persisted_codex_contracts(&path).unwrap();
+        let got = loaded.get("codex-1").unwrap();
+        assert_eq!(got.status, "executed");
+        assert_eq!(got.updated_at_unix, 3);
+
+        let _ = fs::remove_dir_all(base);
     }
 }
 
@@ -1220,6 +1433,32 @@ const INDEX_HTML: &str = r#"<!doctype html>
       border-color: #3a578a;
       color: #d9e6ff;
     }
+    .field-label {
+      font-size: 0.82rem;
+      color: #b6c7ee;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .helper {
+      font-size: 0.82rem;
+      color: #9cb0dc;
+      line-height: 1.45;
+      margin-top: -4px;
+    }
+    .step {
+      border: 1px solid #2f4975;
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(13, 22, 38, 0.6);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .step-title {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: #dbe7ff;
+    }
     .status {
       margin-top: 14px;
       display: grid;
@@ -1626,25 +1865,60 @@ Recommended flow:
   <section class="panel" id="codex">
     <div class="grid">
       <div class="card">
-        <h3>Codex Action Contract</h3>
-        <input id="codex-contract-id" placeholder="contract id (auto-filled by preview)" />
-        <input id="codex-intent" placeholder="intent (required)" value="Check multi-repo status before branch action" />
-        <input id="codex-command" placeholder="pilot.command" value="pilot.multi.status" />
-        <textarea id="codex-payload" rows="8" placeholder='{"group":"core","tags":["apply-pilot"]}'>{ "group": "core", "tags": ["apply-pilot"] }</textarea>
-        <input id="codex-expected" placeholder="expected effect (optional)" value="Status summary is returned for the core cohort" />
-        <input id="codex-rollback" placeholder="rollback strategy (optional)" value="No repo mutation expected; rerun in preview mode if uncertain" />
-        <input id="codex-verify" placeholder="verify command (optional)" value="pilot.multi.status" />
-        <input id="codex-reconcile-notes" placeholder="reconcile notes (optional)" value="Outcome reviewed in timeline and response payload." />
-        <div class="row">
-          <button class="btn secondary" onclick="codexPreview()">Preview Contract</button>
-          <button class="btn secondary" onclick="codexApprove()">Approve Contract</button>
-          <button class="btn" onclick="codexExecute()">Execute Contract</button>
-          <button class="btn secondary" onclick="codexReconcile()">Reconcile Contract</button>
+        <h3>Codex Guided Flow</h3>
+        <div class="helper">Use this sequence every time: <b>Preview</b> (safe) -> <b>Approve</b> -> <b>Execute</b> -> <b>Reconcile</b>.</div>
+
+        <label class="field-label" for="codex-contract-id">Current Contract ID</label>
+        <input id="codex-contract-id" placeholder="auto-filled after preview" />
+        <div class="helper">Leave blank for a new contract. Use a Contract ID to resume/replay existing work.</div>
+
+        <div class="step">
+          <div class="step-title">Step 1. Define intent and preview (no execution)</div>
+          <label class="field-label" for="codex-intent">Intent (required)</label>
+          <input id="codex-intent" placeholder="what you want to achieve" value="Check multi-repo status before branch action" />
+          <label class="field-label" for="codex-command">Pilot Command (required)</label>
+          <input id="codex-command" placeholder="pilot.command" value="pilot.multi.status" />
+          <label class="field-label" for="codex-payload">Payload JSON</label>
+          <textarea id="codex-payload" rows="8" placeholder='{"group":"core","tags":["apply-pilot"]}'>{ "group": "core", "tags": ["apply-pilot"] }</textarea>
+          <button class="btn secondary" onclick="codexPreview()">1) Preview Contract (Safe)</button>
+        </div>
+
+        <div class="step">
+          <div class="step-title">Step 2. Approve execution contract</div>
+          <label class="field-label" for="codex-expected">Expected Effect</label>
+          <input id="codex-expected" placeholder="what success looks like" value="Status summary is returned for the core cohort" />
+          <label class="field-label" for="codex-rollback">Rollback Strategy</label>
+          <input id="codex-rollback" placeholder="how to safely undo" value="No repo mutation expected; rerun in preview mode if uncertain" />
+          <label class="field-label" for="codex-verify">Verify Command (optional)</label>
+          <input id="codex-verify" placeholder="pilot.command for post-run verification" value="pilot.multi.status" />
+          <button class="btn secondary" onclick="codexApprove()">2) Approve Contract</button>
+        </div>
+
+        <div class="step">
+          <div class="step-title">Step 3. Execute and reconcile</div>
+          <label class="field-label" for="codex-reconcile-notes">Reconcile Notes</label>
+          <input id="codex-reconcile-notes" placeholder="what was verified and closed" value="Outcome reviewed in timeline and response payload." />
+          <div class="row">
+            <button class="btn" onclick="codexExecute()">3) Execute Approved Contract</button>
+            <button class="btn secondary" onclick="codexReconcile()">4) Reconcile and Close</button>
+          </div>
         </div>
       </div>
       <div class="card">
         <h3>Codex Response</h3>
         <pre id="codex-out">No Codex action run yet.</pre>
+        <h3>Contracts (Resume / Replay)</h3>
+        <div class="helper">Choose a past contract to reload state, then continue with approve/execute/reconcile.</div>
+        <label class="field-label" for="codex-contract-filter">Filter by Status (optional)</label>
+        <input id="codex-contract-filter" placeholder="status filter (optional): failed|approved|reconciled" />
+        <div class="row">
+          <button class="btn secondary" onclick="codexLoadContracts()">Refresh Contracts</button>
+          <button class="btn secondary" onclick="codexLoadSelectedContract()">Load Selected Contract</button>
+          <button class="btn secondary" onclick="codexRetryFailedContract()">Retry Failed (Approve + Execute)</button>
+        </div>
+        <label class="field-label" for="codex-contract-select">Available Contracts</label>
+        <select id="codex-contract-select"></select>
+        <pre id="codex-contracts-out">No contracts loaded yet.</pre>
       </div>
     </div>
   </section>
@@ -1681,6 +1955,8 @@ const depPolicyStatus = document.getElementById('dep-policy-status');
 const depHookStatus = document.getElementById('dep-hook-status');
 const depDriftStatus = document.getElementById('dep-drift-status');
 const codexOut = document.getElementById('codex-out');
+const codexContractsOut = document.getElementById('codex-contracts-out');
+const codexContractSelect = document.getElementById('codex-contract-select');
 const telemetryMirror = document.getElementById('telemetry-mirror');
 const dashStatusOut = document.getElementById('dash-status-out');
 const dashPolicyChip = document.getElementById('dash-policy-chip');
@@ -2286,7 +2562,8 @@ async function codexRun(mode) {
     document.getElementById('codex-contract-id').value = latestCodexContractId;
   }
   appendLive({ source: 'codex_ui', mode, command: req.command, ok: !!data.ok });
-  if (mode === 'execute' || mode === 'reconcile') loadHistory();
+  if (mode === 'execute' || mode === 'reconcile' || mode === 'approve') loadHistory();
+  if (mode === 'execute' || mode === 'reconcile' || mode === 'approve' || mode === 'preview') codexLoadContracts();
 }
 
 function codexPreview() { codexRun('preview'); }
@@ -2302,6 +2579,54 @@ function codexReconcile() {
     document.getElementById('codex-contract-id').value = latestCodexContractId;
   }
   codexRun('reconcile');
+}
+
+async function codexLoadContracts() {
+  const status = document.getElementById('codex-contract-filter').value.trim();
+  const qs = new URLSearchParams({ limit: '100' });
+  if (status) qs.set('status', status);
+  const res = await fetch('/api/codex/contracts?' + qs.toString());
+  const data = await res.json();
+  const items = (data && data.contracts) ? data.contracts : [];
+  codexContractSelect.innerHTML = '';
+  for (const c of items) {
+    const opt = document.createElement('option');
+    opt.value = c.contract_id;
+    opt.textContent = `${c.contract_id} | ${c.status} | ${c.command}`;
+    codexContractSelect.appendChild(opt);
+  }
+  if (items.length > 0) {
+    latestCodexContractId = items[0].contract_id;
+  }
+  codexContractsOut.textContent = JSON.stringify(items, null, 2);
+}
+
+async function codexLoadSelectedContract() {
+  const id = codexContractSelect.value || document.getElementById('codex-contract-id').value.trim();
+  if (!id) {
+    codexContractsOut.textContent = 'No contract selected.';
+    return;
+  }
+  const res = await fetch('/api/codex/contract?contract_id=' + encodeURIComponent(id));
+  const data = await res.json();
+  if (data && data.contract) {
+    const c = data.contract;
+    document.getElementById('codex-contract-id').value = c.contract_id || '';
+    document.getElementById('codex-intent').value = c.intent || '';
+    document.getElementById('codex-command').value = c.command || '';
+    document.getElementById('codex-payload').value = JSON.stringify(c.payload_original || {}, null, 2);
+    document.getElementById('codex-expected').value = c.expected_effect || '';
+    document.getElementById('codex-rollback').value = c.rollback_strategy || '';
+    document.getElementById('codex-verify').value = c.verify_command || '';
+    latestCodexContractId = c.contract_id || latestCodexContractId;
+  }
+  codexContractsOut.textContent = JSON.stringify(data, null, 2);
+}
+
+async function codexRetryFailedContract() {
+  await codexLoadSelectedContract();
+  await codexRun('approve');
+  await codexRun('execute');
 }
 
 async function loadHistory() {
@@ -2351,6 +2676,7 @@ depRun('policy');
 depRun('hook-policy');
 depRun('drift');
 depRun('bus-status');
+codexLoadContracts();
 setInterval(loadHistory, 30000);
 </script>
 </body>

@@ -75,6 +75,8 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
     - `Execute Contract` runs the approved contract through the Bus bridge with telemetry and response capture.
     - `Reconcile Contract` records verification outcome and closure notes.
     - Use `verify_command` to define post-action verification intent in the contract record.
+    - Use `Contracts (Resume / Replay)` to reload prior contracts, inspect status, and retry failed contracts.
+    - Contract history persists at `~/.pilot/reports/codex_contracts.jsonl` and is restored when UI restarts.
 
 ## 4. Controlled Apply Workflow
 
