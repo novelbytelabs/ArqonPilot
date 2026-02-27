@@ -2121,7 +2121,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 <div class="wrap">
   <div class="hero">
     <h1>Arqon Pilot Control Panel</h1>
-    <h2 class="muted">Oracle + Heal + Dependencies + Branch + Multi + Telemetry over ArqonBus (`pilot serve` required)</h2>
+    <h2 class="muted">The Operating System for Synthetic Life</h2>
     <div class="bus-status-row">
       <div class="status-left">
         ArqonBus:
