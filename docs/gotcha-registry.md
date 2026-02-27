@@ -46,6 +46,23 @@ Keep this file current whenever a new failure class appears.
   - Gate has retry logic and emits DNS diagnostics.
   - If DNS is down, repair scripts that need `cargo update` cannot complete.
 
+## G-013: DNS flaps where lookup passes but git still fails
+
+- Signature:
+  - `getent hosts github.com` succeeds
+  - but `git fetch` / `git push` intermittently fails with:
+    - `Could not resolve host: github.com`
+- Cause:
+  - resolver/network flapping between checks and live HTTPS git operations.
+- Recovery:
+  1. Use retrying wrapper, not raw push:
+     - `./scripts/push_main.sh`
+  2. If it still fails, re-run wrapper after a short interval:
+     - `sleep 10 && ./scripts/push_main.sh`
+  3. Confirm summary block shows:
+     - `result: SUCCESS`
+     - `git_push_rc: 0`
+
 ## G-004: Generic VS Code push failure
 
 - Signature:
