@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
 use std::process::Command;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -395,33 +396,43 @@ pub async fn send_command_once(
         .await
         .into_diagnostic()?;
 
-    while let Some(msg) = reader.next().await {
-        let msg = msg.into_diagnostic()?;
-        let Message::Text(text) = msg else {
-            continue;
-        };
-        let value: Value = match serde_json::from_str(&text) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+    let wait_for_response = async {
+        while let Some(msg) = reader.next().await {
+            let msg = msg.into_diagnostic()?;
+            let Message::Text(text) = msg else {
+                continue;
+            };
+            let value: Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
 
-        if value.get("type").and_then(Value::as_str) != Some("command_response") {
-            continue;
-        }
-        if value.get("command").and_then(Value::as_str) != Some(command) {
-            continue;
-        }
-        if value.get("reply_to").and_then(Value::as_str) != Some(request_id.as_str()) {
-            continue;
+            if value.get("type").and_then(Value::as_str) != Some("command_response") {
+                continue;
+            }
+            if value.get("command").and_then(Value::as_str) != Some(command) {
+                continue;
+            }
+            if value.get("reply_to").and_then(Value::as_str) != Some(request_id.as_str()) {
+                continue;
+            }
+
+            return Ok(value);
         }
 
-        return Ok(value);
+        Err(miette::miette!(
+            "No command response received for {}",
+            command
+        ))
+    };
+
+    match tokio::time::timeout(Duration::from_secs(20), wait_for_response).await {
+        Ok(v) => v,
+        Err(_) => Err(miette::miette!(
+            "Timed out waiting for command response for {}",
+            command
+        )),
     }
-
-    Err(miette::miette!(
-        "No command response received for {}",
-        command
-    ))
 }
 
 async fn emit_event(

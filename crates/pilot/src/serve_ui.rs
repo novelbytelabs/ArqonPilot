@@ -2023,16 +2023,36 @@ for (const btn of document.querySelectorAll('.tab')) {
 function tags(v) { return v.split(',').map(s => s.trim()).filter(Boolean); }
 async function run(command, payload) {
   payload.schema_version = 1;
-  const res = await fetch('/api/command', {
-    method: 'POST', headers: {'content-type':'application/json'},
-    body: JSON.stringify({ command, payload })
-  });
-  const data = await res.json();
-  out.textContent = JSON.stringify(data, null, 2);
+  out.textContent = JSON.stringify({status: "running", command, payload}, null, 2);
   if (dashStatusOut) {
-    dashStatusOut.textContent = JSON.stringify(data, null, 2);
+    dashStatusOut.textContent = out.textContent;
   }
-  loadHistory();
+  try {
+    const ctl = new AbortController();
+    const timeoutId = setTimeout(() => ctl.abort(), 25000);
+    const res = await fetch('/api/command', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify({ command, payload }),
+      signal: ctl.signal
+    });
+    clearTimeout(timeoutId);
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+    if (dashStatusOut) {
+      dashStatusOut.textContent = JSON.stringify(data, null, 2);
+    }
+    appendLive({ source: 'ui_command', command, ok: !!data.ok, status: res.status });
+    loadHistory();
+  } catch (err) {
+    const msg = (err && err.name === 'AbortError')
+      ? 'Request timed out. Check ArqonBus bridge health and try again.'
+      : (err && err.message ? err.message : String(err));
+    const payloadErr = { ok: false, error: msg, command };
+    out.textContent = JSON.stringify(payloadErr, null, 2);
+    if (dashStatusOut) dashStatusOut.textContent = out.textContent;
+    appendLive({ source: 'ui_command', command, ok: false, error: msg });
+  }
 }
 
 function appendLive(eventObj) {
