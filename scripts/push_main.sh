@@ -76,6 +76,8 @@ run_with_net_retry() {
 
   local attempt rc
   local tmp_out
+  local had_errexit=0
+  [[ $- == *e* ]] && had_errexit=1
   tmp_out="$(mktemp -t "push_main_${label}_XXXX.log")"
 
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
@@ -83,7 +85,9 @@ run_with_net_retry() {
     set +e
     "$@" 2>&1 | tee "$tmp_out"
     rc=${PIPESTATUS[0]}
-    set -e
+    if [[ "$had_errexit" -eq 1 ]]; then
+      set -e
+    fi
 
     if [[ "$rc" -eq 0 ]]; then
       rm -f "$tmp_out"
