@@ -1657,6 +1657,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
       <div class="card">
         <h3>Oracle + Heal Quick Ops</h3>
+        <div class="helper">Fast path for day-to-day work: ask Oracle for context, then run Heal in plan mode first before applying.</div>
         <div class="chip-row">
           <span id="dash-oracle-chip" class="chip neutral">Oracle: idle</span>
           <span id="dash-heal-chip" class="chip neutral">Heal: idle</span>
@@ -1682,6 +1683,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
       <div class="card">
         <h3>Branch + Multi Quick Ops</h3>
+        <div class="helper">Use this block to preview branch creation/status across your registered cohort before any real apply step.</div>
         <div class="row">
           <input id="dash-branch-name" placeholder="feat/pilot-wave9" />
           <input id="dash-branch-base" placeholder="main" value="main" />
@@ -1738,6 +1740,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <div class="grid">
       <div class="card">
         <h3>Oracle Scan / Query</h3>
+        <div class="helper">`Scan Index` refreshes your code graph/vector index. `Run Query` asks Oracle over that indexed state.</div>
         <div class="chip-row">
           <span id="oracle-chip" class="chip neutral">Oracle: idle</span>
         </div>
@@ -1761,6 +1764,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <div class="grid">
       <div class="card">
         <h3>Heal Controls</h3>
+        <div class="helper">Recommended sequence: `Plan Only` first, inspect response/timeline, then `Run Heal` only when the plan is acceptable.</div>
         <div class="chip-row">
           <span id="heal-chip" class="chip neutral">Heal: idle</span>
         </div>
@@ -1857,6 +1861,7 @@ Recommended flow:
     <div class="grid">
       <div class="card">
         <h3>Register Repo</h3>
+        <div class="helper">Register each repository once, then target groups/tags for all multi-repo operations below.</div>
         <input id="repo-path" placeholder="/path/to/repo" />
         <input id="repo-name" placeholder="ArqonContinuum" />
         <input id="repo-group" placeholder="core" />
@@ -1865,6 +1870,7 @@ Recommended flow:
       </div>
       <div class="card">
         <h3>List / Status / Order / DAG / PR Plan</h3>
+        <div class="helper">Run in this order when uncertain: `List` -> `Status` -> `Order` -> `DAG` -> `PR Plan`.</div>
         <div class="chip-row">
           <span id="multi-dag-chip" class="chip neutral">DAG: idle</span>
         </div>
@@ -1880,7 +1886,7 @@ Recommended flow:
       </div>
       <div class="card">
         <h3>Staged Apply (Dependency-Aware)</h3>
-        <div class="helper">Runs branch creation in dependency stages. Default is dry-run preview.</div>
+        <div class="helper">Runs branch creation in dependency stages. Start with `Dry Run`; use `Execute` only after preview looks correct.</div>
         <div class="chip-row">
           <span id="multi-apply-chip" class="chip neutral">Staged Apply: idle</span>
         </div>
