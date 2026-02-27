@@ -24,6 +24,8 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
+const FAVICON_ICO: &[u8] = include_bytes!("../assets/favicon.ico");
+
 #[derive(Clone)]
 pub struct UiConfig {
     pub host: String,
@@ -221,6 +223,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/evidence/export", post(export_evidence_bundle))
         .route("/api/codex/action", post(run_codex_action))
         .route("/api/stream", get(stream_events))
+        .route("/favicon.ico", get(favicon))
         .with_state(state);
 
     let addr = format!("{}:{}", cfg.host, cfg.port);
@@ -235,6 +238,13 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+async fn favicon() -> impl IntoResponse {
+    Response::builder()
+        .header("Content-Type", "image/x-icon")
+        .body(axum::body::Body::from(FAVICON_ICO))
+        .unwrap()
 }
 
 async fn run_command(
@@ -1758,6 +1768,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <title>Pilot Control Panel</title>
   <style>
     :root {
