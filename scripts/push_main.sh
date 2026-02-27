@@ -35,9 +35,9 @@ count_matches() {
   local pattern="$1"
   local file="$2"
   if command -v rg >/dev/null 2>&1; then
-    rg -i -N "$pattern" "$file" 2>/dev/null | wc -l | tr -d ' '
+    { rg -i -N "$pattern" "$file" 2>/dev/null || true; } | wc -l | tr -d ' '
   else
-    grep -Ei "$pattern" "$file" 2>/dev/null | wc -l | tr -d ' '
+    { grep -Ei "$pattern" "$file" 2>/dev/null || true; } | wc -l | tr -d ' '
   fi
 }
 
