@@ -229,7 +229,7 @@ fetch_rc=$?
 set -e
 if [[ "$fetch_rc" -ne 0 ]]; then
   echo "[push-safe] FAILED (git fetch)"
-  summarize_result "FAILED" "$fetch_rc" 98
+  summarize_result "FAILED" "$fetch_rc" 0
   exit "$fetch_rc"
 fi
 git status -sb
