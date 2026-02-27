@@ -1,7 +1,7 @@
 <div class="pilot-hero">
   <div class="pilot-hero-title">Arqon Pilot</div>
-  <p class="pilot-hero-subtitle">Autonomy isn't a workflow anymore.<br/>It's an operating loop.</p>
-  <p class="pilot-hero-copy">Safe multi-repo orchestration, self-healing, and release control<br/>with deterministic governance and auditable execution.</p>
+  <p class="pilot-hero-subtitle">Monorepo DX.<br/>Multi-repo power.</p>
+  <p class="pilot-hero-copy">The local control plane for Arqon's ecosystem:<br/>orchestrate branches, enforce policy, self-heal failures, and push safely across the fleet.</p>
 
   <div class="pilot-pill-row">
     <span class="pilot-pill">🛡️ Safe by Construction</span>
@@ -9,7 +9,7 @@
     <span class="pilot-pill">⚡ Cross-Repo Ready</span>
   </div>
 
-  <div class="pilot-powered">Powered by <span class="pilot-powered-chip">ArqonPilot</span></div>
+  <div class="pilot-powered">Powered by <span class="pilot-powered-chip">Arqon Pilot</span></div>
 
   <div class="pilot-cta-row">
     <a class="pilot-btn pilot-btn-primary" href="developer-guide/">Get Started</a>
@@ -17,14 +17,14 @@
   </div>
 </div>
 
-## Why ArqonPilot Exists in Arqon
+## Why Arqon Pilot Exists in Arqon
 
 Arqon spans multiple specialized repositories: Rust core systems, ArqonBus runtime messaging,
 frontend control surfaces, Python packaging/bindings, and docs/operations assets.
 Git can manage each repository, but Git alone is blind to the dependency and execution
 relationships across the full Arqon fleet.
 
-ArqonPilot is the local orchestration layer that makes this decentralized architecture
+Arqon Pilot is the local orchestration layer that makes this decentralized architecture
 operate like one cohesive engineering system.
 
 ### Arqon-Specific Value
