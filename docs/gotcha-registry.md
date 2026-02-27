@@ -204,6 +204,30 @@ Keep this file current whenever a new failure class appears.
   4. Re-run:
      - `./scripts/pilot_local.sh agorg list`
 
+## G-015: Entire Pilot UI Dead — Duplicate `const` Declarations Kill Script Block
+
+- Signature:
+  - **The entire Control Panel is completely unresponsive.** No tabs switch, no buttons work, no data loads. The page renders HTML/CSS but zero JavaScript executes.
+  - Browser DevTools Console shows: `SyntaxError: Identifier 'agorgOut' has already been declared` (or similar for any duplicated `const`).
+  - This is NOT a partial failure. If you see any single feature broken, check all features — they are likely ALL broken.
+- Cause:
+  - The `serve_ui.rs` file contains a single monolithic `<script>` block. All `const` variable declarations for DOM elements live in that block.
+  - When editing this file, a new `const agorgOut = ...` (or any other DOM variable) was added at one location **without checking that the same `const` already existed** elsewhere in the same block.
+  - JavaScript's `const` does not allow re-declaration in the same scope. A duplicate `const` causes an **immediate, fatal `SyntaxError`** that aborts parsing of the **entire** `<script>` block before any code executes.
+  - This means: no tab switching, no API calls, no dropdown, no registry, no stream — the page is a static HTML shell.
+- Why this keeps happening:
+  - The `<script>` block is ~1500 lines. DOM variable declarations appear in two separate clusters (~line 3264 and ~line 3315). When adding a new variable, it is easy to insert it in the first cluster without noticing the second cluster already declares the same name.
+  - `cargo check` does NOT validate JavaScript. The Rust code compiles perfectly even when the embedded JS is syntactically broken.
+- Recovery:
+  1. Open browser DevTools Console (F12). If you see `SyntaxError: Identifier '...' has already been declared`, that is the problem.
+  2. Search the `<script>` block in `serve_ui.rs` for the duplicated identifier: `grep -n 'const <varname>' serve_ui.rs`.
+  3. Delete the duplicate declaration. Keep only one.
+  4. Rebuild and reload.
+- Prevention:
+  1. **Before adding ANY `const` declaration**, grep the entire file for that variable name first.
+  2. **Before declaring done**, open the browser DevTools Console and verify zero errors on page load.
+  3. `cargo check` passing does NOT mean the UI works. The JS is an opaque string to Rust.
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`

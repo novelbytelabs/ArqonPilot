@@ -3282,6 +3282,10 @@ const depLogs = document.getElementById('dep-logs');
 const depPolicyStatus = document.getElementById('dep-policy-status');
 const depHookStatus = document.getElementById('dep-hook-status');
 const depDriftStatus = document.getElementById('dep-drift-status');
+const agorgRegistryList = document.getElementById('agorg-registry-list');
+const agorgActiveDetails = document.getElementById('agorg-active-details');
+const agorgOut = document.getElementById('agorg-out');
+const agorgDiscoveryOut = document.getElementById('agorg-discovery-out');
 const codexOut = document.getElementById('codex-out');
 const codexContractsOut = document.getElementById('codex-contracts-out');
 const codexContractSelect = document.getElementById('codex-contract-select');
@@ -3311,8 +3315,6 @@ const oracleQueryBtn = document.getElementById('oracle-query-btn');
 const healChip = document.getElementById('heal-chip');
 const healPlanBtn = document.getElementById('heal-plan-btn');
 const healRunBtn = document.getElementById('heal-run-btn');
-const agorgOut = document.getElementById('agorg-out');
-const agorgDiscoveryOut = document.getElementById('agorg-discovery-out');
 const BUS_HEALTH_KEY = 'pilot.bus.health.v1';
 const timelineState = new Map();
 let selectedOperationId = null;
@@ -4206,13 +4208,54 @@ function clearAgorgResults() {
   agorgDiscoveryOut.textContent = '';
 }
 
+function renderAgorgRegistry(agorgs) {
+  if (!agorgRegistryList) return;
+  agorgRegistryList.innerHTML = '';
+  if (!agorgs || agorgs.length === 0) {
+    agorgRegistryList.innerHTML = '<div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">No registered AGOrgs found.</div>';
+    return;
+  }
+
+  // Group by master_path
+  const grouped = {};
+  agorgs.forEach(ag => {
+     const path = ag.master_path || 'Independent Orgs';
+     if (!grouped[path]) grouped[path] = [];
+     grouped[path].push(ag);
+  });
+
+  for (const [path, nodes] of Object.entries(grouped)) {
+     if (path !== 'Independent Orgs') {
+       const h = document.createElement('div');
+       h.style = 'padding:8px 12px; background:#1c2635; color:#a8b9e3; font-size:0.75rem; font-weight:700; display:flex; align-items:center; gap:8px;';
+       h.innerHTML = `<span>📁 Master:</span> <span style="font-family:monospace; opacity:0.8;">${path}</span>`;
+       agorgRegistryList.appendChild(h);
+     }
+     
+     nodes.forEach(node => {
+        const el = document.createElement('div');
+        el.className = 'agorg-reg-item' + (path !== 'Independent Orgs' ? ' agorg-tree-node' : '');
+        el.style = 'display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem;';
+        el.innerHTML = `
+          <div style="display:flex; align-items:center;">
+            <span style="margin-right:8px; display:inline-flex; width:1.2rem;">🏢</span>
+            <span style="font-weight:600;">${node.name}</span>
+          </div>
+          <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#a8b9e3;">ORG</span>
+        `;
+        el.onclick = () => switchAgorgScope(node.id);
+        agorgRegistryList.appendChild(el);
+     });
+  }
+}
+
 async function agorgList() {
   if (agorgRegistryList) {
     agorgRegistryList.innerHTML = '<div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">Loading backend properties...</div>';
   }
   const data = await fetchJsonSafe('/api/agorg/list');
   const text = JSON.stringify(data, null, 2);
-  agorgOut.textContent = text;
+  if (agorgOut) agorgOut.textContent = text;
   if (data.ok) {
     renderAgorgRegistry(data.agorgs);
     
@@ -4235,14 +4278,19 @@ async function agorgList() {
        
        uniqueAgos.forEach(ago => {
          const el = document.createElement('div');
-         el.className = 'agorg-reg-item';
+         el.className = 'agorg-reg-item agorg-tree-node';
+         el.style = 'display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem; margin-left:16px; border-left:1px solid #1c2635;';
          el.innerHTML = `
-           <span style="font-weight:600;">${ago.name}</span>
-           <span class="agorg-reg-type" style="color:#6a7dff;">AGO</span>
+           <div style="display:flex; align-items:center;">
+             <span style="margin-right:8px; display:inline-flex; width:1.2rem;">🤖</span>
+             <span style="font-weight:600;">${ago.name}</span>
+           </div>
+           <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#6a7dff;">AGO</span>
          `;
          el.onclick = () => switchAgorgScope(ago.id);
          if (agorgRegistryList) agorgRegistryList.appendChild(el);
        });
+
     }
   } else {
     if (agorgRegistryList) {
