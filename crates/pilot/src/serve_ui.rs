@@ -195,13 +195,13 @@ async fn run_command(
     }
 
     if !state.allow_mutations {
-        if is_mutating_command(&req.command) {
+        enforce_dry_run(&req.command, &mut req.payload);
+        if command_requires_mutation(&req.command, &req.payload) {
             return error_response(
                 StatusCode::FORBIDDEN,
                 &format!("command '{}' blocked in read-only UI mode", req.command),
             );
         }
-        enforce_dry_run(&req.command, &mut req.payload);
     }
 
     match send_command_once_with_retry(&state.bus, &req.command, req.payload, 3).await {
@@ -509,6 +509,7 @@ async fn run_codex_action(
         }
         let mut normalized_payload = req.payload.clone();
         enforce_dry_run(&command, &mut normalized_payload);
+        let mutating_command = command_requires_mutation(&command, &normalized_payload);
         let now = now_unix();
         let contract_id = new_codex_contract_id();
         let contract = CodexContractRecord {
@@ -518,7 +519,7 @@ async fn run_codex_action(
             command: command.clone(),
             payload_original: req.payload.clone(),
             payload_normalized: normalized_payload,
-            mutating_command: is_mutating_command(&command),
+            mutating_command,
             expected_effect: req.expected_effect.clone().filter(|s| !s.trim().is_empty()),
             rollback_strategy: req
                 .rollback_strategy
@@ -1263,6 +1264,22 @@ fn is_mutating_command(command: &str) -> bool {
             | "pilot.multi.prs.create"
             | "pilot.heal.run"
     )
+}
+
+fn payload_truthy_bool(payload: &Value, key: &str) -> bool {
+    payload.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn command_requires_mutation(command: &str, payload: &Value) -> bool {
+    match command {
+        "pilot.multi.apply" => payload_truthy_bool(payload, "apply"),
+        "pilot.heal.run" => !payload_truthy_bool(payload, "plan_only"),
+        "pilot.branch.create"
+        | "pilot.branch.sync"
+        | "pilot.branch.prune"
+        | "pilot.multi.prs.create" => !payload_truthy_bool(payload, "dry_run"),
+        _ => is_mutating_command(command),
+    }
 }
 
 fn enforce_dry_run(command: &str, payload: &mut Value) {
