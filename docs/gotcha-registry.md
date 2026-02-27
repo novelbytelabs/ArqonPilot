@@ -84,6 +84,23 @@ Keep this file current whenever a new failure class appears.
   2. `./scripts/packaging_lane_check.sh`
   3. `./scripts/ci_parity_check.sh`
 
+## G-007: ArqonBus shim drops after short uptime
+
+- Signature:
+  - Control Panel `ArqonBus` chip flips `CONNECTED -> DISCONNECTED`
+  - telemetry stream shows:
+    - `IO error: Connection refused (os error 111)`
+- Cause:
+  - launching long-lived shim via `conda run` process tree may terminate unexpectedly.
+- Recovery:
+  1. Use shim manager:
+     - `PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh start`
+     - `PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status`
+  2. In Dashboard:
+     - click `Bus Status` then `Start Bus`
+  3. Verify listener:
+     - `ss -ltnp | rg ':9100'`
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`

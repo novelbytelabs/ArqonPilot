@@ -82,6 +82,47 @@ pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --teleme
 echo "$ARQONBUS_AUTH_JWT" | wc -c
 ```
 
+If bus shows `DISCONNECTED` and nothing is listening on `9100`, start the local compatibility shim
+from ArqonPilot (no ArqonBus source changes required):
+
+```bash
+./scripts/arqonbus_shim.sh start
+./scripts/arqonbus_shim.sh status
+```
+
+Then restart Pilot UI:
+
+```bash
+pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788
+```
+
+If needed:
+
+```bash
+./scripts/arqonbus_shim.sh logs
+./scripts/arqonbus_shim.sh stop
+```
+
+If the bus disconnects after ~10-20 seconds:
+
+1. Use tmp report path for shim logs/state:
+
+```bash
+PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh start
+PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status
+```
+
+2. In UI `System Status`, use:
+- `Bus Status`
+- `Start Bus`
+- `Stop Bus`
+
+3. Verify listener directly:
+
+```bash
+ss -ltnp | rg ':9100'
+```
+
 ## 4) Command rejected by Bus bridge
 
 The bridge currently only accepts namespaced `pilot.*` commands and strict contract payloads with:
@@ -217,6 +258,26 @@ Use the diagnostic wrapper instead of raw push:
 
 ```bash
 ./scripts/push_main.sh
+```
+
+The summary now includes:
+1. classified cause (`prepush_gate_failed`, `auth_or_token`, `non_fast_forward_or_remote_ahead`, `dns_or_name_resolution`, etc.)
+2. explicit remediation steps based on that classification.
+
+## 8) Drift diagnosis from Dependencies tab
+
+Use `Drift Report` in Dashboard/Dependencies to scan `Cargo.lock` for known frozen-lane drift families:
+
+- `time/comfy-table/wit-bindgen`
+- `blake3/constant_time_eq`
+- `globset`
+- `icu_* 2.1.x`
+
+CLI equivalent:
+
+```bash
+./scripts/drift_report.sh
+./scripts/drift_report.sh --json
 ```
 
 What it does:

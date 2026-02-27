@@ -206,8 +206,19 @@ async fn run_dependency_action(
             run_local_script("./scripts/verify_git_hook_policy.sh --json").await
         }
         ("hook-policy", false) => run_local_script("./scripts/verify_git_hook_policy.sh").await,
+        ("drift", true) => run_local_script("./scripts/drift_report.sh --json").await,
+        ("drift", false) => run_local_script("./scripts/drift_report.sh").await,
         ("gate", _) => run_local_script("./scripts/prepush_gate.sh").await,
         ("repair", _) => run_local_script("./scripts/repair_lock_182.sh --no-gate").await,
+        ("bus-start", _) => {
+            run_local_script("PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh start && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status").await
+        }
+        ("bus-stop", _) => {
+            run_local_script("PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh stop && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status").await
+        }
+        ("bus-status", _) => {
+            run_local_script("PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status").await
+        }
         ("push", _) => {
             let branch = req.branch.as_deref().unwrap_or("main");
             let remote = req.remote.as_deref().unwrap_or("origin");
@@ -881,14 +892,20 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <div class="chip-row">
           <span id="dash-policy-chip" class="chip neutral">Policy: unknown</span>
           <span id="dash-hook-chip" class="chip neutral">Hook: unknown</span>
+          <span id="dash-drift-chip" class="chip neutral">Drift: unknown</span>
+          <span id="dash-bus-chip" class="chip neutral">Bus: unknown</span>
           <span id="dash-gate-chip" class="chip neutral">Gate: unknown</span>
           <span id="dash-push-chip" class="chip neutral">Push: unknown</span>
         </div>
         <div class="row">
           <button class="btn secondary" onclick="dashRunPolicy()">Policy</button>
           <button class="btn secondary" onclick="dashRunHookPolicy()">Hook Policy</button>
+          <button class="btn secondary" onclick="dashRunDrift()">Drift</button>
           <button class="btn secondary" onclick="dashRunGate()">Gate</button>
           <button class="btn" onclick="dashRunRepair()">Repair</button>
+          <button class="btn secondary" onclick="dashStartBus()">Start Bus</button>
+          <button class="btn secondary" onclick="dashStopBus()">Stop Bus</button>
+          <button class="btn secondary" onclick="dashBusStatus()">Bus Status</button>
         </div>
         <div class="row">
           <input id="dash-push-branch" placeholder="main" value="main" />
@@ -937,14 +954,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
       </div>
 
-      <div class="card">
-        <h3>Live Event Stream</h3>
-        <div class="row">
-          <button id="stream-toggle" class="btn secondary" onclick="toggleStream()">Pause Stream</button>
-          <button class="btn secondary" onclick="clearLive()">Clear</button>
-        </div>
-        <pre id="live-stream">[]</pre>
-      </div>
     </div>
 
     <div class="status">
@@ -969,6 +978,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <div id="op-detail-artifact" class="muted"></div>
         <pre id="op-detail">[]</pre>
       </div>
+    </div>
+
+    <div class="card">
+      <h3>Live Event Stream</h3>
+      <div class="row">
+        <button id="stream-toggle" class="btn secondary" onclick="toggleStream()">Pause Stream</button>
+        <button class="btn secondary" onclick="clearLive()">Clear</button>
+      </div>
+      <pre id="live-stream">[]</pre>
     </div>
   </section>
 
@@ -1038,10 +1056,15 @@ Recommended flow:
             <h4>Hook Policy</h4>
             <div id="dep-hook-status" class="muted">unknown</div>
           </div>
+          <div class="dep-status-card">
+            <h4>Drift</h4>
+            <div id="dep-drift-status" class="muted">unknown</div>
+          </div>
         </div>
         <div class="row">
           <button class="btn secondary" onclick="depRun('policy')">Policy Check</button>
           <button class="btn secondary" onclick="depRun('hook-policy')">Hook Policy</button>
+          <button class="btn secondary" onclick="depRun('drift')">Drift Report</button>
         </div>
         <div class="row">
           <button class="btn secondary" onclick="depRun('gate')">Run Gate</button>
@@ -1150,12 +1173,16 @@ const depActionOutGlobal = document.getElementById('dep-action-out-global');
 const depLogs = document.getElementById('dep-logs');
 const depPolicyStatus = document.getElementById('dep-policy-status');
 const depHookStatus = document.getElementById('dep-hook-status');
+const depDriftStatus = document.getElementById('dep-drift-status');
 const telemetryMirror = document.getElementById('telemetry-mirror');
 const dashStatusOut = document.getElementById('dash-status-out');
 const dashPolicyChip = document.getElementById('dash-policy-chip');
 const dashHookChip = document.getElementById('dash-hook-chip');
+const dashDriftChip = document.getElementById('dash-drift-chip');
+const dashBusChip = document.getElementById('dash-bus-chip');
 const dashGateChip = document.getElementById('dash-gate-chip');
 const dashPushChip = document.getElementById('dash-push-chip');
+const BUS_HEALTH_KEY = 'pilot.bus.health.v1';
 const timelineState = new Map();
 let selectedOperationId = null;
 let auditCache = [];
@@ -1223,9 +1250,30 @@ function setBusStatus(connected, note) {
   busStatusChip.textContent = connected ? 'CONNECTED' : 'DISCONNECTED';
   busStatusChip.classList.toggle('connected', connected);
   busStatusChip.classList.toggle('disconnected', !connected);
+  if (dashBusChip) {
+    setChip(dashBusChip, 'Bus: ' + (connected ? 'RUNNING' : 'STOPPED'), connected ? 'ok' : 'fail');
+  }
+  try {
+    localStorage.setItem(BUS_HEALTH_KEY, JSON.stringify({
+      connected,
+      note: note || '',
+      at: new Date().toISOString()
+    }));
+  } catch (_) {}
   if (note) {
     opDetailMeta.textContent = note;
   }
+}
+
+function restoreBusStatus() {
+  try {
+    const raw = localStorage.getItem(BUS_HEALTH_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.connected === 'boolean') {
+      setBusStatus(parsed.connected, parsed.note || '');
+    }
+  } catch (_) {}
 }
 
 function filteredTimelineItems() {
@@ -1558,7 +1606,16 @@ async function depRun(action) {
       const parsed = JSON.parse(data.stdout || '{}');
       if (action === 'policy') setDepStatus(depPolicyStatus, parsed);
       if (action === 'hook-policy') setDepStatus(depHookStatus, parsed);
+      if (action === 'drift') setDepDriftStatus(parsed && parsed.ok ? 'PASS' : 'FAIL');
     } catch (_) {}
+  }
+  if (action === 'drift' && !isJsonAction) {
+    setDepDriftStatus(data.ok ? 'PASS' : 'FAIL');
+  }
+  if (action.startsWith('bus-')) {
+    const text = String(data.stdout || '') + '\n' + String(data.stderr || '');
+    if (text.includes('RUNNING')) setBusStatus(true, 'bus shim reported RUNNING');
+    if (text.includes('STOPPED')) setBusStatus(false, 'bus shim reported STOPPED');
   }
   depActionOut.textContent = JSON.stringify(data, null, 2);
   if (depActionOutGlobal) {
@@ -1579,6 +1636,10 @@ function updateDashChip(action, ok, data) {
   const level = ok ? 'ok' : 'fail';
   if (action === 'policy') setChip(dashPolicyChip, 'Policy: ' + suffix, level);
   if (action === 'hook-policy') setChip(dashHookChip, 'Hook: ' + suffix, level);
+  if (action === 'drift') setChip(dashDriftChip, 'Drift: ' + suffix, level);
+  if (action === 'bus-status' || action === 'bus-start' || action === 'bus-stop') {
+    setChip(dashBusChip, 'Bus: ' + (ok ? 'RUNNING' : 'STOPPED'), ok ? 'ok' : 'fail');
+  }
   if (action === 'gate') setChip(dashGateChip, 'Gate: ' + suffix, level);
   if (action === 'push') setChip(dashPushChip, 'Push: ' + suffix, level);
   if (!ok && data && data.error) {
@@ -1600,6 +1661,13 @@ function setDepStatus(el, parsed) {
   const failed = Array.isArray(parsed.failed_checks) ? parsed.failed_checks.join(', ') : 'unknown';
   el.textContent = 'FAIL: ' + failed;
   el.className = 'dep-fail';
+}
+
+function setDepDriftStatus(text) {
+  if (!depDriftStatus) return;
+  const ok = text === 'PASS';
+  depDriftStatus.textContent = text;
+  depDriftStatus.className = ok ? 'dep-ok' : 'dep-fail';
 }
 
 async function depLoadLogs() {
@@ -1647,8 +1715,12 @@ function dashBranchCreate() {
 
 function dashRunPolicy() { depRun('policy'); }
 function dashRunHookPolicy() { depRun('hook-policy'); }
+function dashRunDrift() { depRun('drift'); }
 function dashRunGate() { depRun('gate'); }
 function dashRunRepair() { depRun('repair'); }
+function dashStartBus() { depRun('bus-start'); }
+function dashStopBus() { depRun('bus-stop'); }
+function dashBusStatus() { depRun('bus-status'); }
 function dashRunPush() { depRun('push'); }
 
 async function loadHistory() {
@@ -1690,11 +1762,14 @@ function toggleStream() {
 }
 
 attachStream();
+restoreBusStatus();
 loadHistory();
 oracleLoadReports();
 depLoadLogs();
 depRun('policy');
 depRun('hook-policy');
+depRun('drift');
+depRun('bus-status');
 setInterval(loadHistory, 30000);
 </script>
 </body>

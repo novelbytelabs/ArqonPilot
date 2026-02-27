@@ -119,6 +119,12 @@ Exit criteria:
 1. Local-pass/CI-fail has one-click diagnosis path.
 2. Push failure always prints root cause + next action.
 
+Progress update:
+1. Added UI dependency action `drift` backed by `scripts/drift_report.sh` with JSON output support.
+2. Added System Status bus controls: `Start Bus`, `Stop Bus`, `Bus Status`.
+3. Added persisted bus health status in Dashboard (`localStorage`) for resume visibility.
+4. Upgraded `scripts/push_main.sh` to classify push failures and print cause-specific remediation.
+
 ## Wave 12 (Codex Ops Integration)
 Deliverables:
 1. Codex action contract:

@@ -37,6 +37,33 @@ Use `pilot serve` to expose Branch and Multi operations through ArqonBus command
 pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry
 ```
 
+If ArqonBus is frozen and its default module entrypoint is incompatible in your checkout,
+start the compatibility shim from this repo instead of editing ArqonBus:
+
+```bash
+./scripts/arqonbus_shim.sh start
+./scripts/arqonbus_shim.sh status
+```
+
+Then run Pilot UI:
+
+```bash
+pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788
+```
+
+Shim controls:
+
+```bash
+./scripts/arqonbus_shim.sh stop
+./scripts/arqonbus_shim.sh logs
+```
+
+Control Panel System Status actions now include:
+- `Start Bus`
+- `Stop Bus`
+- `Bus Status`
+- `Drift` (known dependency drift families)
+
 JWT auth is optional and read from `ARQONBUS_AUTH_JWT` by default.
 
 For a local operator panel (Oracle, Heal, Dependencies, Branch, Multi, Telemetry), run:
@@ -156,6 +183,7 @@ These scripts are the required guardrail layer before commit/push:
 - Sets `core.hooksPath=.githooks` so pushes run the gate automatically.
 
 5. `./scripts/repair_lock_182.sh`
+6. `./scripts/drift_report.sh`
 - Recovery script for lockfile drift in Rust `1.82.0` lane.
 
 6. `./scripts/packaging_lane_check.sh`
@@ -166,6 +194,11 @@ These scripts are the required guardrail layer before commit/push:
 - Runs full lane parity checks locally (`1.82.0` core + `1.88.0` packaging).
 - Use before merge when touching CI, lockfiles, or packaging logic.
 - Attempts compatible lock restore from git history; falls back to exact-version pin transitions.
+
+8. `./scripts/drift_report.sh`
+- Scans `Cargo.lock` for known frozen-lane drift families.
+- Text mode is human-readable and exits nonzero when drift is found.
+- JSON mode (`--json`) is used by Dependencies UI for machine-readable diagnosis.
 
 ## Guardrail Gotchas
 

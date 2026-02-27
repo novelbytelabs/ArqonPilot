@@ -41,6 +41,65 @@ count_matches() {
   fi
 }
 
+classify_failure() {
+  local gate_rc="$1"
+  local push_rc="$2"
+  local cause="unknown"
+
+  if [[ "$gate_rc" -ne 0 ]] || grep -Eiq "pre-push hook declined|\\[pre-push\\] status:\\s*FAIL|FAILED \\(pre-push gate\\)" "$LOG_FILE"; then
+    cause="prepush_gate_failed"
+  elif grep -Eiq "HTTP/2 401|HTTP/2 403|Authentication failed|Permission to .* denied|could not read Username|denied to" "$LOG_FILE"; then
+    cause="auth_or_token"
+  elif grep -Eiq "non-fast-forward|fetch first|failed to push some refs|Updates were rejected" "$LOG_FILE"; then
+    cause="non_fast_forward_or_remote_ahead"
+  elif grep -Eiq "Could not resolve host|Temporary failure in name resolution|Name or service not known" "$LOG_FILE"; then
+    cause="dns_or_name_resolution"
+  elif grep -Eiq "timed out|connection reset|Failed to connect|network is unreachable|TLS handshake timeout|Connection timed out" "$LOG_FILE"; then
+    cause="network_transport_instability"
+  elif grep -Eiq "GH006|protected branch hook declined|branch protection" "$LOG_FILE"; then
+    cause="branch_protection_or_server_hook"
+  elif [[ "$push_rc" -ne 0 ]]; then
+    cause="git_push_failed_uncategorized"
+  fi
+
+  echo "$cause"
+}
+
+print_remediation() {
+  local cause="$1"
+  echo "[push-safe] remediation:"
+  case "$cause" in
+    prepush_gate_failed)
+      echo "  1) ./scripts/repair_lock_182.sh --no-gate"
+      echo "  2) ./scripts/prepush_gate.sh"
+      echo "  3) ./scripts/push_main.sh $BRANCH $REMOTE"
+      ;;
+    auth_or_token)
+      echo "  1) gh auth status"
+      echo "  2) gh auth login (or refresh credential helper/token)"
+      echo "  3) ./scripts/push_main.sh $BRANCH $REMOTE"
+      ;;
+    non_fast_forward_or_remote_ahead)
+      echo "  1) git fetch $REMOTE"
+      echo "  2) git pull --rebase $REMOTE $BRANCH"
+      echo "  3) ./scripts/push_main.sh $BRANCH $REMOTE"
+      ;;
+    dns_or_name_resolution|network_transport_instability)
+      echo "  1) getent hosts github.com"
+      echo "  2) retry push when network is stable"
+      echo "  3) ./scripts/push_main.sh $BRANCH $REMOTE"
+      ;;
+    branch_protection_or_server_hook)
+      echo "  1) push to dev/feature branch and open PR"
+      echo "  2) verify branch protection rules on $BRANCH"
+      ;;
+    *)
+      echo "  1) inspect full log: $LOG_FILE"
+      echo "  2) rerun with same command after addressing the first error signature"
+      ;;
+  esac
+}
+
 divergence_for() {
   local remote_ref="$1"
   local local_ref="$2"
@@ -72,18 +131,7 @@ summarize_result() {
   read -r _ after_behind after_ahead <<<"$after_state"
 
   if [[ "$result" != "SUCCESS" ]]; then
-    if grep -Eiq "non-fast-forward|fetch first|failed to push some refs" "$LOG_FILE"; then
-      likely_cause="remote_divergence_or_hook_reject"
-    fi
-    if grep -Eiq "Authentication failed|403|401|denied to" "$LOG_FILE"; then
-      likely_cause="auth_or_token"
-    fi
-    if grep -Eiq "Could not resolve host|Temporary failure in name resolution" "$LOG_FILE"; then
-      likely_cause="dns_or_network"
-    fi
-    if [[ "$gate_rc" -ne 0 ]]; then
-      likely_cause="prepush_gate_failed"
-    fi
+    likely_cause="$(classify_failure "$gate_rc" "$push_rc")"
   fi
 
   echo ""
@@ -108,6 +156,7 @@ summarize_result() {
     else
       grep -Ei '(^error:|^fatal:|failed to push some refs|non-fast-forward|Authentication failed|Could not resolve host|Temporary failure in name resolution|HTTP/2 401|HTTP/2 403)' "$LOG_FILE" | tail -n 15 || true
     fi
+    print_remediation "$likely_cause"
   fi
 }
 
@@ -146,15 +195,9 @@ fi
 
 echo "[push-safe] FAILED"
 echo "[push-safe] quick diagnosis:"
-if grep -Eq "non-fast-forward|fetch first|failed to push some refs" "$LOG_FILE"; then
-  echo "  - Likely remote divergence. Try: git pull --rebase $REMOTE $BRANCH"
-fi
-if grep -Eq "Authentication failed|403|401|denied to" "$LOG_FILE"; then
-  echo "  - Likely auth/token permission issue. Re-authenticate GitHub credentials."
-fi
-if grep -Eq "Could not resolve host|Temporary failure in name resolution" "$LOG_FILE"; then
-  echo "  - DNS/network issue detected. Retry once network stabilizes."
-fi
+cause="$(classify_failure "$gate_rc" "$rc")"
+echo "  - classified_as: $cause"
+print_remediation "$cause"
 
 summarize_result "FAILED" "$rc" "$gate_rc"
 exit "$rc"
