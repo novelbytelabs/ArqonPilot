@@ -24,7 +24,9 @@ check_present() {
   echo "[OK] Present: $pattern in $file"
 }
 
-check_absent ".arqon"
+# Legacy project path ".arqon/config.toml" must not remain after rename.
+# Note: managed runtime paths under "~/.arqon/pilot" are now valid and expected.
+check_absent ".arqon/config.toml"
 check_absent "#[command(name = \"arqon\")]"
 check_absent "mod ship;"
 check_absent "Commands::Ship"
