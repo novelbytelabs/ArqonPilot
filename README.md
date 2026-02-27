@@ -1,6 +1,6 @@
-# ArqonPilot
+# Arqon Pilot
 
-ArqonPilot is a standalone CLI for single-repo and cross-repo engineering operations: oracle indexing/query, healing, release navigation, branch orchestration, security scans, planning, scaffolding, and knowledge capture.
+Arqon Pilot is a standalone CLI for single-repo and cross-repo engineering operations: oracle indexing/query, healing, release navigation, branch orchestration, security scans, planning, scaffolding, and knowledge capture.
 
 ## Core Modules
 
