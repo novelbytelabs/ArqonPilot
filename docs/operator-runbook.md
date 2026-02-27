@@ -51,7 +51,9 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
 
     - Run `Policy`, `Hook Policy`, and `Gate` before branch/release operations.
     - Use `Push Safe` instead of raw push for root-cause summaries.
+    - In `Push Safe` summary, `auth_challenge_events` counts expected GitHub HTTPS auth handshakes (`HTTP/2 401` before credential retry); this is informational, not a failure.
     - Use `Start Bus` / `Stop Bus` / `Bus Status` for ArqonBus control.
+    - Use `Export Evidence` to snapshot policy status, recent audit history, report index, and gate-log tails into `~/.pilot/reports/evidence_bundle_<timestamp>.json`.
 
 2. `Dashboard` quick cards
 
@@ -65,6 +67,12 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
 4. `Live Event Stream`
 
     - Pinned at the bottom of Dashboard for long-running monitoring without losing context.
+
+5. `Codex` tab (contract-driven operations)
+
+    - `Preview Contract` builds a normalized action contract (intent, command, payload, expected effect, rollback strategy) without executing.
+    - `Execute Contract` runs the same contract through the Bus bridge with telemetry and response capture.
+    - Use `verify_command` to define post-action verification intent in the contract record.
 
 ## 4. Controlled Apply Workflow
 

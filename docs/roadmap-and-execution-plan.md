@@ -137,14 +137,15 @@ Progress update:
 5. Added dashboard bus lifecycle controls (`Start Bus`, `Stop Bus`, `Bus Status`) and shim integration.
 6. Added deterministic drift diagnostics via `scripts/drift_report.sh` and UI integration.
 7. Live Event Stream moved to bottom of Dashboard to stay visible as a persistent monitoring surface.
+8. Added `Export Evidence` action and `/api/evidence/export` endpoint to generate evidence bundles in `~/.pilot/reports`.
+9. Hardened push summary to separate expected GitHub auth challenges (`auth_challenge_events`) from real errors.
 
 Remaining to close Wave 11:
 
-1. Harden PyPI visibility verification and post-publish validation flow.
-2. Close final documentation gaps (runbook, troubleshooting, bus guide) in same lane as guardrails.
-3. Verify CI lane parity continuously for lock drift classes (`icu_*`, `globset`, `blake3/constant_time_eq`, `time/*`).
+1. Add automated post-publish PyPI visibility verification gate to release workflow.
+2. Verify CI lane parity continuously for lock drift classes (`icu_*`, `globset`, `blake3/constant_time_eq`, `time/*`).
 
-## Wave 12 (Codex Ops Integration)
+## Wave 12 (Codex Ops Integration) - In Progress
 Deliverables:
 
 1. Codex action contract:
@@ -164,6 +165,16 @@ Exit criteria:
 
 1. No opaque AI actions; every action is auditable.
 2. Operator can replay and resume failed operations.
+
+Progress update:
+
+1. Added `Codex` tab in Control Panel with `Preview Contract` and `Execute Contract`.
+2. Added `/api/codex/action` contract endpoint with:
+     - required `intent`
+     - `pilot.*` command enforcement
+     - normalized payload preview
+     - read-only mutation protection
+     - telemetry events for preview/start/complete/fail.
 
 ## Wave 13 (Cross-Repo Orchestration)
 

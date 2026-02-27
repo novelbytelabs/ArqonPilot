@@ -11,9 +11,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::convert::Infallible;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
@@ -68,6 +70,25 @@ struct DependencyActionRequest {
     remote: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct EvidenceExportRequest {
+    history_limit: Option<usize>,
+    reports_limit: Option<usize>,
+    gate_logs_limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexActionRequest {
+    intent: String,
+    command: String,
+    #[serde(default)]
+    payload: Value,
+    mode: Option<String>,
+    expected_effect: Option<String>,
+    rollback_strategy: Option<String>,
+    verify_command: Option<String>,
+}
+
 pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
     let (event_tx, _) = broadcast::channel(512);
     spawn_bus_telemetry_listener(cfg.bus.clone(), event_tx.clone());
@@ -86,6 +107,8 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/report", get(get_report_content))
         .route("/api/dependencies/run", post(run_dependency_action))
         .route("/api/dependencies/logs", get(get_dependency_logs))
+        .route("/api/evidence/export", post(export_evidence_bundle))
+        .route("/api/codex/action", post(run_codex_action))
         .route("/api/stream", get(stream_events))
         .with_state(state);
 
@@ -254,6 +277,216 @@ async fn run_dependency_action(
             Json(body).into_response()
         }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn export_evidence_bundle(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<EvidenceExportRequest>,
+) -> Response {
+    let history_limit = req.history_limit.unwrap_or(400).clamp(50, 5000);
+    let reports_limit = req.reports_limit.unwrap_or(300).clamp(20, 4000);
+    let gate_logs_limit = req.gate_logs_limit.unwrap_or(8).clamp(1, 50);
+
+    let history = match read_recent_audit_events(history_limit) {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    };
+    let reports = match list_report_files(reports_limit) {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    };
+    let gate_logs = match read_recent_gate_logs(gate_logs_limit, 20_000) {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    };
+
+    let policy_json = run_local_script("./scripts/verify_toolchain_policy.sh --json")
+        .await
+        .ok()
+        .map(|(code, out, err)| json!({"exit_code": code, "stdout": out, "stderr": err}));
+    let hook_json = run_local_script("./scripts/verify_git_hook_policy.sh --json")
+        .await
+        .ok()
+        .map(|(code, out, err)| json!({"exit_code": code, "stdout": out, "stderr": err}));
+    let drift_json = run_local_script("./scripts/drift_report.sh --json")
+        .await
+        .ok()
+        .map(|(code, out, err)| json!({"exit_code": code, "stdout": out, "stderr": err}));
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let stamp = format!("{}", now);
+    let root = reports_root();
+    if let Err(err) = fs::create_dir_all(&root) {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string());
+    }
+    let file_name = format!("evidence_bundle_{}.json", stamp);
+    let file_path = root.join(&file_name);
+    let bundle = json!({
+        "exported_at_unix": now,
+        "bus": {
+            "ws_url": state.bus.ws_url,
+            "room": state.bus.room,
+            "channel": state.bus.channel,
+            "telemetry_channel": state.bus.telemetry_channel
+        },
+        "counts": {
+            "history_events": history.len(),
+            "report_files": reports.len(),
+            "gate_logs": gate_logs.len()
+        },
+        "policy": {
+            "toolchain_policy": policy_json,
+            "hook_policy": hook_json,
+            "drift_report": drift_json
+        },
+        "history": history,
+        "reports": reports,
+        "gate_logs": gate_logs
+    });
+
+    let bytes = match serde_json::to_vec_pretty(&bundle) {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    };
+    if let Err(err) = fs::write(&file_path, &bytes) {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string());
+    }
+
+    let _ = state.events.send(json!({
+        "source": "evidence_export",
+        "file": file_name,
+        "size_bytes": bytes.len(),
+        "history_events": bundle["counts"]["history_events"],
+        "report_files": bundle["counts"]["report_files"]
+    }));
+
+    Json(json!({
+        "ok": true,
+        "path": file_path.display().to_string(),
+        "size_bytes": bytes.len(),
+        "history_events": bundle["counts"]["history_events"],
+        "report_files": bundle["counts"]["report_files"],
+        "gate_logs": bundle["counts"]["gate_logs"]
+    }))
+    .into_response()
+}
+
+async fn run_codex_action(
+    State(state): State<Arc<UiState>>,
+    Json(mut req): Json<CodexActionRequest>,
+) -> Response {
+    let command = req.command.trim().to_string();
+    if command.is_empty() || !command.starts_with("pilot.") {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "command must be namespaced as pilot.*",
+        );
+    }
+    let intent = req.intent.trim().to_string();
+    if intent.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "intent is required");
+    }
+    let mode = req
+        .mode
+        .as_deref()
+        .unwrap_or("preview")
+        .trim()
+        .to_ascii_lowercase();
+    if mode != "preview" && mode != "execute" {
+        return error_response(StatusCode::BAD_REQUEST, "mode must be preview or execute");
+    }
+
+    if let Some(allowlist) = &state.allowed_commands {
+        if !allowlist.contains(&command) {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                &format!("command '{}' is not in ui allowlist", command),
+            );
+        }
+    }
+
+    if req.payload.get("schema_version").is_none() {
+        req.payload["schema_version"] = json!(1);
+    }
+    let is_mutating = is_mutating_command(&command);
+    let mut normalized_payload = req.payload.clone();
+
+    if mode == "preview" {
+        enforce_dry_run(&command, &mut normalized_payload);
+        let contract = json!({
+            "intent": intent,
+            "mode": "preview",
+            "command": command,
+            "payload_original": req.payload,
+            "payload_normalized": normalized_payload,
+            "mutating_command": is_mutating,
+            "expected_effect": req.expected_effect,
+            "rollback_strategy": req.rollback_strategy,
+            "verify_command": req.verify_command,
+            "ui_read_only": !state.allow_mutations
+        });
+        let _ = state.events.send(json!({
+            "source": "codex_action",
+            "phase": "preview",
+            "command": contract["command"],
+            "intent": contract["intent"],
+            "mutating_command": is_mutating
+        }));
+        return Json(json!({"ok": true, "contract": contract})).into_response();
+    }
+
+    if !state.allow_mutations && is_mutating {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            &format!("command '{}' blocked in read-only UI mode", command),
+        );
+    }
+    if !state.allow_mutations {
+        enforce_dry_run(&command, &mut normalized_payload);
+    }
+
+    let _ = state.events.send(json!({
+        "source": "codex_action",
+        "phase": "started",
+        "command": command,
+        "intent": intent
+    }));
+
+    match send_command_once_with_retry(&state.bus, &command, normalized_payload.clone(), 3).await {
+        Ok(response) => {
+            let contract = json!({
+                "intent": intent,
+                "mode": "execute",
+                "command": command,
+                "payload_normalized": normalized_payload,
+                "mutating_command": is_mutating,
+                "expected_effect": req.expected_effect,
+                "rollback_strategy": req.rollback_strategy,
+                "verify_command": req.verify_command
+            });
+            let _ = state.events.send(json!({
+                "source": "codex_action",
+                "phase": "completed",
+                "command": contract["command"],
+                "intent": contract["intent"],
+                "success": true
+            }));
+            Json(json!({"ok": true, "contract": contract, "response": response})).into_response()
+        }
+        Err(err) => {
+            let _ = state.events.send(json!({
+                "source": "codex_action",
+                "phase": "failed",
+                "command": command,
+                "intent": intent,
+                "error": err.to_string()
+            }));
+            error_response(StatusCode::BAD_GATEWAY, &err.to_string())
+        }
     }
 }
 
@@ -706,7 +939,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       flex-direction: column;
       gap: 10px;
     }
-    input, select {
+    input, select, textarea {
       width: 100%;
       background: #0d1526;
       color: #ebf1ff;
@@ -715,8 +948,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
       padding: 10px 11px;
       font-size: 0.95rem;
     }
-    input::placeholder { color: #7f94c6; }
-    input:focus, select:focus {
+    textarea {
+      resize: vertical;
+      min-height: 110px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    input::placeholder, textarea::placeholder { color: #7f94c6; }
+    input:focus, select:focus, textarea:focus {
       outline: none;
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(48, 199, 244, 0.18);
@@ -883,6 +1121,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <button class="tab" data-tab="branch">Branch</button>
     <button class="tab" data-tab="multi">Multi</button>
     <button class="tab" data-tab="telemetry">Telemetry</button>
+    <button class="tab" data-tab="codex">Codex</button>
   </div>
 
   <section class="panel active" id="dashboard">
@@ -906,6 +1145,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button class="btn secondary" onclick="dashStartBus()">Start Bus</button>
           <button class="btn secondary" onclick="dashStopBus()">Stop Bus</button>
           <button class="btn secondary" onclick="dashBusStatus()">Bus Status</button>
+          <button class="btn secondary" onclick="dashExportEvidence()">Export Evidence</button>
         </div>
         <div class="row">
           <input id="dash-push-branch" placeholder="main" value="main" />
@@ -1143,6 +1383,28 @@ Recommended flow:
     </div>
   </section>
 
+  <section class="panel" id="codex">
+    <div class="grid">
+      <div class="card">
+        <h3>Codex Action Contract</h3>
+        <input id="codex-intent" placeholder="intent (required)" value="Check multi-repo status before branch action" />
+        <input id="codex-command" placeholder="pilot.command" value="pilot.multi.status" />
+        <textarea id="codex-payload" rows="8" placeholder='{"group":"core","tags":["apply-pilot"]}'>{ "group": "core", "tags": ["apply-pilot"] }</textarea>
+        <input id="codex-expected" placeholder="expected effect (optional)" value="Status summary is returned for the core cohort" />
+        <input id="codex-rollback" placeholder="rollback strategy (optional)" value="No repo mutation expected; rerun in preview mode if uncertain" />
+        <input id="codex-verify" placeholder="verify command (optional)" value="pilot.multi.status" />
+        <div class="row">
+          <button class="btn secondary" onclick="codexPreview()">Preview Contract</button>
+          <button class="btn" onclick="codexExecute()">Execute Contract</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Codex Response</h3>
+        <pre id="codex-out">No Codex action run yet.</pre>
+      </div>
+    </div>
+  </section>
+
   <div class="status">
     <div class="card">
       <h3>Response</h3>
@@ -1174,6 +1436,7 @@ const depLogs = document.getElementById('dep-logs');
 const depPolicyStatus = document.getElementById('dep-policy-status');
 const depHookStatus = document.getElementById('dep-hook-status');
 const depDriftStatus = document.getElementById('dep-drift-status');
+const codexOut = document.getElementById('codex-out');
 const telemetryMirror = document.getElementById('telemetry-mirror');
 const dashStatusOut = document.getElementById('dash-status-out');
 const dashPolicyChip = document.getElementById('dash-policy-chip');
@@ -1722,6 +1985,61 @@ function dashStartBus() { depRun('bus-start'); }
 function dashStopBus() { depRun('bus-stop'); }
 function dashBusStatus() { depRun('bus-status'); }
 function dashRunPush() { depRun('push'); }
+
+async function dashExportEvidence() {
+  const res = await fetch('/api/evidence/export', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({})
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  out.textContent = text;
+  if (dashStatusOut) dashStatusOut.textContent = text;
+  appendLive({ source: 'dashboard', action: 'evidence-export', ok: !!data.ok, path: data.path || '' });
+}
+
+function codexPayloadFromUi() {
+  const raw = document.getElementById('codex-payload').value.trim();
+  if (!raw) return {};
+  return JSON.parse(raw);
+}
+
+async function codexRun(mode) {
+  let payload;
+  try {
+    payload = codexPayloadFromUi();
+  } catch (e) {
+    const msg = 'Invalid JSON payload: ' + e.message;
+    codexOut.textContent = msg;
+    out.textContent = msg;
+    return;
+  }
+  const req = {
+    intent: document.getElementById('codex-intent').value.trim(),
+    command: document.getElementById('codex-command').value.trim(),
+    payload,
+    mode,
+    expected_effect: document.getElementById('codex-expected').value.trim(),
+    rollback_strategy: document.getElementById('codex-rollback').value.trim(),
+    verify_command: document.getElementById('codex-verify').value.trim()
+  };
+  const res = await fetch('/api/codex/action', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  codexOut.textContent = text;
+  out.textContent = text;
+  if (dashStatusOut) dashStatusOut.textContent = text;
+  appendLive({ source: 'codex_ui', mode, command: req.command, ok: !!data.ok });
+  if (mode === 'execute') loadHistory();
+}
+
+function codexPreview() { codexRun('preview'); }
+function codexExecute() { codexRun('execute'); }
 
 async function loadHistory() {
   const res = await fetch('/api/history');

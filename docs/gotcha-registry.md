@@ -98,8 +98,35 @@ Keep this file current whenever a new failure class appears.
      - `PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status`
   2. In Dashboard:
      - click `Bus Status` then `Start Bus`
-  3. Verify listener:
+3. Verify listener:
      - `ss -ltnp | rg ':9100'`
+
+## G-008: Expected GitHub auth challenge misread as push failure
+
+- Signature:
+  - push log contains `HTTP/2 401` during initial handshake
+  - but final push succeeds
+- Cause:
+  - GitHub HTTPS flow challenges first, then retries with credentials.
+- Current handling:
+  - `scripts/push_main.sh` reports this in `auth_challenge_events`.
+  - `errors_in_log` excludes this when `git_push_rc=0`.
+- Recovery:
+  - none required if summary shows:
+    - `result=SUCCESS`
+    - `git_push_rc=0`
+    - `divergence_after_push behind=0 ahead=0`
+
+## G-009: Codex contract request rejected
+
+- Signature:
+  - `Codex` tab returns validation error.
+- Cause:
+  - missing `intent`, non-namespaced command, invalid JSON payload, or mutating command in read-only mode.
+- Recovery:
+  1. Run `Preview Contract`.
+  2. Fix payload JSON and required fields.
+  3. If execution requires mutation, run `pilot serve ... --ui-allow-mutations`.
 
 ## Frozen Policy (Do Not Change)
 

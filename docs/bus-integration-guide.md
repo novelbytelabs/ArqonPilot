@@ -47,6 +47,8 @@ UI endpoints:
 - `GET /api/report?path=...` read one report file (bounded, path-validated)
 - `POST /api/dependencies/run` run dependency guardrail actions (`policy`, `hook-policy`, `gate`, `repair`, `push`)
 - `GET /api/dependencies/logs` read recent pre-push gate logs
+- `POST /api/evidence/export` snapshot policy/history/reports/gate logs into an evidence bundle
+- `POST /api/codex/action` contract-driven preview/execute API for `pilot.*` commands
 - `GET /api/stream` live telemetry stream (SSE)
 
 Control model:
@@ -92,6 +94,11 @@ System Status panel controls:
 - `Repair`: runs lock repair workflow.
 - `Push Safe`: runs guarded push with classification summary.
 - `Start Bus` / `Stop Bus` / `Bus Status`: manage local ArqonBus shim lifecycle.
+- `Export Evidence`: write evidence bundle to `~/.pilot/reports/evidence_bundle_<timestamp>.json`.
+
+Codex contract tab:
+- `Preview Contract`: validate and normalize a command contract without executing.
+- `Execute Contract`: run the contract (subject to UI mutation and allowlist policy) with telemetry events.
 
 Run one message and exit:
 

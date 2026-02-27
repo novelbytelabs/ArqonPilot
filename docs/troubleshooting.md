@@ -263,6 +263,7 @@ Use the diagnostic wrapper instead of raw push:
 The summary now includes:
 1. classified cause (`prepush_gate_failed`, `auth_or_token`, `non_fast_forward_or_remote_ahead`, `dns_or_name_resolution`, etc.)
 2. explicit remediation steps based on that classification.
+3. `auth_challenge_events` for expected GitHub HTTPS auth handshakes (`HTTP/2 401` pre-credential retry).
 
 ## 8) Drift diagnosis from Dependencies tab
 
@@ -290,6 +291,9 @@ What it does:
 Defaults:
 - Push target defaults to your current checked-out branch.
 - To push `main` explicitly: `./scripts/push_main.sh main`.
+
+Interpretation note:
+- `auth_challenge_events > 0` with `git_push_rc=0` and `result=SUCCESS` is expected behavior and not an error condition.
 
 ## 9) PyPI workflow succeeded but new version is not visible
 
@@ -321,3 +325,20 @@ python -m pip install --no-cache-dir --index-url https://pypi.org/simple arqon-p
 If still not visible:
 - Treat as publish-index mismatch incident and record in `docs/gotcha-registry.md`.
 - Re-run publish with corrected versioning and explicit verification step.
+
+## 10) Codex contract action fails from UI
+
+Symptom:
+- `Codex` tab returns validation error or `400` response.
+
+Common causes:
+1. `intent` is empty.
+2. `command` is not `pilot.*`.
+3. payload JSON is invalid.
+4. mutating command attempted in read-only UI mode.
+
+Recovery:
+1. Use `Preview Contract` first.
+2. Ensure payload is valid JSON object.
+3. For mutation execution, run `pilot serve ... --ui-allow-mutations`.
+4. If allowlist is configured, ensure command is in `--ui-allow-command`.
