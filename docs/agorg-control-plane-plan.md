@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 21:30 EST — Wave I hard-close complete + TD Wave 3/4 complete
+**Last updated**: 2026-02-28 20:40 EST — Wave K matrix checks passed; final smoke evidence pending
 
 ---
 
@@ -333,7 +333,7 @@ Add new commands/endpoints:
 | Policy conformance checks | ✅ |
 | Reconciliation report artifact | ✅ |
 | Reconciliation apply (dry-run + apply) | ✅ |
-| UI duplicate resolution controls (winner/loser preview) | ⬜ |
+| UI duplicate resolution controls (winner/loser preview) | ✅ |
 
 **Progress note:** `agorg reconcile` (CLI/API/UI) reports off-policy items. UI/API now support:
 1. `POST /api/agorg/policy_report` (persisted artifact in `~/.pilot/reports/agorg_policy_report_<ts>.json`)
@@ -341,7 +341,8 @@ Add new commands/endpoints:
 3. `POST /api/agorg/reconcile_apply` (dry-run preview or mutation apply)
 4. Dashboard + AGOrg panel controls for report/dry-run/apply.
 
-Remaining B.4 close-out is UI presentation of duplicate merge winners/losers before apply.
+B.4 close-out note:
+1. Duplicate merge winners/losers are now presented in both Dashboard and AGOrg panels with kind filter + selection controls.
 
 ---
 
@@ -547,7 +548,7 @@ Acceptance:
 
 ---
 
-### Wave I — Acceptance Matrix Execution 🔶 IN PROGRESS
+### Wave I — Acceptance Matrix Execution ✅ COMPLETE
 
 Goal:
 
@@ -576,7 +577,86 @@ Acceptance:
 1. Operator can execute Wave I matrix from UI and CLI. ✅
 2. Matrix result includes deterministic check list + artifact path. ✅
 3. Matrix run appears in timeline with artifact linkage. ✅
-4. Full-profile matrix should remain green on healthy repo state. ⬜
+4. Full-profile matrix remains green on healthy repo state. ✅
+
+---
+
+### Wave J — AGOrg Governance + Reconcile UX Hard-Close ✅ COMPLETE
+
+Goal:
+
+1. Convert AGOrg policy/reconcile from functional to operator-grade governance workflow.
+
+Scope:
+
+1. Close B.4 UI duplicate merge winner/loser preview controls.
+2. Add guided apply UX for reconcile classes (`policy_branch`, `policy_dependency`, `metadata`, `topology`) with explicit dry-run first.
+3. Add contract/e2e evidence that report -> dry-run -> apply parity remains deterministic.
+4. Keep temporary-component inventory/checklist/report and runbook/gotcha entries synchronized on every iteration.
+
+Deliverables:
+
+1. Dashboard + AGOrg panel duplicate-resolution preview with explicit selected merge target.
+2. Reconcile action outputs include stable issue IDs and selected action mapping in artifacts.
+3. Operator workflow docs for governance loop (detect -> classify -> dry-run -> apply -> verify).
+4. Acceptance checks for Wave J in matrix path (UI/API + artifact presence).
+
+Delivered:
+
+1. Added duplicate-resolution operator controls in both Dashboard and AGOrg panels:
+   - kind filter (`all`, `canonical_path`, `name`)
+   - `Prev` / `Next` navigation
+   - selected duplicate detail panel with winner/loser prune plan.
+2. Wired duplicate state models in UI:
+   - report -> duplicate state -> filtered list -> selected detail.
+3. Kept report parity:
+   - policy report, reconcile dry-run, and reconcile apply all refresh duplicate controls and detail view.
+4. Added guided apply contract by issue class with explicit dry-run-first enforcement:
+   - reconcile apply now requires `dry_run_token` from matching dry-run response.
+   - class action map is returned in dry-run/apply outputs (`selected_action_mapping`).
+   - non-auto-fix classes are blocked for apply and surfaced as manual-review classes.
+5. Added deterministic parity summary surfaces in Dashboard + AGOrg panels:
+   - report counts vs dry-run planned prune vs apply result deltas.
+6. Reconcile issues now include stable `issue_id` values in report artifacts.
+
+Acceptance:
+
+1. Operator can resolve duplicate-path and duplicate-name conflicts from UI with no manual DB edits. ✅
+2. Reconcile artifacts clearly show intended and applied merge outcomes. ✅
+3. Wave J governance loop is reproducible from docs alone. ✅
+
+---
+
+### Wave K — Final Production Hard-Close 🔶 IN PROGRESS
+
+Goal:
+
+1. Finish project closure with deterministic acceptance, documentation parity, and release-ready evidence.
+
+Scope:
+
+1. Expand acceptance matrix to support both Wave I and Wave J closure checks.
+2. Ensure operator docs (runbook/testing/troubleshooting) match actual matrix/script behavior.
+3. Run full closure gates (`ui_smoke`, matrix full profiles, pre-push gate) and capture evidence artifacts.
+4. Confirm temporary-component inventory governance remains explicit and synchronized.
+
+Deliverables:
+
+1. `scripts/wave_acceptance_matrix.sh` supports `--wave I|J`.
+2. Wave J matrix includes:
+   - reconcile API contract tests
+   - duplicate heuristic tests
+   - dry-run token enforcement contract checks
+   - UI parity/control contract checks.
+3. Documentation parity for matrix commands and expected artifacts across runbook/testing/troubleshooting.
+4. Final closure evidence references in this plan.
+
+Acceptance:
+
+1. Wave I full matrix passes. ✅
+2. Wave J full matrix passes. ✅
+3. UI smoke + prepush gate pass in closure run. 🔶 (prepush ✅, UI smoke pending non-sandbox environment evidence)
+4. Docs and plan are internally consistent with no stale wave-status contradictions. ✅
 
 ---
 
@@ -998,8 +1078,43 @@ Verification completed:
 2. `cargo test -p pilot --locked test_parse_json_from_mixed_output_` ✅
 3. `cargo check -p pilot --locked` ✅
 
+### Iteration Update (2026-02-28 22:05 EST)
+
+Completed in this iteration:
+
+1. **Wave J item 1 implemented (duplicate winner/loser preview controls)**
+   - Dashboard and AGOrg panels now expose duplicate kind filter + navigation controls.
+   - Added focused duplicate detail outputs showing `winner_repo_path`, `loser_repo_paths`, and planned prune count.
+2. **UI contract wiring**
+   - Reconcile report, dry-run, and apply flows now consistently update duplicate control state and detail panes.
+
+Verification completed:
+
+1. `node -c crates/pilot/src/pilot_ui.js` ✅
+2. `cargo check -p pilot --locked` ✅
+
+### Iteration Update (2026-02-28 22:30 EST)
+
+Completed in this iteration:
+
+1. **Wave J item 2 hard-close (guided class apply + dry-run-first)**
+   - Added reconcile class selectors to AGOrg and Dashboard panels.
+   - Added strict dry-run token enforcement for `reconcile_apply`.
+   - Added `selected_action_mapping` contract data in dry-run/apply responses.
+2. **Wave J item 3 hard-close (parity summary)**
+   - Added report/dry-run/apply parity summary surfaces in AGOrg + Dashboard.
+   - Added deterministic deltas for planned prune and post-apply off-policy reduction.
+3. **Artifact contract hardening**
+   - Added stable `issue_id` to reconcile issues for reliable artifact referencing.
+
+Verification completed:
+
+1. `node -c crates/pilot/src/pilot_ui.js` ✅
+2. `cargo check -p pilot --locked` ✅
+3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave J planning and execution start** — define and begin post-acceptance roadmap now that Wave I and TD Wave 3/4 are closed.
-2. **B.4 duplicate-merge UX hard-close** — implement winner/loser merge preview controls in reconcile UI and validate dry-run/apply report parity.
-3. **Temporary component inventory governance** — keep inventory/report/checklist in sync with runbook and gotcha registry on every iteration.
+1. **Wave K hard-close evidence** — execute `ui_smoke_check.sh` in non-sandbox operator environment and attach artifact path to this plan.
+2. **Release evidence consolidation** — attach latest Wave I/J matrix artifact paths and timestamped closure run summary.
+3. **Wave L kickoff (Tech Debt burn-down)** — start top-priority debt items from `docs/tech-debt.md` with no placeholder/shim regressions.

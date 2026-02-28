@@ -61,8 +61,13 @@ const agorgDiscoveryOut = document.getElementById('agorg-discovery-out');
 const agorgDiscoveryReview = document.getElementById('agorg-discovery-review');
 const agorgReviewSelect = document.getElementById('agorg-review-select');
 const agorgPolicyReportSelect = document.getElementById('agorg-policy-report-select');
+const agorgReconcileClass = document.getElementById('agorg-reconcile-class');
 const agorgDuplicatePreviewOut = document.getElementById('agorg-duplicate-preview-out');
+const agorgDupKindFilter = document.getElementById('agorg-dup-kind-filter');
+const agorgFilteredDuplicatesOut = document.getElementById('agorg-filtered-duplicates-out');
+const agorgDuplicateDetailOut = document.getElementById('agorg-duplicate-detail-out');
 const agorgClassCountsOut = document.getElementById('agorg-class-counts-out');
+const agorgParityOut = document.getElementById('agorg-parity-out');
 const agorgIssueClassFilter = document.getElementById('agorg-issue-class-filter');
 const agorgFilteredIssuesOut = document.getElementById('agorg-filtered-issues-out');
 const agorgIssueDetailOut = document.getElementById('agorg-issue-detail-out');
@@ -88,9 +93,14 @@ const dashTempComponentsOut = document.getElementById('dash-temp-components-out'
 const dashTempChecklistOut = document.getElementById('dash-temp-checklist-out');
 const dashAcceptanceMatrixOut = document.getElementById('dash-acceptance-matrix-out');
 const dashAgorgReportSelect = document.getElementById('dash-agorg-report-select');
+const dashAgorgReconcileClass = document.getElementById('dash-agorg-reconcile-class');
 const dashAgorgPolicyOut = document.getElementById('dash-agorg-policy-out');
 const dashAgorgDuplicatesOut = document.getElementById('dash-agorg-duplicates-out');
+const dashAgorgDupKindFilter = document.getElementById('dash-agorg-dup-kind-filter');
+const dashAgorgFilteredDuplicatesOut = document.getElementById('dash-agorg-filtered-duplicates-out');
+const dashAgorgDuplicateDetailOut = document.getElementById('dash-agorg-duplicate-detail-out');
 const dashAgorgClassCountsOut = document.getElementById('dash-agorg-class-counts-out');
+const dashAgorgParityOut = document.getElementById('dash-agorg-parity-out');
 const dashAgorgContractOut = document.getElementById('dash-agorg-contract-out');
 const dashAgorgIssueClassFilter = document.getElementById('dash-agorg-issue-class-filter');
 const dashAgorgFilteredIssuesOut = document.getElementById('dash-agorg-filtered-issues-out');
@@ -124,8 +134,11 @@ let currentAgorgReviewId = '';
 let restoringUiSession = false;
 let uiSessionSaveTimer = null;
 let agorgCache = { at: 0, items: [], active: null, recent: [], instanceId: 'unknown' };
+let agorgDuplicateFilterState = { rows: [], kindFilter: 'all', selectedIndex: 0 };
 let agorgIssueFilterState = { issues: [], classFilter: 'all', selectedIndex: 0 };
+let dashAgorgDuplicateFilterState = { rows: [], kindFilter: 'all', selectedIndex: 0 };
 let dashAgorgIssueFilterState = { issues: [], classFilter: 'all', selectedIndex: 0 };
+let agorgReconcileState = { report: null, dryRun: null, apply: null, dryRunTokenByClass: {} };
 const AGORG_CACHE_TTL_MS = 8000;
 
 function activatePanel(tabName, opts = {}) {
@@ -142,6 +155,18 @@ function activatePanel(tabName, opts = {}) {
 
 for (const btn of document.querySelectorAll('.tab')) {
   btn.addEventListener('click', () => activatePanel(btn.dataset.tab));
+}
+if (agorgReconcileClass) {
+  agorgReconcileClass.addEventListener('change', () => {
+    syncReconcileClassControls(agorgReconcileClass.value || '');
+    renderReconcileParitySummary();
+  });
+}
+if (dashAgorgReconcileClass) {
+  dashAgorgReconcileClass.addEventListener('change', () => {
+    syncReconcileClassControls(dashAgorgReconcileClass.value || '');
+    renderReconcileParitySummary();
+  });
 }
 
 function readInputValue(id) {
@@ -1592,23 +1617,30 @@ async function agorgReconcile() {
     agorgOut.textContent = JSON.stringify({ ok: false, error: 'No active AGOrg scope selected' }, null, 2);
     return;
   }
+  const cls = selectedReconcileClass();
+  syncReconcileClassControls(cls);
+  const body = cls ? { agorg: activeId, issue_class: cls } : { agorg: activeId };
   const data = await fetchJsonSafe('/api/agorg/policy_report', {
     method: 'POST',
     headers: {'content-type':'application/json'},
-    body: JSON.stringify({ agorg: activeId })
+    body: JSON.stringify(body)
   });
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
   out.textContent = text;
   if (data && data.ok) {
+    agorgReconcileState.report = data.report || null;
     appendLive({ source: 'agorg_policy', action: 'report', artifact_path: data.artifact_path || '' });
     if (agorgDuplicatePreviewOut) agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
     if (dashAgorgDuplicatesOut) dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
+    setAgorgDuplicateStateFromReport(data.report);
+    setDashAgorgDuplicateStateFromReport(data.report);
     if (agorgClassCountsOut) agorgClassCountsOut.textContent = renderClassCountsText(data.report);
     if (dashAgorgClassCountsOut) dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
     setAgorgIssueStateFromReport(data.report);
     setDashAgorgIssueStateFromReport(data.report);
     await agorgLoadPolicyReports();
+    renderReconcileParitySummary();
   }
 }
 
@@ -1618,10 +1650,15 @@ async function agorgReconcileDryRun() {
     agorgOut.textContent = JSON.stringify({ ok: false, error: 'No active AGOrg scope selected' }, null, 2);
     return;
   }
+  const cls = selectedReconcileClass();
+  syncReconcileClassControls(cls);
+  const body = cls
+    ? { agorg: activeId, dry_run: true, issue_class: cls }
+    : { agorg: activeId, dry_run: true };
   const data = await fetchJsonSafe('/api/agorg/reconcile_apply', {
     method: 'POST',
     headers: {'content-type':'application/json'},
-    body: JSON.stringify({ agorg: activeId, dry_run: true })
+    body: JSON.stringify(body)
   });
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
@@ -1632,6 +1669,10 @@ async function agorgReconcileDryRun() {
   if (dashAgorgDuplicatesOut && data && data.report) {
     dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
   }
+  if (data && data.report) {
+    setAgorgDuplicateStateFromReport(data.report);
+    setDashAgorgDuplicateStateFromReport(data.report);
+  }
   if (agorgClassCountsOut && data && data.report) {
     agorgClassCountsOut.textContent = renderClassCountsText(data.report);
   }
@@ -1639,8 +1680,12 @@ async function agorgReconcileDryRun() {
     dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
   }
   if (data && data.report) {
+    agorgReconcileState.dryRun = data;
+    const tokenClass = cls || 'all';
+    if (data.dry_run_token) agorgReconcileState.dryRunTokenByClass[tokenClass] = data.dry_run_token;
     setAgorgIssueStateFromReport(data.report);
     setDashAgorgIssueStateFromReport(data.report);
+    renderReconcileParitySummary();
   }
   appendLive({
     source: 'agorg_policy',
@@ -1656,10 +1701,23 @@ async function agorgReconcileApply() {
     agorgOut.textContent = JSON.stringify({ ok: false, error: 'No active AGOrg scope selected' }, null, 2);
     return;
   }
+  const cls = selectedReconcileClass();
+  syncReconcileClassControls(cls);
+  const tokenClass = cls || 'all';
+  const dryRunToken = agorgReconcileState.dryRunTokenByClass[tokenClass] || '';
+  if (!dryRunToken) {
+    const msg = JSON.stringify({ ok: false, error: `Run Reconcile Dry Run first for issue_class='${tokenClass}'` }, null, 2);
+    agorgOut.textContent = msg;
+    out.textContent = msg;
+    return;
+  }
+  const body = cls
+    ? { agorg: activeId, dry_run: false, issue_class: cls, dry_run_token: dryRunToken }
+    : { agorg: activeId, dry_run: false, dry_run_token: dryRunToken };
   const data = await fetchJsonSafe('/api/agorg/reconcile_apply', {
     method: 'POST',
     headers: {'content-type':'application/json'},
-    body: JSON.stringify({ agorg: activeId, dry_run: false })
+    body: JSON.stringify(body)
   });
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
@@ -1670,6 +1728,10 @@ async function agorgReconcileApply() {
   if (dashAgorgDuplicatesOut && data && data.before) {
     dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.before);
   }
+  if (data && data.before) {
+    setAgorgDuplicateStateFromReport(data.before);
+    setDashAgorgDuplicateStateFromReport(data.before);
+  }
   if (agorgClassCountsOut && data && data.before) {
     agorgClassCountsOut.textContent = renderClassCountsText(data.before);
   }
@@ -1677,8 +1739,10 @@ async function agorgReconcileApply() {
     dashAgorgClassCountsOut.textContent = renderClassCountsText(data.before);
   }
   if (data && data.before) {
+    agorgReconcileState.apply = data;
     setAgorgIssueStateFromReport(data.before);
     setDashAgorgIssueStateFromReport(data.before);
+    renderReconcileParitySummary();
   }
   appendLive({ source: 'agorg_policy', action: 'apply', ok: !!data.ok, pruned: data.pruned || 0 });
   if (data && data.ok) {
@@ -1714,12 +1778,143 @@ function renderDuplicateResolutionText(report) {
     ? report.duplicate_resolutions
     : [];
   if (!rows.length) return 'No duplicate merge candidates.';
-  return rows
+  const header = `Duplicate merge candidates: ${rows.length}`;
+  const body = rows
     .map((r, i) => {
       const losers = Array.isArray(r.loser_repo_paths) ? r.loser_repo_paths.join(', ') : '';
       return `${i + 1}. [${r.kind}] key=${r.key}\n   winner=${r.winner_repo_path}\n   losers=${losers}`;
     })
     .join('\n');
+  return `${header}\n${body}`;
+}
+
+function duplicateSummaryLine(entry, idx) {
+  const kind = String(entry && entry.kind ? entry.kind : 'unknown');
+  const key = String(entry && entry.key ? entry.key : 'unknown');
+  const winner = String(entry && entry.winner_repo_path ? entry.winner_repo_path : '');
+  const loserCount = Array.isArray(entry && entry.loser_repo_paths) ? entry.loser_repo_paths.length : 0;
+  return `${idx + 1}. [${kind}] key=${key} :: winner=${winner} :: losers=${loserCount}`;
+}
+
+function filterDuplicatesByKind(rows, kindFilter) {
+  if (kindFilter === 'all') return rows;
+  return rows.filter((it) => String(it && it.kind ? it.kind : '') === kindFilter);
+}
+
+function renderDuplicateDetail(entry) {
+  if (!entry) return 'No duplicate candidate selected.';
+  const losers = Array.isArray(entry.loser_repo_paths) ? entry.loser_repo_paths : [];
+  const detail = {
+    kind: entry.kind || 'unknown',
+    key: entry.key || 'unknown',
+    winner_repo_path: entry.winner_repo_path || '',
+    loser_repo_paths: losers,
+    planned_prune_count: losers.length,
+    recommended_action: losers.length
+      ? 'Dry-run reconcile first, then apply to prune loser_repo_paths.'
+      : 'No losers detected; no prune action required.'
+  };
+  return JSON.stringify(detail, null, 2);
+}
+
+function setAgorgDuplicateStateFromReport(report, preserveSelection = false) {
+  const rows = Array.isArray(report && report.duplicate_resolutions)
+    ? report.duplicate_resolutions
+    : [];
+  const kindFilter = agorgDupKindFilter && agorgDupKindFilter.value ? agorgDupKindFilter.value : 'all';
+  agorgDuplicateFilterState = {
+    rows,
+    kindFilter,
+    selectedIndex: preserveSelection ? agorgDuplicateFilterState.selectedIndex : 0
+  };
+  renderAgorgDuplicateView();
+}
+
+function setDashAgorgDuplicateStateFromReport(report, preserveSelection = false) {
+  const rows = Array.isArray(report && report.duplicate_resolutions)
+    ? report.duplicate_resolutions
+    : [];
+  const kindFilter = dashAgorgDupKindFilter && dashAgorgDupKindFilter.value ? dashAgorgDupKindFilter.value : 'all';
+  dashAgorgDuplicateFilterState = {
+    rows,
+    kindFilter,
+    selectedIndex: preserveSelection ? dashAgorgDuplicateFilterState.selectedIndex : 0
+  };
+  renderDashAgorgDuplicateView();
+}
+
+function renderAgorgDuplicateView() {
+  const filter = agorgDuplicateFilterState.kindFilter || 'all';
+  const rows = filterDuplicatesByKind(agorgDuplicateFilterState.rows || [], filter);
+  const idxMax = Math.max(rows.length - 1, 0);
+  if (agorgDuplicateFilterState.selectedIndex > idxMax) agorgDuplicateFilterState.selectedIndex = idxMax;
+  if (agorgDuplicateFilterState.selectedIndex < 0) agorgDuplicateFilterState.selectedIndex = 0;
+  if (agorgFilteredDuplicatesOut) {
+    agorgFilteredDuplicatesOut.textContent = rows.length
+      ? rows.map((it, idx) => duplicateSummaryLine(it, idx)).join('\n')
+      : 'No duplicate candidates for current filter.';
+  }
+  const selected = rows.length ? rows[agorgDuplicateFilterState.selectedIndex] : null;
+  if (agorgDuplicateDetailOut) {
+    agorgDuplicateDetailOut.textContent = renderDuplicateDetail(selected);
+  }
+}
+
+function renderDashAgorgDuplicateView() {
+  const filter = dashAgorgDuplicateFilterState.kindFilter || 'all';
+  const rows = filterDuplicatesByKind(dashAgorgDuplicateFilterState.rows || [], filter);
+  const idxMax = Math.max(rows.length - 1, 0);
+  if (dashAgorgDuplicateFilterState.selectedIndex > idxMax) dashAgorgDuplicateFilterState.selectedIndex = idxMax;
+  if (dashAgorgDuplicateFilterState.selectedIndex < 0) dashAgorgDuplicateFilterState.selectedIndex = 0;
+  if (dashAgorgFilteredDuplicatesOut) {
+    dashAgorgFilteredDuplicatesOut.textContent = rows.length
+      ? rows.map((it, idx) => duplicateSummaryLine(it, idx)).join('\n')
+      : 'No duplicate candidates for current filter.';
+  }
+  const selected = rows.length ? rows[dashAgorgDuplicateFilterState.selectedIndex] : null;
+  if (dashAgorgDuplicateDetailOut) {
+    dashAgorgDuplicateDetailOut.textContent = renderDuplicateDetail(selected);
+  }
+}
+
+function agorgApplyDuplicateFilter() {
+  agorgDuplicateFilterState.kindFilter = agorgDupKindFilter && agorgDupKindFilter.value ? agorgDupKindFilter.value : 'all';
+  agorgDuplicateFilterState.selectedIndex = 0;
+  renderAgorgDuplicateView();
+}
+
+function dashAgorgApplyDuplicateFilter() {
+  dashAgorgDuplicateFilterState.kindFilter = dashAgorgDupKindFilter && dashAgorgDupKindFilter.value ? dashAgorgDupKindFilter.value : 'all';
+  dashAgorgDuplicateFilterState.selectedIndex = 0;
+  renderDashAgorgDuplicateView();
+}
+
+function agorgPrevDuplicate() {
+  agorgDuplicateFilterState.selectedIndex = Math.max(agorgDuplicateFilterState.selectedIndex - 1, 0);
+  renderAgorgDuplicateView();
+}
+
+function agorgNextDuplicate() {
+  const rows = filterDuplicatesByKind(agorgDuplicateFilterState.rows || [], agorgDuplicateFilterState.kindFilter || 'all');
+  agorgDuplicateFilterState.selectedIndex = Math.min(
+    agorgDuplicateFilterState.selectedIndex + 1,
+    Math.max(rows.length - 1, 0)
+  );
+  renderAgorgDuplicateView();
+}
+
+function dashAgorgPrevDuplicate() {
+  dashAgorgDuplicateFilterState.selectedIndex = Math.max(dashAgorgDuplicateFilterState.selectedIndex - 1, 0);
+  renderDashAgorgDuplicateView();
+}
+
+function dashAgorgNextDuplicate() {
+  const rows = filterDuplicatesByKind(dashAgorgDuplicateFilterState.rows || [], dashAgorgDuplicateFilterState.kindFilter || 'all');
+  dashAgorgDuplicateFilterState.selectedIndex = Math.min(
+    dashAgorgDuplicateFilterState.selectedIndex + 1,
+    Math.max(rows.length - 1, 0)
+  );
+  renderDashAgorgDuplicateView();
 }
 
 function renderClassCountsText(report) {
@@ -1730,6 +1925,46 @@ function renderClassCountsText(report) {
     .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
     .map(([k, v]) => `${k}: ${v}`)
     .join('\n');
+}
+
+function selectedReconcileClass() {
+  const primary = agorgReconcileClass && agorgReconcileClass.value ? String(agorgReconcileClass.value).trim() : '';
+  const dash = dashAgorgReconcileClass && dashAgorgReconcileClass.value ? String(dashAgorgReconcileClass.value).trim() : '';
+  return primary || dash || '';
+}
+
+function syncReconcileClassControls(value) {
+  if (agorgReconcileClass) agorgReconcileClass.value = value || '';
+  if (dashAgorgReconcileClass) dashAgorgReconcileClass.value = value || '';
+}
+
+function reportCounts(report) {
+  if (!report) return { issues: 0, offPolicy: 0, pruneCandidates: 0 };
+  return {
+    issues: Number(report.issue_count || 0),
+    offPolicy: Number(report.off_policy_count || 0),
+    pruneCandidates: Array.isArray(report.prune_candidate_paths) ? report.prune_candidate_paths.length : 0
+  };
+}
+
+function renderReconcileParitySummary() {
+  const cls = selectedReconcileClass() || 'all';
+  const r = reportCounts(agorgReconcileState.report);
+  const d = agorgReconcileState.dryRun || null;
+  const a = agorgReconcileState.apply || null;
+  const dryRunCount = d ? Number(d.planned_prune_count || 0) : 0;
+  const applyPruned = a ? Number(a.pruned || 0) : 0;
+  const after = a && a.after ? reportCounts(a.after) : { issues: 0, offPolicy: 0, pruneCandidates: 0 };
+  const lines = [
+    `selected_issue_class=${cls}`,
+    `report: issues=${r.issues}, off_policy=${r.offPolicy}, prune_candidates=${r.pruneCandidates}`,
+    `dry_run: planned_prune_count=${d ? dryRunCount : 'n/a'}`,
+    `apply: pruned=${a ? applyPruned : 'n/a'}, after_off_policy=${a ? after.offPolicy : 'n/a'}`,
+    `parity: dry_run_vs_report=${d ? (dryRunCount <= r.pruneCandidates ? 'OK' : 'MISMATCH') : 'n/a'}, apply_delta=${a ? (r.offPolicy - after.offPolicy) : 'n/a'}`
+  ];
+  const text = lines.join('\n');
+  if (agorgParityOut) agorgParityOut.textContent = text;
+  if (dashAgorgParityOut) dashAgorgParityOut.textContent = text;
 }
 
 function issueSummaryLine(issue, idx) {
@@ -2209,10 +2444,12 @@ async function dashAgorgOverviewRefresh() {
     setChip(dashAgorgIssuesChip, `Issues: ${Number(data.unresolved_issues || 0)}`, Number(data.unresolved_issues || 0) === 0 ? 'ok' : 'warn');
     setChip(dashAgorgOffpolicyChip, `Off-policy: ${Number(data.off_policy || 0)}`, Number(data.off_policy || 0) === 0 ? 'ok' : 'fail');
     if (data.report) {
+      agorgReconcileState.report = data.report;
       setDashAgorgIssueStateFromReport(data.report, true);
       setAgorgIssueStateFromReport(data.report, true);
       if (dashAgorgClassCountsOut) dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
       if (agorgClassCountsOut) agorgClassCountsOut.textContent = renderClassCountsText(data.report);
+      renderReconcileParitySummary();
     }
   }
 }
@@ -2294,34 +2531,44 @@ async function openDashAcceptanceArtifact() {
 }
 
 async function dashAgorgPolicyReport() {
+  const cls = selectedReconcileClass();
+  syncReconcileClassControls(cls);
+  const body = cls ? { issue_class: cls } : {};
   const data = await fetchJsonSafe('/api/agorg/policy_report', {
     method: 'POST',
     headers: {'content-type':'application/json'},
-    body: JSON.stringify({})
+    body: JSON.stringify(body)
   });
   const text = JSON.stringify(data, null, 2);
   if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = text;
   out.textContent = text;
   if (dashStatusOut) dashStatusOut.textContent = text;
   if (data && data.ok) {
+    agorgReconcileState.report = data.report || null;
     const offPolicy = (data.report && Number(data.report.off_policy_count)) || 0;
     setChip(dashDriftChip, 'Drift: ' + (offPolicy > 0 ? 'FAIL' : 'PASS'), offPolicy > 0 ? 'fail' : 'ok');
     appendLive({ source: 'dashboard', action: 'agorg-policy-report', ok: true, artifact_path: data.artifact_path || '' });
     if (dashAgorgDuplicatesOut) dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
     if (agorgDuplicatePreviewOut) agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
+    setDashAgorgDuplicateStateFromReport(data.report);
+    setAgorgDuplicateStateFromReport(data.report);
     if (dashAgorgClassCountsOut) dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
     if (agorgClassCountsOut) agorgClassCountsOut.textContent = renderClassCountsText(data.report);
     setDashAgorgIssueStateFromReport(data.report);
     setAgorgIssueStateFromReport(data.report);
     await agorgLoadPolicyReports();
+    renderReconcileParitySummary();
   }
 }
 
 async function dashAgorgReconcileDryRun() {
+  const cls = selectedReconcileClass();
+  syncReconcileClassControls(cls);
+  const body = cls ? { dry_run: true, issue_class: cls } : { dry_run: true };
   const data = await fetchJsonSafe('/api/agorg/reconcile_apply', {
     method: 'POST',
     headers: {'content-type':'application/json'},
-    body: JSON.stringify({ dry_run: true })
+    body: JSON.stringify(body)
   });
   const text = JSON.stringify(data, null, 2);
   if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = text;
@@ -2333,6 +2580,10 @@ async function dashAgorgReconcileDryRun() {
   if (agorgDuplicatePreviewOut && data && data.report) {
     agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
   }
+  if (data && data.report) {
+    setDashAgorgDuplicateStateFromReport(data.report);
+    setAgorgDuplicateStateFromReport(data.report);
+  }
   if (dashAgorgClassCountsOut && data && data.report) {
     dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
   }
@@ -2340,8 +2591,12 @@ async function dashAgorgReconcileDryRun() {
     agorgClassCountsOut.textContent = renderClassCountsText(data.report);
   }
   if (data && data.report) {
+    agorgReconcileState.dryRun = data;
+    const tokenClass = cls || 'all';
+    if (data.dry_run_token) agorgReconcileState.dryRunTokenByClass[tokenClass] = data.dry_run_token;
     setDashAgorgIssueStateFromReport(data.report);
     setAgorgIssueStateFromReport(data.report);
+    renderReconcileParitySummary();
   }
   appendLive({
     source: 'dashboard',
@@ -2352,10 +2607,24 @@ async function dashAgorgReconcileDryRun() {
 }
 
 async function dashAgorgReconcileApply() {
+  const cls = selectedReconcileClass();
+  syncReconcileClassControls(cls);
+  const tokenClass = cls || 'all';
+  const dryRunToken = agorgReconcileState.dryRunTokenByClass[tokenClass] || '';
+  if (!dryRunToken) {
+    const msg = JSON.stringify({ ok: false, error: `Run Reconcile Dry Run first for issue_class='${tokenClass}'` }, null, 2);
+    if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = msg;
+    out.textContent = msg;
+    if (dashStatusOut) dashStatusOut.textContent = msg;
+    return;
+  }
+  const body = cls
+    ? { dry_run: false, issue_class: cls, dry_run_token: dryRunToken }
+    : { dry_run: false, dry_run_token: dryRunToken };
   const data = await fetchJsonSafe('/api/agorg/reconcile_apply', {
     method: 'POST',
     headers: {'content-type':'application/json'},
-    body: JSON.stringify({ dry_run: false })
+    body: JSON.stringify(body)
   });
   const text = JSON.stringify(data, null, 2);
   if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = text;
@@ -2367,6 +2636,10 @@ async function dashAgorgReconcileApply() {
   if (agorgDuplicatePreviewOut && data && data.before) {
     agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.before);
   }
+  if (data && data.before) {
+    setDashAgorgDuplicateStateFromReport(data.before);
+    setAgorgDuplicateStateFromReport(data.before);
+  }
   if (dashAgorgClassCountsOut && data && data.before) {
     dashAgorgClassCountsOut.textContent = renderClassCountsText(data.before);
   }
@@ -2374,8 +2647,10 @@ async function dashAgorgReconcileApply() {
     agorgClassCountsOut.textContent = renderClassCountsText(data.before);
   }
   if (data && data.before) {
+    agorgReconcileState.apply = data;
     setDashAgorgIssueStateFromReport(data.before);
     setAgorgIssueStateFromReport(data.before);
+    renderReconcileParitySummary();
   }
   appendLive({ source: 'dashboard', action: 'agorg-reconcile-apply', ok: !!data.ok, pruned: data.pruned || 0 });
   if (data && data.ok) {

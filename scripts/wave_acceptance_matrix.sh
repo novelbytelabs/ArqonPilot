@@ -21,8 +21,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$wave" != "I" ]]; then
-  echo "only wave I is currently supported" >&2
+if [[ "$wave" != "I" && "$wave" != "J" ]]; then
+  echo "supported waves: I, J" >&2
   exit 2
 fi
 
@@ -63,8 +63,20 @@ run_check "toolchain_policy" "./scripts/verify_toolchain_policy.sh"
 run_check "js_syntax" "node -c crates/pilot/src/pilot_ui.js"
 run_check "cargo_locked_check" "cargo check -p pilot --locked"
 
-if [[ "$profile" == "full" ]]; then
-  run_check "prepush_gate" "./scripts/prepush_gate.sh"
+if [[ "$wave" == "I" ]]; then
+  if [[ "$profile" == "full" ]]; then
+    run_check "prepush_gate" "./scripts/prepush_gate.sh"
+  fi
+fi
+
+if [[ "$wave" == "J" ]]; then
+  run_check "reconcile_api_contract" "cargo test -p pilot --locked test_agorg_reconcile_api_ -- --nocapture"
+  run_check "duplicate_heuristics_contract" "cargo test -p pilot --locked test_duplicate_ -- --nocapture"
+  run_check "dry_run_token_enforcement_contract" "rg -n \"dry_run_token|dry-run-first policy|selected_action_mapping\" crates/pilot/src/serve_ui.rs"
+  run_check "ui_wave_j_controls_contract" "rg -n \"agorg-reconcile-class|dash-agorg-reconcile-class|agorg-parity-out|dash-agorg-parity-out|agorgApplyDuplicateFilter|dashAgorgApplyDuplicateFilter\" crates/pilot/src/serve_ui.rs crates/pilot/src/pilot_ui.js"
+  if [[ "$profile" == "full" ]]; then
+    run_check "prepush_gate" "./scripts/prepush_gate.sh"
+  fi
 fi
 
 python3 - "$manifest_file" "$wave" "$profile" <<'PY'

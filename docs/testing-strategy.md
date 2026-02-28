@@ -105,6 +105,9 @@ Run:
 ./scripts/ui_smoke_check.sh
 # optional full command-lane checks when bus compatibility is confirmed
 PILOT_UI_SMOKE_INCLUDE_COMMANDS=1 ./scripts/ui_smoke_check.sh
+# wave closure matrix (acceptance)
+./scripts/wave_acceptance_matrix.sh --wave I --profile full
+./scripts/wave_acceptance_matrix.sh --wave J --profile full
 ```
 
 Use this when:

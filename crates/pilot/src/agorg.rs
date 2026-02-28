@@ -65,6 +65,7 @@ pub struct AgorgTreeNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgorgReconcileIssue {
+    pub issue_id: String,
     pub repo_name: String,
     pub repo_path: String,
     pub severity: String,
@@ -634,14 +635,14 @@ impl AgorgStore {
             let path = PathBuf::from(&ago.repo_path);
             let canonical_path = canonicalize_or_input(&path);
             if !path.exists() {
-                issues.push(AgorgReconcileIssue {
-                    repo_name: ago.name.clone(),
-                    repo_path: ago.repo_path.clone(),
-                    severity: "error".to_string(),
-                    issue_class: "metadata".to_string(),
-                    code: "repo_missing".to_string(),
-                    message: "Repository path does not exist on disk".to_string(),
-                });
+                issues.push(make_reconcile_issue(
+                    &ago.name,
+                    &ago.repo_path,
+                    "error",
+                    "metadata",
+                    "repo_missing",
+                    "Repository path does not exist on disk".to_string(),
+                ));
                 facts.push(AgoReconcileFacts {
                     name: ago.name.clone(),
                     repo_path: ago.repo_path.clone(),
@@ -664,42 +665,41 @@ impl AgorgStore {
                 .components()
                 .any(|c| c.as_os_str().to_string_lossy() == "archive");
             if in_archive {
-                issues.push(AgorgReconcileIssue {
-                    repo_name: ago.name.clone(),
-                    repo_path: ago.repo_path.clone(),
-                    severity: "warn".to_string(),
-                    issue_class: "topology".to_string(),
-                    code: "archive_path".to_string(),
-                    message: "Repository is under archive/; off-policy for active AGOrg fleet"
-                        .to_string(),
-                });
+                issues.push(make_reconcile_issue(
+                    &ago.name,
+                    &ago.repo_path,
+                    "warn",
+                    "topology",
+                    "archive_path",
+                    "Repository is under archive/; off-policy for active AGOrg fleet".to_string(),
+                ));
                 prune_candidates.insert(ago.repo_path.clone());
             }
 
             if rel_depth > 1 {
-                issues.push(AgorgReconcileIssue {
-                    repo_name: ago.name.clone(),
-                    repo_path: ago.repo_path.clone(),
-                    severity: "warn".to_string(),
-                    issue_class: "topology".to_string(),
-                    code: "nested_repo".to_string(),
-                    message: format!(
+                issues.push(make_reconcile_issue(
+                    &ago.name,
+                    &ago.repo_path,
+                    "warn",
+                    "topology",
+                    "nested_repo",
+                    format!(
                         "Repository is nested depth={} under AGOrg root; flat-fleet policy expects top-level",
                         rel_depth
                     ),
-                });
+                ));
                 prune_candidates.insert(ago.repo_path.clone());
             }
 
             if !path.join("pyproject.toml").exists() {
-                issues.push(AgorgReconcileIssue {
-                    repo_name: ago.name.clone(),
-                    repo_path: ago.repo_path.clone(),
-                    severity: "warn".to_string(),
-                    issue_class: "metadata".to_string(),
-                    code: "missing_pyproject".to_string(),
-                    message: "pyproject.toml not found".to_string(),
-                });
+                issues.push(make_reconcile_issue(
+                    &ago.name,
+                    &ago.repo_path,
+                    "warn",
+                    "metadata",
+                    "missing_pyproject",
+                    "pyproject.toml not found".to_string(),
+                ));
             }
 
             if !ago
@@ -708,20 +708,20 @@ impl AgorgStore {
                 .map(|v| v.eq_ignore_ascii_case(&agorg.name))
                 .unwrap_or(false)
             {
-                issues.push(AgorgReconcileIssue {
-                    repo_name: ago.name.clone(),
-                    repo_path: ago.repo_path.clone(),
-                    severity: "warn".to_string(),
-                    issue_class: "policy_dependency".to_string(),
-                    code: "dependency_parent_mismatch".to_string(),
-                    message: format!(
+                issues.push(make_reconcile_issue(
+                    &ago.name,
+                    &ago.repo_path,
+                    "warn",
+                    "policy_dependency",
+                    "dependency_parent_mismatch",
+                    format!(
                         "relationship parent '{}' does not match AGOrg '{}'",
                         ago.relationship_parent
                             .clone()
                             .unwrap_or_else(|| "<none>".to_string()),
                         agorg.name
                     ),
-                });
+                ));
             }
 
             let mut child_norm: HashSet<String> = HashSet::new();
@@ -731,41 +731,41 @@ impl AgorgStore {
                     continue;
                 }
                 if c == ago.name.to_ascii_lowercase() {
-                    issues.push(AgorgReconcileIssue {
-                        repo_name: ago.name.clone(),
-                        repo_path: ago.repo_path.clone(),
-                        severity: "warn".to_string(),
-                        issue_class: "policy_dependency".to_string(),
-                        code: "dependency_self_link".to_string(),
-                        message: "relationship children includes self".to_string(),
-                    });
+                    issues.push(make_reconcile_issue(
+                        &ago.name,
+                        &ago.repo_path,
+                        "warn",
+                        "policy_dependency",
+                        "dependency_self_link",
+                        "relationship children includes self".to_string(),
+                    ));
                 }
                 if !child_norm.insert(c) {
-                    issues.push(AgorgReconcileIssue {
-                        repo_name: ago.name.clone(),
-                        repo_path: ago.repo_path.clone(),
-                        severity: "warn".to_string(),
-                        issue_class: "policy_dependency".to_string(),
-                        code: "dependency_duplicate_child".to_string(),
-                        message: format!("relationship children contains duplicate '{}'", child),
-                    });
+                    issues.push(make_reconcile_issue(
+                        &ago.name,
+                        &ago.repo_path,
+                        "warn",
+                        "policy_dependency",
+                        "dependency_duplicate_child",
+                        format!("relationship children contains duplicate '{}'", child),
+                    ));
                 }
             }
 
             if let Some(branch) = current_branch_name(&path) {
                 let is_policy_branch = branch == default_branch || branch == release_branch;
                 if !is_policy_branch && !is_allowed_feature_branch(&branch) {
-                    issues.push(AgorgReconcileIssue {
-                        repo_name: ago.name.clone(),
-                        repo_path: ago.repo_path.clone(),
-                        severity: "warn".to_string(),
-                        issue_class: "policy_branch".to_string(),
-                        code: "branch_name_off_policy".to_string(),
-                        message: format!(
+                    issues.push(make_reconcile_issue(
+                        &ago.name,
+                        &ago.repo_path,
+                        "warn",
+                        "policy_branch",
+                        "branch_name_off_policy",
+                        format!(
                             "branch '{}' is outside policy (expected '{}'/'{}' or standard feature prefixes)",
                             branch, default_branch, release_branch
                         ),
-                    });
+                    ));
                 }
             }
             facts.push(AgoReconcileFacts {
@@ -1220,6 +1220,27 @@ fn choose_primary(indices: &[usize], facts: &[AgoReconcileFacts]) -> usize {
     best
 }
 
+fn make_reconcile_issue(
+    repo_name: &str,
+    repo_path: &str,
+    severity: &str,
+    issue_class: &str,
+    code: &str,
+    message: String,
+) -> AgorgReconcileIssue {
+    let canonical = canonicalize_or_input(Path::new(repo_path));
+    let issue_id = format!("{}:{}:{}", issue_class, code, canonical);
+    AgorgReconcileIssue {
+        issue_id,
+        repo_name: repo_name.to_string(),
+        repo_path: repo_path.to_string(),
+        severity: severity.to_string(),
+        issue_class: issue_class.to_string(),
+        code: code.to_string(),
+        message,
+    }
+}
+
 fn duplicate_merge_heuristics(
     facts: &[AgoReconcileFacts],
 ) -> (
@@ -1254,17 +1275,17 @@ fn duplicate_merge_heuristics(
             let loser = &facts[idx];
             prune_candidates.insert(loser.repo_path.clone());
             losers.push(loser.repo_path.clone());
-            issues.push(AgorgReconcileIssue {
-                repo_name: loser.name.clone(),
-                repo_path: loser.repo_path.clone(),
-                severity: "warn".to_string(),
-                issue_class: "topology".to_string(),
-                code: "duplicate_path_merge_candidate".to_string(),
-                message: format!(
+            issues.push(make_reconcile_issue(
+                &loser.name,
+                &loser.repo_path,
+                "warn",
+                "topology",
+                "duplicate_path_merge_candidate",
+                format!(
                     "Repo canonical path overlaps another AGO; prefer '{}' and prune this entry",
                     primary_path
                 ),
-            });
+            ));
         }
         losers.sort();
         resolutions.push(AgorgDuplicateResolution {
@@ -1296,17 +1317,17 @@ fn duplicate_merge_heuristics(
             let loser = &facts[idx];
             prune_candidates.insert(loser.repo_path.clone());
             losers.push(loser.repo_path.clone());
-            issues.push(AgorgReconcileIssue {
-                repo_name: loser.name.clone(),
-                repo_path: loser.repo_path.clone(),
-                severity: "warn".to_string(),
-                issue_class: "topology".to_string(),
-                code: "duplicate_name_merge_candidate".to_string(),
-                message: format!(
+            issues.push(make_reconcile_issue(
+                &loser.name,
+                &loser.repo_path,
+                "warn",
+                "topology",
+                "duplicate_name_merge_candidate",
+                format!(
                     "Repo name duplicates another AGO; prefer '{}' and prune this entry",
                     primary_path
                 ),
-            });
+            ));
         }
         losers.sort();
         resolutions.push(AgorgDuplicateResolution {

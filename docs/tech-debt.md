@@ -39,8 +39,8 @@ This document tracks identified technical debt, placeholders, and architectural 
 - **Ref**: `crates/pilot/src/serve_ui.rs:2968`
 - **Impact**: Precision
 
-### 7. Medium: UI smoke check defaults skip command-lane verification
-- **Issue**: `PILOT_UI_SMOKE_INCLUDE_COMMANDS=0` by default in CI.
+### 7. Medium: UI smoke check command-lane coverage was previously disabled by default ✅
+- **Status**: Command-lane verification is now enabled by default in both script and CI (`PILOT_UI_SMOKE_INCLUDE_COMMANDS=1`).
 - **Ref**: `scripts/ui_smoke_check.sh:14`
 - **Impact**: Regression Detection
 

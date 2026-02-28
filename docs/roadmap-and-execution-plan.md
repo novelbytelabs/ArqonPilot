@@ -1,6 +1,6 @@
 # ArqonPilot Unified Master Plan
 
-**Last updated**: 2026-02-28 20:20 EST
+**Last updated**: 2026-02-28 20:40 EST
 
 This is the canonical execution plan for ArqonPilot. It merges product delivery, guardrails, testing, and documentation into one system plan so work does not fragment across sessions.
 
@@ -34,11 +34,19 @@ ArqonPilot becomes a centralized control system:
      - `docs/gotcha-registry.md`
 5. Active risk: lockfile drift families (including ICU `2.1.x`) and transient DNS failures.
 6. Wave H (Temporary Component Burn-Down) is complete in AGOrg control-plane plan.
-7. Wave I (Acceptance Matrix Execution) is in progress with:
+7. Wave I (Acceptance Matrix Execution) is complete and operational with:
    - script runner (`scripts/wave_acceptance_matrix.sh`)
    - API runner (`POST /api/system/acceptance_matrix/run`)
    - Dashboard matrix card + artifact linkage
-8. Mixed-stdout JSON parsing is hardened for matrix API path (to tolerate non-JSON prefix lines).
+8. Wave J (AGOrg governance hard-close) is complete:
+   - duplicate winner/loser controls
+   - dry-run-token enforced class apply flow
+   - report/dry-run/apply parity summaries.
+9. Wave K (final production hard-close) is in final verification:
+   - acceptance matrix expansion (`--wave I|J`)
+   - Wave I/J full matrix pass evidence captured
+   - closure docs parity done, UI smoke evidence pending non-sandbox run.
+10. Mixed-stdout JSON parsing is hardened for matrix API path (to tolerate non-JSON prefix lines).
 
 ## Program Tracks (Run In Parallel)
 

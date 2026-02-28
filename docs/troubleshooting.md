@@ -97,6 +97,7 @@ Fix:
 
 ```bash
 ./scripts/wave_acceptance_matrix.sh --wave I --profile full
+./scripts/wave_acceptance_matrix.sh --wave J --profile full
 ```
 
 3. Expect:
@@ -119,6 +120,7 @@ Recovery:
 
 ```bash
 ./scripts/wave_acceptance_matrix.sh --wave I --profile full
+./scripts/wave_acceptance_matrix.sh --wave J --profile full
 ```
 
 ## 1) Linux/Conda: `libssl-*.so.10` or `libcrypto-*.so.10` not found
@@ -298,6 +300,7 @@ curl -sS http://127.0.0.1:7788/api/system/temporary_components/checklist | jq
 
 ```bash
 ./scripts/wave_acceptance_matrix.sh --wave I --profile quick | jq
+./scripts/wave_acceptance_matrix.sh --wave J --profile quick | jq
 ```
 
 or through UI Dashboard `Wave Acceptance Matrix` card (artifact path returned as `artifact_path`).

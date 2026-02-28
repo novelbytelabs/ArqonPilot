@@ -191,6 +191,7 @@ struct AgorgReconcileApplyRequest {
     agorg: Option<String>,
     dry_run: Option<bool>,
     issue_class: Option<String>,
+    dry_run_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1137,6 +1138,44 @@ fn agorg_conformance_score(
     ((max_penalty - penalty).max(0) * 100 / max_penalty) as usize
 }
 
+fn agorg_supported_apply_classes() -> &'static [&'static str] {
+    &["topology"]
+}
+
+fn agorg_class_action_map(issue_class: Option<&str>) -> Value {
+    let selected = issue_class.unwrap_or("all");
+    let supported = agorg_supported_apply_classes();
+    let auto_fixable = issue_class
+        .map(|c| supported.iter().any(|v| *v == c))
+        .unwrap_or(false);
+    json!({
+        "selected_issue_class": selected,
+        "auto_fixable": auto_fixable,
+        "dry_run_required_before_apply": true,
+        "supported_apply_classes": supported,
+        "policy_branch": "manual_review_required",
+        "policy_dependency": "manual_review_required",
+        "metadata": "manual_review_required",
+        "topology": "auto_prune_supported"
+    })
+}
+
+fn agorg_reconcile_dry_run_token(
+    report: &agorg::AgorgReconcileReport,
+    issue_class: Option<&str>,
+    planned_paths: &[String],
+) -> String {
+    let class_name = issue_class.unwrap_or("all");
+    format!(
+        "{}:{}:{}:{}:{}",
+        report.agorg_id,
+        class_name,
+        report.issue_count,
+        report.off_policy_count,
+        planned_paths.join("|")
+    )
+}
+
 fn filter_prune_paths_by_class(
     report: &agorg::AgorgReconcileReport,
     issue_class: Option<&str>,
@@ -1224,12 +1263,16 @@ async fn agorg_reconcile_apply_core(
 
     if dry_run {
         let planned_paths = filter_prune_paths_by_class(&report, issue_class.as_deref());
+        let dry_run_token =
+            agorg_reconcile_dry_run_token(&report, issue_class.as_deref(), &planned_paths);
         let out = json!({
             "ok": true,
             "dry_run": true,
             "issue_class": issue_class,
+            "dry_run_token": dry_run_token,
             "planned_prune_count": planned_paths.len(),
             "planned_prune_paths": planned_paths,
+            "selected_action_mapping": agorg_class_action_map(issue_class.as_deref()),
             "report": report
         });
         let artifact_path =
@@ -1249,7 +1292,7 @@ async fn agorg_reconcile_apply_core(
     }
 
     if let Some(class_name) = issue_class.as_deref() {
-        if class_name != "topology" {
+        if !agorg_supported_apply_classes().contains(&class_name) {
             return Err(format!(
                 "issue_class '{}' is not currently auto-fixable (supported: topology)",
                 class_name
@@ -1258,6 +1301,23 @@ async fn agorg_reconcile_apply_core(
     }
 
     let selected_paths = filter_prune_paths_by_class(&report, issue_class.as_deref());
+    let expected_token =
+        agorg_reconcile_dry_run_token(&report, issue_class.as_deref(), &selected_paths);
+    let provided_token = req
+        .dry_run_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            "apply requires dry_run_token from a matching dry-run result (dry-run-first policy)"
+                .to_string()
+        })?;
+    if provided_token != expected_token {
+        return Err(
+            "dry_run_token mismatch; rerun dry-run for current AGOrg/class before apply"
+                .to_string(),
+        );
+    }
     let pruned = state
         .agorg_store
         .prune_ago_paths(report.agorg_id, &selected_paths)
@@ -1283,6 +1343,12 @@ async fn agorg_reconcile_apply_core(
     }));
     if let Some(map) = out.as_object_mut() {
         map.insert("artifact_path".to_string(), json!(artifact_path));
+        map.insert(
+            "selected_action_mapping".to_string(),
+            agorg_class_action_map(issue_class.as_deref()),
+        );
+        map.insert("issue_class".to_string(), json!(issue_class));
+        map.insert("dry_run_token".to_string(), json!(expected_token));
     }
     Ok(out)
 }
@@ -2806,6 +2872,7 @@ mod tests {
             prune_candidate_paths: vec!["/tmp/arqon/archive/old".to_string()],
             duplicate_resolutions: vec![],
             issues: vec![AgorgReconcileIssue {
+                issue_id: "topology:archive_path:/tmp/arqon/archive/old".to_string(),
                 repo_name: "old".to_string(),
                 repo_path: "/tmp/arqon/archive/old".to_string(),
                 severity: "warn".to_string(),
@@ -4376,6 +4443,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <h3>AGOrg Policy Reconcile</h3>
         <div class="helper">Generate policy artifact, preview prune impact, then apply reconciliation when ready.</div>
         <div class="row">
+          <select id="dash-agorg-reconcile-class">
+            <option value="">all classes</option>
+            <option value="topology">topology (auto-fix)</option>
+            <option value="policy_dependency">policy_dependency (manual)</option>
+            <option value="policy_branch">policy_branch (manual)</option>
+            <option value="metadata">metadata (manual)</option>
+          </select>
+        </div>
+        <div class="row">
           <button class="btn secondary" onclick="dashAgorgPolicyReport()">Policy Report</button>
           <button class="btn secondary" onclick="dashAgorgReconcileDryRun()">Reconcile Dry Run</button>
           <button class="btn" onclick="dashAgorgReconcileApply()">Reconcile Apply</button>
@@ -4437,12 +4513,43 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <pre id="dash-agorg-duplicates-out">No duplicate merge candidates yet.</pre>
       </div>
+      <div class="row">
+        <select id="dash-agorg-dup-kind-filter">
+          <option value="all">All Duplicate Kinds</option>
+          <option value="canonical_path">canonical_path</option>
+          <option value="name">name</option>
+        </select>
+        <button class="btn secondary" onclick="dashAgorgApplyDuplicateFilter()">Apply Filter</button>
+        <button class="btn secondary" onclick="dashAgorgPrevDuplicate()">Prev</button>
+        <button class="btn secondary" onclick="dashAgorgNextDuplicate()">Next</button>
+      </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-agorg-filtered-duplicates-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-agorg-filtered-duplicates-out')">CLEAR</button>
+        </div>
+        <pre id="dash-agorg-filtered-duplicates-out">No duplicate candidates for current filter.</pre>
+      </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-agorg-duplicate-detail-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-agorg-duplicate-detail-out')">CLEAR</button>
+        </div>
+        <pre id="dash-agorg-duplicate-detail-out">No duplicate candidate selected.</pre>
+      </div>
       <div class="pre-wrap">
         <div class="pre-actions">
           <button class="action-btn" onclick="copyToClipboard('dash-agorg-class-counts-out', this)">COPY</button>
           <button class="action-btn" onclick="clearElement('dash-agorg-class-counts-out')">CLEAR</button>
         </div>
         <pre id="dash-agorg-class-counts-out">No issue class counts yet.</pre>
+      </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-agorg-parity-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-agorg-parity-out')">CLEAR</button>
+        </div>
+        <pre id="dash-agorg-parity-out">No report/dry-run/apply parity summary yet.</pre>
       </div>
       <div class="row">
         <select id="dash-agorg-issue-class-filter">
@@ -4820,6 +4927,13 @@ Recommended flow:
             </div>
             </div>
             <div class="row">
+              <select id="agorg-reconcile-class">
+                <option value="">all classes</option>
+                <option value="topology">topology (auto-fix)</option>
+                <option value="policy_dependency">policy_dependency (manual)</option>
+                <option value="policy_branch">policy_branch (manual)</option>
+                <option value="metadata">metadata (manual)</option>
+              </select>
               <button class="btn secondary" onclick="agorgDiscoverPreview()">Discover Preview</button>
               <button class="btn secondary" onclick="agorgImportApproved()">Import Approved</button>
               <button class="btn secondary" onclick="agorgReconcile()">Policy Report</button>
@@ -4840,12 +4954,43 @@ Recommended flow:
               </div>
               <pre id="agorg-duplicate-preview-out">No duplicate merge candidates yet.</pre>
             </div>
+            <div class="row">
+              <select id="agorg-dup-kind-filter">
+                <option value="all">All Duplicate Kinds</option>
+                <option value="canonical_path">canonical_path</option>
+                <option value="name">name</option>
+              </select>
+              <button class="btn secondary" onclick="agorgApplyDuplicateFilter()">Apply Filter</button>
+              <button class="btn secondary" onclick="agorgPrevDuplicate()">Prev</button>
+              <button class="btn secondary" onclick="agorgNextDuplicate()">Next</button>
+            </div>
+            <div class="pre-wrap">
+              <div class="pre-actions">
+                <button class="action-btn" onclick="copyToClipboard('agorg-filtered-duplicates-out', this)">COPY</button>
+                <button class="action-btn" onclick="clearElement('agorg-filtered-duplicates-out')">CLEAR</button>
+              </div>
+              <pre id="agorg-filtered-duplicates-out">No duplicate candidates for current filter.</pre>
+            </div>
+            <div class="pre-wrap">
+              <div class="pre-actions">
+                <button class="action-btn" onclick="copyToClipboard('agorg-duplicate-detail-out', this)">COPY</button>
+                <button class="action-btn" onclick="clearElement('agorg-duplicate-detail-out')">CLEAR</button>
+              </div>
+              <pre id="agorg-duplicate-detail-out">No duplicate candidate selected.</pre>
+            </div>
             <div class="pre-wrap">
               <div class="pre-actions">
                 <button class="action-btn" onclick="copyToClipboard('agorg-class-counts-out', this)">COPY</button>
                 <button class="action-btn" onclick="clearElement('agorg-class-counts-out')">CLEAR</button>
               </div>
               <pre id="agorg-class-counts-out">No issue class counts yet.</pre>
+            </div>
+            <div class="pre-wrap">
+              <div class="pre-actions">
+                <button class="action-btn" onclick="copyToClipboard('agorg-parity-out', this)">COPY</button>
+                <button class="action-btn" onclick="clearElement('agorg-parity-out')">CLEAR</button>
+              </div>
+              <pre id="agorg-parity-out">No report/dry-run/apply parity summary yet.</pre>
             </div>
             <div class="row">
               <select id="agorg-issue-class-filter">
