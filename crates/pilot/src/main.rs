@@ -652,6 +652,10 @@ struct ServeArgs {
     #[arg(long)]
     ui_port: Option<u16>,
 
+    /// Auto-start local ArqonBus shim when serving UI and ws-url is local default
+    #[arg(long = "ui-auto-start-bus", default_value_t = true, action = clap::ArgAction::Set)]
+    ui_auto_start_bus: bool,
+
     /// UI instance identifier for per-instance AGOrg scope/session isolation
     #[arg(long)]
     ui_instance_id: Option<String>,
@@ -1902,6 +1906,9 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                 once: args.once,
             };
             if let Some(port) = args.ui_port {
+                if args.ui_auto_start_bus {
+                    maybe_autostart_local_bus_shim(&cfg.ws_url).await;
+                }
                 let bridge_cfg = cfg.clone();
                 let allowed_commands = if args.ui_allow_commands.is_empty() {
                     None
@@ -2006,6 +2013,51 @@ fn resolve_multi_outcomes(group: Option<String>, tags: Vec<String>) -> Vec<RepoO
             message: "Selected for operation".to_string(),
         })
         .collect()
+}
+
+async fn maybe_autostart_local_bus_shim(ws_url: &str) {
+    let is_default_local_ws =
+        ws_url.starts_with("ws://127.0.0.1:9100") || ws_url.starts_with("ws://localhost:9100");
+    if !is_default_local_ws {
+        return;
+    }
+    let script = PathBuf::from("./scripts/arqonbus_shim.sh");
+    if !script.exists() {
+        eprintln!(
+            "[pilot serve] local ws-url detected but {} not found; skipping auto-start",
+            script.display()
+        );
+        return;
+    }
+    let cmd = format!(
+        "PILOT_REPORT_DIR=/tmp/pilot-reports {} start && PILOT_REPORT_DIR=/tmp/pilot-reports {} status",
+        script.display(),
+        script.display()
+    );
+    match tokio::process::Command::new("bash")
+        .arg("-lc")
+        .arg(cmd)
+        .output()
+        .await
+    {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let line = stdout.trim();
+            if !line.is_empty() {
+                eprintln!("[pilot serve] bus auto-start: {line}");
+            }
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            eprintln!(
+                "[pilot serve] bus auto-start failed (non-fatal): {}",
+                stderr.trim()
+            );
+        }
+        Err(err) => {
+            eprintln!("[pilot serve] bus auto-start failed (non-fatal): {}", err);
+        }
+    }
 }
 
 fn persist_mutation_audit(command: &str, dry_run: bool, summary: &str, outcomes: Vec<RepoOutcome>) {

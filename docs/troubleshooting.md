@@ -170,6 +170,14 @@ echo "$ARQONBUS_WS_URL"
 pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788
 ```
 
+Note:
+1. In UI mode, `pilot serve` now auto-attempts to start the local shim when using `ws://127.0.0.1:9100`.
+2. To disable auto-start explicitly:
+
+```bash
+pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-auto-start-bus=false
+```
+
 3. Open the UI:
 - `http://127.0.0.1:7788`
 
