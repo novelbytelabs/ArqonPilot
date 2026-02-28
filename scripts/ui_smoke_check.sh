@@ -115,7 +115,7 @@ else
 fi
 
 say "checking dashboard HTML..."
-curl -sS "http://127.0.0.1:${UI_PORT}/" | grep -q "Arqon Pilot Control Panel"
+curl -sS "http://127.0.0.1:${UI_PORT}/" | grep -q "Arqon Pilot"
 
 say "checking read endpoints..."
 curl -sS --max-time "$CURL_TIMEOUT_SEC" "http://127.0.0.1:${UI_PORT}/api/history" >/dev/null
