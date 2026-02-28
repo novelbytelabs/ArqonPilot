@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 18:15 EST — Wave G in progress
+**Last updated**: 2026-02-28 18:25 EST — Wave G in progress
 
 ---
 
@@ -465,32 +465,38 @@ Goal:
 1. Make Dashboard the primary command center; tabs become specialized drill-down views.
 
 Planned scope:
+
 1. Dashboard AGOrg overview card:
-   - scope health, conformance score, unresolved issues.
+     - scope health, conformance score, unresolved issues.
 2. Action contract orchestration:
-   - clear preview/approve/execute/reconcile sequence for AGOrg policy operations.
+     - clear preview/approve/execute/reconcile sequence for AGOrg policy operations.
 3. Event-first UX:
-   - timeline entries linked to report artifacts and specific reconcile actions.
+     - timeline entries linked to report artifacts and specific reconcile actions.
 4. State continuity:
-   - preserve filters, selected AGOrg, and pending action context across reload/restart.
+     - preserve filters, selected AGOrg, and pending action context across reload/restart.
 
 Delivered so far:
+
 1. Dashboard AGOrg overview endpoint and card are wired:
-   - `POST /api/agorg/dashboard_overview`
-   - returns score, unresolved issues, off-policy count, class counts, and full reconcile report.
+     - `POST /api/agorg/dashboard_overview`
+     - returns score, unresolved issues, off-policy count, class counts, and full reconcile report.
 2. Dashboard AGOrg action-contract flow is wired through Codex lifecycle:
-   - preview
-   - approve
-   - execute
-   - reconcile
+     - preview
+     - approve
+     - execute
+     - reconcile
 3. Local AGOrg contract command path added:
-   - `api.agorg.policy_report`
-   - `api.agorg.reconcile_apply`
+     - `api.agorg.policy_report`
+     - `api.agorg.reconcile_apply`
 4. Mutation guard now correctly treats `api.agorg.reconcile_apply` as non-mutating when `dry_run=true`.
 5. Policy/reconcile actions now emit event payloads with artifact linkage:
    - `artifact_path` included for policy reports and reconcile dry-run/apply outputs.
+6. Dashboard now provides one-click artifact open actions:
+   - `OPEN ARTIFACT` in AGOrg Action Contract output panel.
+   - `OPEN ARTIFACT` in Operation Detail timeline panel.
 
 Acceptance:
+
 1. Core AGOrg operations can be executed from Dashboard without tab hopping.
 2. Every mutation is visible in timeline with artifact linkage.
 3. Session restore brings operator back to in-progress workflow state.
@@ -500,18 +506,22 @@ Acceptance:
 ### Wave H — Temporary Component Burn-Down ⬜ PLANNED
 
 Goal:
+
 1. Remove avoidable bridge components and surface any unavoidable ones explicitly.
 
 Current known temporary components:
+
 1. ArqonBus compatibility shim (`scripts/arqonbus_shim.sh`) — required when frozen Bus checkout is not directly runnable.
 2. Master Hierarchy linkage UX note (`TODO`) — partial drag/link interaction, not yet hardened.
 
 Planned scope:
+
 1. Replace shim path with native bus integration path where feasible.
 2. Convert hierarchy linkage TODO into explicit audited relationship editor.
 3. Add periodic inventory check in docs + runbook so no hidden placeholders/stubs accumulate.
 
 Acceptance:
+
 1. No hidden non-essential shims/stubs/placeholders remain.
 2. Any unavoidable temporary component is documented in this plan + runbook + gotcha registry.
 3. Operator can identify temporary components in under 60 seconds.
@@ -786,6 +796,24 @@ Verification completed:
 1. `cargo check -p pilot --locked` ✅
 2. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
 3. `./scripts/prepush_gate.sh` ✅
+
+### Iteration Update (2026-02-28 18:25 EST)
+
+Completed in this iteration:
+
+1. **Wave G operator UX hardening**
+   - Added `OPEN ARTIFACT` action to Dashboard AGOrg Action Contract output panel.
+   - Added `OPEN ARTIFACT` action to Operation Detail panel for selected timeline entries.
+2. **Artifact path resolution hardening**
+   - Timeline artifact resolution now checks selected operation raw events first, then audit fallback.
+   - Contract output artifact opener now parses `artifact_path` from direct or nested response payloads.
+
+Verification completed:
+
+1. `node -c crates/pilot/src/pilot_ui.js` ✅
+2. `cargo check -p pilot --locked` ✅
+3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+4. `./scripts/prepush_gate.sh` ✅
 
 ## Recommended Next Session Priority
 

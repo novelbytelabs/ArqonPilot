@@ -4033,6 +4033,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
       <div class="pre-wrap">
         <div class="pre-actions">
+          <button class="action-btn" onclick="dashAgorgContractOpenArtifact()">OPEN ARTIFACT</button>
           <button class="action-btn" onclick="copyToClipboard('dash-agorg-contract-out', this)">COPY</button>
           <button class="action-btn" onclick="clearElement('dash-agorg-contract-out')">CLEAR</button>
         </div>
@@ -4105,6 +4106,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <div id="op-detail-artifact" class="muted"></div>
       <div class="pre-wrap">
         <div class="pre-actions">
+          <button class="action-btn" onclick="openSelectedTimelineArtifact()">OPEN ARTIFACT</button>
           <button class="action-btn" onclick="copyToClipboard('op-detail', this)">COPY</button>
           <button class="action-btn" onclick="clearElement('op-detail')">CLEAR</button>
         </div>

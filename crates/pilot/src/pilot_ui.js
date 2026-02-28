@@ -671,6 +671,16 @@ function shortCommand(cmd) {
 }
 
 function inferArtifactPath(item) {
+  const raw = Array.isArray(item && item.rawEvents) ? item.rawEvents : [];
+  for (let i = raw.length - 1; i >= 0; i--) {
+    const ev = raw[i] || {};
+    if (typeof ev.artifact_path === 'string' && ev.artifact_path.trim()) {
+      return ev.artifact_path.trim();
+    }
+    if (ev.response && typeof ev.response.artifact_path === 'string' && ev.response.artifact_path.trim()) {
+      return ev.response.artifact_path.trim();
+    }
+  }
   const cmd = shortCommand(item.command);
   for (let i = auditCache.length - 1; i >= 0; i--) {
     const ev = auditCache[i] || {};
@@ -693,6 +703,49 @@ function renderOperationDetail() {
   const artifact = inferArtifactPath(item);
   opDetailArtifact.textContent = artifact ? ('Artifact: ' + artifact) : 'Artifact: (not resolved)';
   opDetail.textContent = JSON.stringify(item.rawEvents || [], null, 2);
+}
+
+function extractArtifactPathFromJsonText(text) {
+  if (!text || !text.trim()) return '';
+  try {
+    const parsed = JSON.parse(text);
+    const direct = parsed && typeof parsed.artifact_path === 'string' ? parsed.artifact_path.trim() : '';
+    if (direct) return direct;
+    const responsePath = parsed && parsed.response && typeof parsed.response.artifact_path === 'string'
+      ? parsed.response.artifact_path.trim()
+      : '';
+    if (responsePath) return responsePath;
+    const contractRespPath = parsed && parsed.contract && parsed.contract.execute_response
+      && typeof parsed.contract.execute_response.artifact_path === 'string'
+      ? parsed.contract.execute_response.artifact_path.trim()
+      : '';
+    return contractRespPath || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+async function openSelectedTimelineArtifact() {
+  const item = selectedOperationId ? timelineState.get(selectedOperationId) : null;
+  const path = item ? inferArtifactPath(item) : '';
+  if (!path) {
+    const msg = JSON.stringify({ ok: false, error: 'No artifact linked to selected timeline item.' }, null, 2);
+    opDetail.textContent = msg;
+    out.textContent = msg;
+    return;
+  }
+  await openReportPath(path, opDetail, out);
+}
+
+async function dashAgorgContractOpenArtifact() {
+  const path = extractArtifactPathFromJsonText(dashAgorgContractOut ? dashAgorgContractOut.textContent : '');
+  if (!path) {
+    const msg = JSON.stringify({ ok: false, error: 'No artifact_path found in AGOrg contract output.' }, null, 2);
+    if (dashAgorgContractOut) dashAgorgContractOut.textContent = msg;
+    out.textContent = msg;
+    return;
+  }
+  await openReportPath(path, dashAgorgContractOut, out);
 }
 
 failedOnlyToggle.addEventListener('change', renderTimeline);
