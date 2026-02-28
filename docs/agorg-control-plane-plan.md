@@ -2,6 +2,10 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
+**Last updated**: 2026-02-27 21:01 EST — Definitive audit-verified version
+
+---
+
 ## Vision
 
 Arqon Pilot should run as a multi-organization control plane, not just a single-repo tool.
@@ -14,6 +18,8 @@ Arqon Pilot should run as a multi-organization control plane, not just a single-
 4.  **Coexistence**: Multiple AGOrgs can coexist and overlapping hierarchies can be established within the same Master Directory. 
 5.  **Auditability**: If a directory (`.git` or `pyproject.toml` boundary) lacks Arqon metadata, it is NOT part of the AGOrg registry. Pilot provides an "Upgrade" flow to make directories compliant.
 6.  **Contextual Scope**: The Control Panel is scoped to one active Master AGOrg at a time, switching the entire operational boundary instantly.
+
+---
 
 ## Final Architecture Decisions (Locked)
 
@@ -52,6 +58,8 @@ Arqon Pilot should run as a multi-organization control plane, not just a single-
    - External DB override:
      - `PILOT_AGORG_DATABASE_URL` disables managed startup and uses external DSN directly.
 
+---
+
 ## Existing Contract (Already Present)
 
 The current relationship declaration exists in project metadata:
@@ -65,22 +73,24 @@ children = []
 Arqon Pilot should treat this as authoritative repo-level relationship metadata when discovering and registering AGOrgs.
 In this model, relationship metadata belongs to repos (AGOs), where `parent` points to the owning AGOrg.
 
+---
+
 ## Product Requirements
 
-## 1) AGOrg Scope Control
+### 1) AGOrg Scope Control
 
 1. Add an `AGOrg` section in the Control Panel.
 2. Include a path browse/input field and a `Load Scope` action.
 3. Selected AGOrg becomes the scope boundary for Dashboard, Oracle, Heal, Dependencies, Branch, Multi, and Telemetry.
 
-## 2) AGOrg CRUD
+### 2) AGOrg CRUD
 
 1. Create AGOrg record.
 2. Read/list AGOrg records.
 3. Update AGOrg metadata/settings.
 4. Delete AGOrg record (with confirmation + non-destructive defaults).
 
-### Create AGOrg Project (Required UX)
+#### Create AGOrg Project (Required UX)
 
 1. Add a `Create AGOrg Project` flow with:
      - AGOrg name
@@ -90,7 +100,7 @@ In this model, relationship metadata belongs to repos (AGOs), where `parent` poi
 2. On create, persist AGOrg and optionally execute discovery immediately.
 3. Show preview of discovered AGOrg/AGO hierarchy before final save.
 
-## 3) AGOrg Discovery
+### 3) AGOrg Discovery
 
 1. Add `Discovery Root` path input.
 2. Add `Discover` action that scans directory trees.
@@ -103,7 +113,7 @@ In this model, relationship metadata belongs to repos (AGOs), where `parent` poi
 6. Persist discovery method metadata (`manual`, `autoscan`, `rescan`).
 7. Respect configured scan depth during discovery.
 
-## 3.1) Reconciliation and AGOrg Policy Conformance (Tomorrow Focus)
+### 3.1) Reconciliation and AGOrg Policy Conformance
 
 After loading a primary AGOrg and discovering AGOs, Pilot must support a guided
 reconciliation workflow so the whole ecosystem converges to AGOrg policy.
@@ -148,7 +158,7 @@ Non-goals for first pass:
 1. Auto-editing arbitrary repo files without explicit approval.
 2. Auto-merging conflicting graph links without operator confirmation.
 
-## 4) State, Preferences, and Profiles
+### 4) State, Preferences, and Profiles
 
 Each AGOrg stores:
 
@@ -168,11 +178,13 @@ Initial default target:
 
 1. `~/Projects/arqon/Arqon` must be loadable as default AGOrg.
 
+---
+
 ## UX Plan
 
-## New top-level surfaces
+### New top-level surfaces
 
-## 1) AGOrg Management (3-Panel System)
+### 1) AGOrg Management (3-Panel System)
 
 The AGOrg tab is organized into three persistent functional panels:
 
@@ -195,11 +207,13 @@ The AGOrg tab is organized into three persistent functional panels:
      - quick AGOrg switch dropdown
      - explicit scope indicator on mutating actions
 
-## Guardrails
+### Guardrails
 
 1. No mutation without visible active AGOrg scope.
 2. Scope mismatch warnings when running repo-specific actions outside current AGOrg.
 3. Non-destructive defaults (`dry-run`, explicit apply toggles).
+
+---
 
 ## Backend/Data Model Plan
 
@@ -223,6 +237,8 @@ Suggested fields:
 8. `created_at`, `updated_at`
 9. `scan_depth` (int, configurable per AGOrg/discovery run)
 
+---
+
 ## API/Command Surface Plan
 
 Add new commands/endpoints:
@@ -232,45 +248,198 @@ Add new commands/endpoints:
 3. `pilot agorg update`
 4. `pilot agorg delete`
 5. `pilot agorg use`
-6. `pilot agorg discover --root <path>`
-7. `pilot agorg show --active`
-8. `pilot agorg tree --root <agorg-id|name>`
-9. `pilot agorg create-project --name <name> --root <path> [--parent <agorg>] [--autoscan]`
+6. `pilot agorg discover`
+7. `pilot agorg tree`
+8. `pilot agorg link`
+9. `pilot agorg scan_master`
+10. `pilot agorg batch-create`
+11. `pilot agorg create_project` (create + autoscan in one call)
 
-Bus/UI mirrors:
+---
 
-1. `/api/agorg/*` endpoints
-2. `pilot.agorg.*` bus contract namespace
+## Rollout Waves — Audit-Verified Status (2026-02-27)
 
-## Rollout Waves
+### Wave A — Foundation ✅ COMPLETE
 
-## Wave A - Foundation
+| Feature | Status | Evidence |
+|---------|--------|----------|
+| AGOrg data model + persistence (Postgres) | ✅ | `agorgs`, `agos`, `agorg_links`, `app_state` tables in `agorg.rs:572-683` |
+| Active scope selection (`/api/agorg/use`) | ✅ | Handler at `serve_ui.rs:532-544`, persists in `app_state` via `set_active_agorg` |
+| Auto-load active scope on startup | ✅ | `refreshAgorgHeader()` calls `/api/agorg/active` on page load (`serve_ui.rs:4760`), which reads from `app_state` table |
+| UI Header sync with active scope | ✅ | `setAgorgStatus()` updates Hero badge from `refreshAgorgHeader` |
+| Managed Postgres lifecycle | ✅ | `pilot db start/stop/status/ensure` all functional |
 
-1. AGOrg data model + persistence.
-2. Active scope selection.
-3. Default AGOrg load on startup.
+**Wave A is fully operational. No open items.**
 
-## Wave B - CRUD + Discovery
+---
 
-1. Full AGOrg CRUD in UI + CLI.
-2. Directory discovery flow.
-3. Registration review/approval step.
-4. Create AGOrg Project wizard with optional autoscan.
-5. Tree view for AGOrg/AGO hierarchy.
-6. Scan depth controls in AGOrg UI and discovery APIs.
+### Wave B — CRUD + Discovery 🔶 IN PROGRESS (~70%)
 
-## Wave C - Full Scope Enforcement
+#### B.1 — Import Existing Ecosystem (PRIMARY PATH)
 
-1. All tabs execute inside active AGOrg scope.
-2. Scope-aware branch/multi/dependency operations.
-3. Header and telemetry include AGOrg context.
-4. AGOrg link validation blocks circular loops.
+| Feature | Status | Evidence |
+|---------|--------|----------|
+| `create` — create AGOrg record | ✅ | `agorg.rs:116-160`, route at `serve_ui.rs:266` |
+| `create_project` — create + autoscan in one call | ✅ | `agorg.rs:442-463`, route at `serve_ui.rs:267` |
+| `list` — list all registered AGOrgs | ✅ | `agorg.rs:218-231`, route at `serve_ui.rs:263` |
+| `use` — set active scope | ✅ | `agorg.rs:233-246`, route at `serve_ui.rs:270` |
+| `discover` — scan directory tree | ✅ | `agorg.rs:686-742`, route at `serve_ui.rs:271` |
+| `tree` — render hierarchy | ✅ | `agorg.rs:355-440`, route at `serve_ui.rs:272` |
+| `link` — link parent/child AGOrgs | ✅ | `agorg.rs:284-322` with cycle detection, route at `serve_ui.rs:273` |
+| `update` — update AGOrg metadata | ✅ | `agorg.rs:162-206`, route at `serve_ui.rs:268` |
+| `delete` — delete AGOrg record (BACKEND) | ✅ | `agorg.rs:208-216`, route at `serve_ui.rs:269` |
+| Import Discovery — auto-register repos as AGOs | ✅ | `import_discovery` at `agorg.rs:465-480` |
+| `scan_master` — scan Master Directory | ✅ | `scan_master_directory` at `agorg.rs:878-927`, route at `serve_ui.rs:274` |
+| `upgrade_ago` — promote AGO to compliant | ✅ | `upgrade_ago` at `agorg.rs:978-991`, route at `serve_ui.rs:275` |
+| `edit_relationship` — modify pyproject.toml links | ✅ | `edit_relationship` at `agorg.rs:929-976`, route at `serve_ui.rs:277-279` |
+| Hero Dropdown — lists AGOrgs + AGOs | ✅ | HTML + `toggleAgorgDropdown` JS function |
+| Registry Panel — grouped by Master Dir + icons | ✅ | `renderAgorgRegistry()` at `serve_ui.rs:4211-4250` |
+| Scan depth input in Import panel | ✅ | `id="agorg-depth"` at `serve_ui.rs:3020` |
+| Import button wired to `agorgCreateProject()` | ✅ | `serve_ui.rs:3037` → JS at `serve_ui.rs:4056-4078` |
+| Active Scope panel with details | ✅ | `agorgShowActive()` at `serve_ui.rs:4302-4327` |
+| Update button in Active Scope panel | ✅ | HTML button at `serve_ui.rs:2978`, JS at `serve_ui.rs:4166-4190` |
+| Directory browser (zenity integration) | ✅ | `browseAgorgMaster`, `browseAgorgRoot`, etc. → `pick_directory` at `serve_ui.rs:682-700` |
+| **Delete button in Active Scope panel** | ⚠️ **BUG** | Button EXISTS at `serve_ui.rs:2979` (`onclick="agorgDelete()"`), but **JS function `agorgDelete` does NOT EXIST**. Clicking it throws `ReferenceError`. |
+| **`switchAgorgScope` request body** | ⚠️ **BUG** | Function sends `{ id }` but `/api/agorg/use` expects `{ agorg }`. Scope switching from Hero Dropdown/Registry **silently fails** with 400 Bad Request. See G-D below. |
 
-## Wave D - Profiles and Multi-Instance Readiness
+#### B.2 — Batch Create (SECONDARY PATH)
 
-1. Per-AGOrg preferences/profile settings.
-2. Fast scope switching.
-3. Concurrent Pilot instances with isolated AGOrg contexts.
+| Feature | Status | Evidence |
+|---------|--------|----------|
+| Batch Create API | ✅ | `init_agorg_batch` at `agorg.rs:483-524`, route at `serve_ui.rs:265` |
+| `git init` per AGO directory | ✅ | `agorg.rs:503-507` (uses `spawn()` — fire-and-forget) |
+| `pyproject.toml` with relationships per AGO | ✅ | `agorg.rs:510-517` |
+| Batch Create UI Panel | ✅ | "Initialize New AGOrg" sub-panel at `serve_ui.rs:3041-3066` |
+| Progress feedback (SSE/WS pipe) | ⬜ | No real-time progress events. Fire-and-forget only. |
+| Configurable default destination | ⬜ | Currently hardcoded/browser-picked. No per-AGOrg config. |
+
+#### B.3 — Registration Review/Approval Step ⬜
+
+| Feature | Status |
+|---------|--------|
+| After Discovery, show preview panel with classification per item | ⬜ |
+| Let operator approve/reject before import | ⬜ |
+| Precursor to full Reconciliation (B.4) | ⬜ |
+
+#### B.4 — Reconciliation ⬜
+
+| Feature | Status |
+|---------|--------|
+| Duplicate detection | ⬜ |
+| Candidate quality checks | ⬜ |
+| Policy conformance checks | ⬜ |
+| Reconciliation report artifact | ⬜ |
+
+**Not started.** Requires B.1 to be rock-solid first.
+
+---
+
+### Wave C — Full Scope Enforcement ⬜ NOT STARTED
+
+Until this wave is complete, "setting an AGOrg scope" is cosmetic — it changes the Hero badge but does NOT filter what other tabs show.
+
+| Feature | Status |
+|---------|--------|
+| Dashboard operations scoped to active AGOrg repos | ⬜ |
+| Oracle scans only within AGOrg boundary | ⬜ |
+| Heal targets only AGOrg repos | ⬜ |
+| Dependencies checks scoped to AGOrg | ⬜ |
+| Branch operations scoped to AGOrg repos | ⬜ |
+| Multi-repo actions scoped to AGOrg | ⬜ |
+| Telemetry stream tagged with AGOrg context | ⬜ |
+| AGOrg link validation blocks circular loops | ✅ (Already done — `link_agorgs` has cycle detection at `agorg.rs:290-311`) |
+
+**Prerequisite**: Wave B.1 bugs (G-D, missing `agorgDelete`) must be fixed first.
+
+---
+
+### Wave D — Profiles and Multi-Instance Readiness ⬜ NOT STARTED
+
+| Feature | Status |
+|---------|--------|
+| Per-AGOrg preferences/profile settings | ⬜ |
+| Fast scope switching (cached state) | ⬜ |
+| Concurrent Pilot instances with isolated AGOrg contexts | ⬜ |
+| Last active tab/context restoration | ⬜ |
+
+---
+
+## Infrastructure Prerequisite: Extract JS from serve_ui.rs
+
+**Priority: HIGH — Do this before ANY future UI work.**
+
+The Pilot UI's entire JavaScript (~1500 lines) is embedded as a Rust string literal inside `serve_ui.rs`. This is the single biggest source of repeated breakage. See G-015 in the Gotcha Registry.
+
+**The problem:**
+- `cargo check` cannot validate JavaScript. A fatal JS `SyntaxError` (e.g., duplicate `const`) will compile fine in Rust but kill the entire browser page.
+- No JS linting, no formatting, no IDE error detection.
+- The file is ~4766 lines total, making navigation error-prone.
+- Two separate clusters of DOM `const` declarations exist ~30 lines apart, making duplicate declarations nearly invisible.
+
+**The fix:**
+1. Extract the `<script>` block into a separate `pilot_ui.js` file.
+2. Serve it as a static asset via Axum (`ServeFile` or `ServeDir`).
+3. Reference it from the HTML: `<script src="/static/pilot_ui.js"></script>`.
+4. Enable standard JS tooling: ESLint, Prettier, IDE error highlighting.
+
+**Expected impact:** Eliminates the entire class of "UI is completely dead but cargo check passes" failures.
+
+---
+
+## Gotcha Reference
+
+All known gotchas are documented in `docs/gotcha-registry.md`. The following are directly relevant to AGOrg development:
+
+| ID | Title | Relevance |
+|----|-------|-----------|
+| **G-012** | DB running but AGOrg commands fail with socket `os error 2` | DSN must include `port=9132` for Pilot-managed DB |
+| **G-015** | Entire Pilot UI Dead — Duplicate `const` Declarations | ANY `const` added to the JS block must be checked for duplicates first. `cargo check` will NOT catch this. **Always check browser console after UI changes.** |
+
+### Additional Gotchas (Learned 2026-02-27)
+
+**G-A: API response shape inconsistency**
+- The `/api/agorg/list` endpoint returns `{ ok: true, agorgs: [...] }` (wrapped).
+- The Hero Dropdown code at one point tried to parse the response as a raw array.
+- **Rule**: Always use `fetchJsonSafe()` and check `data.ok` before accessing nested fields. Never assume the response shape — always verify against the handler in `serve_ui.rs`.
+
+**G-B: Two function definition locations for the same name**
+- `switchAgorgScope` was defined in both the Hero Dropdown section AND the AGOrg tab section of the JS block. `async function` declarations are hoisted and the second definition silently overwrites the first, but the two implementations had different request body shapes (`{ id }` vs `{ agorg: id }`), causing silent API failures.
+- **Rule**: Every function name must be `grep`-unique in the JS block before adding or modifying.
+
+**G-C: `renderAgorgRegistry` function removed but still called**
+- During manual revert, the rendering function was deleted from the JS block, but calls to it remained in `agorgList()`. This threw a `ReferenceError` that halted all subsequent JS execution in the same call chain.
+- **Rule**: When removing a function, always search for all call sites. A `ReferenceError` in an `async` function will silently swallow the error in the caller if not wrapped in try/catch.
+
+**G-D: `switchAgorgScope` sends wrong request body shape** ⚠️ ACTIVE BUG
+- `switchAgorgScope` at `serve_ui.rs:3409` sends `{ id }` but `/api/agorg/use` expects `AgorgUseRequest { agorg: String }`.
+- This means clicking any AGOrg in the Hero Dropdown or Registry to switch scope **silently fails** with a 400 Bad Request because `req.agorg` is empty.
+- **Fix**: Change line 3410 from `const req = { id };` to `const req = { agorg: id };`.
+- **Severity**: HIGH — scope switching from UI is fundamentally broken until this is fixed.
+
+**G-E: `agorgDelete()` function missing but button exists** ⚠️ ACTIVE BUG
+- The Delete button at `serve_ui.rs:2979` calls `agorgDelete()`, but this JS function does not exist anywhere in the codebase.
+- Clicking the button throws a `ReferenceError` and silently fails.
+- **Fix**: Add the missing function:
+  ```javascript
+  async function agorgDelete() {
+    const data = await fetchJsonSafe('/api/agorg/active');
+    if (!data.ok || !data.active) {
+      agorgOut.textContent = 'Error: No active AGOrg to delete';
+      return;
+    }
+    if (!confirm(`Delete AGOrg "${data.active.name}"? This removes the record but NOT the files.`)) return;
+    const res = await fetchJsonSafe('/api/agorg/delete', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify({ id: data.active.id })
+    });
+    agorgOut.textContent = JSON.stringify(res, null, 2);
+    if (res.ok) { agorgList(); refreshAgorgHeader(); agorgShowActive(); }
+  }
+  ```
+- **Severity**: MEDIUM — the backend handler exists and works; only the JS binding is missing.
+
+---
 
 ## Acceptance Criteria
 
@@ -284,11 +453,76 @@ Bus/UI mirrors:
 8. AGOrg graph links are reusable across multiple parent AGOrgs without conflict.
 9. Cycle creation is blocked deterministically.
 
+---
+
 ## Dogfooding Test Case (Initial)
 
-Use `~/Projects/arqon/Arqon` as the first AGOrg loaded in the system.
+Use `~/Projects/arqon/` as the Master Directory and first AGOrg loaded in the system.
 
 1. Register as AGOrg default scope.
 2. Run autoscan discovery.
-3. Verify expected children include AGOs such as `ArqonBus`, `ArqonCore`, and `ArqonPilot`.
+3. Verify expected children include AGOs such as `ArqonBus`, `ArqonCore`, and `ArqonPilot` (17 total siblings).
 4. Persist and reload Control Panel; confirm AGOrg auto-load and scope restoration.
+
+### Dogfood Evidence Snapshot (2026-02-27)
+
+Commands executed:
+
+1. `./scripts/pilot_local.sh agorg use c31d9200-30f6-4418-b33c-8ea5269c4461`
+2. `./scripts/pilot_local.sh agorg update c31d9200-30f6-4418-b33c-8ea5269c4461 --default-scope --master /home/irbsurfer/Projects/arqon --scan-depth 4`
+3. `./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4 --import-to c31d9200-30f6-4418-b33c-8ea5269c4461`
+4. `./scripts/pilot_local.sh agorg show`
+5. `./scripts/pilot_local.sh agorg tree --root c31d9200-30f6-4418-b33c-8ea5269c4461`
+
+Observed result:
+
+1. Active/default scope correctly moved to `/home/irbsurfer/Projects/arqon`.
+2. Discovery imported **21 candidates** (expected baseline was ~17 siblings).
+3. Tree includes valid top-level AGOs (`ArqonBus`, `ArqonCore`, `ArqonPilot`, etc.) **and** extra nested/archive entries:
+   - `/home/irbsurfer/Projects/arqon/archive/ArqonSAS`
+   - `/home/irbsurfer/Projects/arqon/ArqonHPO/bindings/python`
+   - `/home/irbsurfer/Projects/arqon/ArqonBus/sdks/python`
+   - `/home/irbsurfer/Projects/arqon/ArqonCore/python/arqon_narrative`
+
+Conclusion:
+
+1. Wave A/B import flow is operational.
+2. Flat Fleet enforcement is not strict enough yet for nested repo boundaries and archive exclusion.
+3. Next change must add deterministic discovery guardrails:
+   - skip any path under `/archive/` by default (configurable override later),
+   - stop recursion at first repo boundary and do not import nested sub-repos as AGOs unless explicitly enabled.
+
+### Guardrail Update Applied (2026-02-27, same session)
+
+Implemented in `crates/pilot/src/agorg.rs`:
+
+1. `discover_hierarchy` now enforces flat-fleet defaults:
+   - nested repositories (`depth > 1`) are ignored by default,
+   - `archive/` subtree is skipped by default.
+2. Explicit opt-in for nested discovery:
+   - set `PILOT_AGORG_ALLOW_NESTED_REPOS=1` to include nested repos during discovery.
+3. `scan_master_directory` now also skips `archive/` and `site` directories by default.
+
+Validation snapshot:
+
+1. `./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4`
+2. Candidate count observed: `20` (includes root AGOrg marker + top-level fleet AGOs only)
+3. Previously leaked entries were removed from discovery output:
+   - `/archive/ArqonSAS`
+   - `/ArqonHPO/bindings/python`
+   - `/ArqonBus/sdks/python`
+   - `/ArqonCore/python/arqon_narrative`
+
+Note:
+
+1. In restricted sandbox mode, `--import-to` DB mutation may fail with OS permission constraints unrelated to AGOrg logic. Core discovery guardrail behavior was verified via non-mutating discover output.
+
+---
+
+## Recommended Next Session Priority
+
+1. **Fix G-D** — change `switchAgorgScope` to send `{ agorg: id }` instead of `{ id }`. One-line fix. Unlocks scope switching.
+2. **Fix G-E** — add `agorgDelete()` function. ~15 lines. Completes CRUD surface.
+3. **Extract JS from `serve_ui.rs`** — eliminates the entire class of silent UI-killing bugs.
+4. **Dogfood the Import Path** — register `~/Projects/arqon/` as the canonical AGOrg, discover all 17 siblings, verify the registry renders correctly.
+5. **Begin Wave C** — scope-aware Dashboard and Oracle.

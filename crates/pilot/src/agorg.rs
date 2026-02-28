@@ -692,7 +692,13 @@ pub fn discover_hierarchy(root: &Path, depth: usize) -> Result<DiscoverResult> {
         .unwrap_or("AGOrg")
         .to_string();
     let mut repos: Vec<(String, PathBuf, Option<RepoRelationships>)> = Vec::new();
-    walk_dirs(&root_path, depth, &mut repos)?;
+    // Flat-fleet default: discover top-level repositories and AGOrg roots only.
+    // Nested repository discovery must be explicitly enabled.
+    let allow_nested_repos = std::env::var("PILOT_AGORG_ALLOW_NESTED_REPOS")
+        .ok()
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+    walk_dirs(&root_path, depth, &mut repos, allow_nested_repos)?;
 
     let mut parent_refs: HashMap<String, usize> = HashMap::new();
     for (_, _, rel) in &repos {
@@ -745,12 +751,22 @@ fn walk_dirs(
     root: &Path,
     depth: usize,
     repos: &mut Vec<(String, PathBuf, Option<RepoRelationships>)>,
+    allow_nested_repos: bool,
 ) -> Result<()> {
+    fn should_skip_dir(name: &str) -> bool {
+        name.starts_with('.')
+            || name == "target"
+            || name == "node_modules"
+            || name == "site"
+            || name == "archive"
+    }
+
     fn recurse(
         current: &Path,
         max_depth: usize,
         at_depth: usize,
         repos: &mut Vec<(String, PathBuf, Option<RepoRelationships>)>,
+        allow_nested_repos: bool,
     ) -> Result<()> {
         if at_depth > max_depth {
             return Ok(());
@@ -771,22 +787,25 @@ fn walk_dirs(
             let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
-            if name.starts_with('.') || name == "target" || name == "node_modules" || name == "site"
-            {
+            if should_skip_dir(name) {
                 continue;
             }
             let has_repo_marker =
                 path.join(".git").exists() || path.join("pyproject.toml").exists();
             if has_repo_marker {
+                if at_depth > 1 && !allow_nested_repos {
+                    // Flat-fleet rule: ignore nested repositories by default.
+                    continue;
+                }
                 let rel = parse_relationships(&path).ok().flatten();
                 repos.push((name.to_string(), path.clone(), rel));
             } else {
-                recurse(&path, max_depth, at_depth + 1, repos)?;
+                recurse(&path, max_depth, at_depth + 1, repos, allow_nested_repos)?;
             }
         }
         Ok(())
     }
-    recurse(root, depth, 1, repos)
+    recurse(root, depth, 1, repos, allow_nested_repos)
 }
 
 pub fn parse_relationships(repo_dir: &Path) -> Result<Option<RepoRelationships>> {
@@ -892,7 +911,12 @@ pub fn scan_master_directory(master_path: &Path) -> Result<Vec<DiscoverCandidate
             .and_then(|s| s.to_str())
             .unwrap_or_default()
             .to_string();
-        if name.starts_with('.') || name == "target" || name == "node_modules" {
+        if name.starts_with('.')
+            || name == "target"
+            || name == "node_modules"
+            || name == "site"
+            || name == "archive"
+        {
             continue;
         }
 

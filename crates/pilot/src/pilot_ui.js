@@ -1,0 +1,1534 @@
+async function fetchJsonSafe(url, options = {}) {
+  try {
+    const res = await fetch(url, options);
+    const text = await res.text();
+    if (!text || text.trim() === '') return { ok: false, error: 'Empty response' };
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return { ok: false, error: 'Malformed JSON response', raw: text };
+    }
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+function copyToClipboard(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const text = el.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'COPIED';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
+}
+function clearElement(id) {
+  const el = document.getElementById(id);
+  if (el) {
+    if (id.includes('stream') || id.includes('mirror') || id.includes('logs')) {
+      el.textContent = '[]';
+    } else {
+      el.textContent = '';
+    }
+  }
+}
+const out = document.getElementById('out');
+const liveStream = document.getElementById('live-stream');
+const busStatusChip = document.getElementById('bus-status-chip');
+const agorgOpenBtn = document.getElementById('agorg-open-btn');
+const agorgStatusChip = document.getElementById('agorg-status-chip');
+const opDetailMeta = document.getElementById('op-detail-meta');
+const opDetailArtifact = document.getElementById('op-detail-artifact');
+const opDetail = document.getElementById('op-detail');
+const timelineEl = document.getElementById('timeline');
+const failedOnlyToggle = document.getElementById('failed-only');
+const timelineCommandFilter = document.getElementById('timeline-command-filter');
+const timelineTextFilter = document.getElementById('timeline-text-filter');
+const streamToggleBtn = document.getElementById('stream-toggle');
+const oracleReportSelect = document.getElementById('oracle-report-select');
+const oracleReportContent = document.getElementById('oracle-report-content');
+const depActionOut = document.getElementById('dep-action-out');
+const depActionOutGlobal = document.getElementById('dep-action-out-global');
+const depLogs = document.getElementById('dep-logs');
+const depPolicyStatus = document.getElementById('dep-policy-status');
+const depHookStatus = document.getElementById('dep-hook-status');
+const depDriftStatus = document.getElementById('dep-drift-status');
+const agorgRegistryList = document.getElementById('agorg-registry-list');
+const agorgActiveDetails = document.getElementById('agorg-active-details');
+const agorgOut = document.getElementById('agorg-out');
+const agorgDiscoveryOut = document.getElementById('agorg-discovery-out');
+const codexOut = document.getElementById('codex-out');
+const codexContractsOut = document.getElementById('codex-contracts-out');
+const codexContractSelect = document.getElementById('codex-contract-select');
+const telemetryMirror = document.getElementById('telemetry-mirror');
+const dashStatusOut = document.getElementById('dash-status-out');
+const dashPolicyChip = document.getElementById('dash-policy-chip');
+const dashHookChip = document.getElementById('dash-hook-chip');
+const dashDriftChip = document.getElementById('dash-drift-chip');
+const dashBusChip = document.getElementById('dash-bus-chip');
+const dashDbChip = document.getElementById('dash-db-chip');
+const dashGateChip = document.getElementById('dash-gate-chip');
+const dashPushChip = document.getElementById('dash-push-chip');
+const dashOracleChip = document.getElementById('dash-oracle-chip');
+const dashHealChip = document.getElementById('dash-heal-chip');
+const dashOracleScanBtn = document.getElementById('dash-oracle-scan-btn');
+const dashOracleQueryBtn = document.getElementById('dash-oracle-query-btn');
+const dashHealPlanBtn = document.getElementById('dash-heal-plan-btn');
+const dashHealRunBtn = document.getElementById('dash-heal-run-btn');
+const multiDagChip = document.getElementById('multi-dag-chip');
+const multiApplyChip = document.getElementById('multi-apply-chip');
+const multiDagBtn = document.getElementById('multi-dag-btn');
+const multiApplyDryBtn = document.getElementById('multi-apply-dry-btn');
+const multiApplyExecBtn = document.getElementById('multi-apply-exec-btn');
+const oracleChip = document.getElementById('oracle-chip');
+const oracleScanBtn = document.getElementById('oracle-scan-btn');
+const oracleQueryBtn = document.getElementById('oracle-query-btn');
+const healChip = document.getElementById('heal-chip');
+const healPlanBtn = document.getElementById('heal-plan-btn');
+const healRunBtn = document.getElementById('heal-run-btn');
+const BUS_HEALTH_KEY = 'pilot.bus.health.v1';
+const timelineState = new Map();
+let selectedOperationId = null;
+let auditCache = [];
+let streamPaused = false;
+let streamHandle = null;
+let latestCodexContractId = '';
+let currentTab = 'dashboard';
+
+function activatePanel(tabName) {
+  currentTab = tabName;
+  for (const t of document.querySelectorAll('.tab')) t.classList.remove('active');
+  for (const p of document.querySelectorAll('.panel')) p.classList.remove('active');
+  const panel = document.getElementById(tabName);
+  if (panel) panel.classList.add('active');
+  const tabBtn = document.querySelector('.tab[data-tab="' + tabName + '"]');
+  if (tabBtn) tabBtn.classList.add('active');
+}
+
+for (const btn of document.querySelectorAll('.tab')) {
+  btn.addEventListener('click', () => activatePanel(btn.dataset.tab));
+}
+
+// Hero AGOrg Dropdown Logic
+async function toggleAgorgDropdown(event) {
+  event.stopPropagation();
+  const dropdown = document.getElementById('agorg-hero-dropdown-container');
+  const isActive = dropdown.classList.contains('active');
+  
+  // Close all other dropdowns if any
+  document.querySelectorAll('.agorg-dropdown').forEach(d => d.classList.remove('active'));
+  
+  if (!isActive) {
+    dropdown.classList.add('active');
+    await loadAgorgQuickNav();
+  }
+}
+
+async function loadAgorgQuickNav() {
+  const dropdown = document.getElementById('agorg-hero-dropdown');
+  dropdown.innerHTML = '<div class="agorg-drop-header">Loading registered repositories...</div>';
+  
+  try {
+    const agRes = await fetch('/api/agorg/list');
+    const agData = agRes.ok ? await agRes.json() : [];
+    
+    let html = '<div class="agorg-drop-item" style="font-weight:700;color:#6a7dff;" onclick="activatePanel(\'agorg\'); agorgShowActive();">⚙ Manage AGOrgs / Panel</div>';
+    
+    if (agData && agData.length > 0) {
+      html += '<div class="agorg-drop-header">AGOrgs</div>';
+      agData.forEach(ag => {
+        html += `<div class="agorg-drop-item" onclick="switchAgorgScope('${ag.id}')">
+          <span>${ag.name}</span>
+          <span class="type">ORG</span>
+        </div>`;
+      });
+    }
+
+    // Attempt to list AGOs if available in the database
+    const treeRes = await fetch('/api/agorg/tree');
+    const treeData = treeRes.ok ? await treeRes.json() : [];
+    if (treeData && treeData.length > 0) {
+      html += '<div class="agorg-drop-header">Sibling AGOs (Active Tree)</div>';
+      const agos = [];
+      const walk = (node) => {
+        (node.agos || []).forEach(a => agos.push(a));
+        (node.child_agorgs || []).forEach(walk);
+      };
+      treeData.forEach(walk);
+      // Remove duplicates by ID
+      const seen = new Set();
+      const uniqueAgos = agos.filter(a => {
+        if (seen.has(a.id)) return false;
+        seen.add(a.id);
+        return true;
+      });
+      uniqueAgos.forEach(ago => {
+        html += `<div class="agorg-drop-item" onclick="switchAgorgScope('${ago.id}')">
+          <span>${ago.name}</span>
+          <span class="type">AGO</span>
+        </div>`;
+      });
+    }
+    
+    dropdown.innerHTML = html || '<div class="agorg-drop-header">No registered repositories found.</div>';
+  } catch (err) {
+    console.error("QuickNav Error:", err);
+    dropdown.innerHTML = `<div class="agorg-drop-header" style="color:#ff6b6b;">Error: ${err.message}</div>`;
+  }
+}
+
+async function switchAgorgScope(id) {
+  const req = { id };
+  const res = await fetch('/api/agorg/use', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  refreshAgorgHeader();
+  if (currentTab === 'agorg') {
+    agorgTree();
+    agorgShowActive();
+  }
+  document.getElementById('agorg-hero-dropdown').classList.remove('active');
+}
+
+// Global click to close dropdown
+document.addEventListener('click', () => {
+  document.querySelectorAll('.agorg-dropdown').forEach(d => d.classList.remove('active'));
+});
+
+// Update the initial listener for agorgOpenBtn if it exists
+if (agorgOpenBtn) {
+  // It's now handled by inline onclick toggleAgorgDropdown(event)
+}
+
+function tags(v) { return v.split(',').map(s => s.trim()).filter(Boolean); }
+function setButtonBusy(btn, busy, runningLabel) {
+  if (!btn) return;
+  if (!btn.dataset.defaultLabel) {
+    btn.dataset.defaultLabel = btn.textContent || '';
+  }
+  btn.disabled = !!busy;
+  if (busy && runningLabel) {
+    btn.textContent = runningLabel;
+  } else {
+    btn.textContent = btn.dataset.defaultLabel;
+  }
+}
+
+function setChipState(chip, label, state, suffix) {
+  if (!chip) return;
+  let level = 'neutral';
+  if (state === 'running') level = 'warn';
+  if (state === 'success') level = 'ok';
+  if (state === 'failed') level = 'fail';
+  chip.className = 'chip ' + level;
+  const detail = suffix ? (': ' + suffix) : '';
+  chip.textContent = label + detail;
+}
+
+async function run(command, payload, opts = {}) {
+  const label = opts.label || command;
+  const chip = opts.chip || null;
+  const buttons = Array.isArray(opts.buttons) ? opts.buttons : [];
+  payload.schema_version = 1;
+  setChipState(chip, label, 'running', 'running');
+  for (const b of buttons) setButtonBusy(b, true, opts.runningLabel || null);
+  out.textContent = JSON.stringify({status: "running", command, payload}, null, 2);
+  if (dashStatusOut) {
+    dashStatusOut.textContent = out.textContent;
+  }
+  try {
+    const ctl = new AbortController();
+    const timeoutId = setTimeout(() => ctl.abort(), 25000);
+    const res = await fetch('/api/command', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify({ command, payload }),
+      signal: ctl.signal
+    });
+    clearTimeout(timeoutId);
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+    if (dashStatusOut) {
+      dashStatusOut.textContent = JSON.stringify(data, null, 2);
+    }
+    const ok = !!data.ok;
+    setChipState(chip, label, ok ? 'success' : 'failed', ok ? 'success' : 'failed');
+    appendLive({ source: 'ui_command', command, ok: !!data.ok, status: res.status });
+    loadHistory();
+    return data;
+  } catch (err) {
+    const msg = (err && err.name === 'AbortError')
+      ? 'Request timed out. Check ArqonBus bridge health and try again.'
+      : (err && err.message ? err.message : String(err));
+    const payloadErr = { ok: false, error: msg, command };
+    out.textContent = JSON.stringify(payloadErr, null, 2);
+    if (dashStatusOut) dashStatusOut.textContent = out.textContent;
+    setChipState(chip, label, 'failed', 'failed');
+    appendLive({ source: 'ui_command', command, ok: false, error: msg });
+    return payloadErr;
+  } finally {
+    for (const b of buttons) setButtonBusy(b, false, null);
+  }
+}
+
+function appendLive(eventObj) {
+  const current = liveStream.textContent.trim();
+  let arr = [];
+  if (current && current !== '[]') {
+    try { arr = JSON.parse(current); } catch (_) { arr = []; }
+  }
+  arr.push(eventObj);
+  if (arr.length > 120) arr = arr.slice(arr.length - 120);
+  liveStream.textContent = JSON.stringify(arr, null, 2);
+  if (telemetryMirror) {
+    const tail = arr.slice(Math.max(0, arr.length - 20));
+    telemetryMirror.textContent = JSON.stringify(tail, null, 2);
+  }
+  ingestTimeline(eventObj);
+}
+
+function clearLive() {
+  liveStream.textContent = '[]';
+  if (telemetryMirror) telemetryMirror.textContent = '[]';
+}
+
+function syncTelemetryMirror() {
+  if (!telemetryMirror) return;
+  const current = liveStream.textContent.trim();
+  try {
+    const arr = current ? JSON.parse(current) : [];
+    const tail = Array.isArray(arr) ? arr.slice(Math.max(0, arr.length - 20)) : [];
+    telemetryMirror.textContent = JSON.stringify(tail, null, 2);
+  } catch (_) {
+    telemetryMirror.textContent = current || '[]';
+  }
+}
+
+function setBusStatus(connected, note) {
+  busStatusChip.textContent = connected ? 'CONNECTED' : 'DISCONNECTED';
+  busStatusChip.classList.toggle('connected', connected);
+  busStatusChip.classList.toggle('disconnected', !connected);
+  if (dashBusChip) {
+    setChip(dashBusChip, 'Bus: ' + (connected ? 'RUNNING' : 'STOPPED'), connected ? 'ok' : 'fail');
+  }
+  try {
+    localStorage.setItem(BUS_HEALTH_KEY, JSON.stringify({
+      connected,
+      note: note || '',
+      at: new Date().toISOString()
+    }));
+  } catch (_) {}
+  if (note) {
+    opDetailMeta.textContent = note;
+  }
+}
+
+function setAgorgStatus(label, active) {
+  if (!agorgStatusChip) return;
+  agorgStatusChip.textContent = label;
+  if (active) {
+    agorgStatusChip.style.color = '#fff';
+  } else {
+    agorgStatusChip.style.color = '#a8b9e3';
+  }
+}
+
+async function refreshAgorgHeader() {
+  try {
+    const data = await fetchJsonSafe('/api/agorg/active');
+    const active = data && data.ok && data.active ? data.active : null;
+    if (active && active.name) {
+      setAgorgStatus(active.name, true);
+    } else {
+      setAgorgStatus('NO ACTIVE', false);
+    }
+  } catch (_) {
+    setAgorgStatus('UNAVAILABLE', false);
+  }
+}
+
+function restoreBusStatus() {
+  try {
+    const raw = localStorage.getItem(BUS_HEALTH_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.connected === 'boolean') {
+      setBusStatus(parsed.connected, parsed.note || '');
+    }
+  } catch (_) {}
+}
+
+function filteredTimelineItems() {
+  const cmdNeedle = String(timelineCommandFilter.value || '').trim().toLowerCase();
+  const textNeedle = String(timelineTextFilter.value || '').trim().toLowerCase();
+  return Array.from(timelineState.values())
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    .filter((x) => !failedOnlyToggle.checked || x.phase === 'failed')
+    .filter((x) => !cmdNeedle || String(x.command || '').toLowerCase().includes(cmdNeedle))
+    .filter((x) => {
+      if (!textNeedle) return true;
+      const hay = [
+        x.opId || '',
+        x.command || '',
+        ...(x.steps || []).map((s) => s.summary || '')
+      ].join(' ').toLowerCase();
+      return hay.includes(textNeedle);
+    });
+}
+
+function exportTimeline() {
+  const items = filteredTimelineItems();
+  const payload = {
+    exported_at: new Date().toISOString(),
+    filters: {
+      failed_only: !!failedOnlyToggle.checked,
+      command_contains: timelineCommandFilter.value || '',
+      text_contains: timelineTextFilter.value || ''
+    },
+    items
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'pilot_timeline_export.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function extractTimelineRecord(evt) {
+  if (!evt || typeof evt !== 'object') return null;
+
+  if (typeof evt.eventType === 'string' && evt.eventType.startsWith('pilot.op.')) {
+    const payload = evt.payload || {};
+    const opId = payload.operation_id || payload.operationId;
+    if (!opId) return null;
+    return {
+      opId,
+      phase: evt.eventType.replace('pilot.op.', '') || 'progress',
+      command: payload.command || 'unknown',
+      summary: payload.summary || '',
+      at: payload.timestamp || new Date().toISOString()
+    };
+  }
+
+  if (evt.source === 'ui_command' && typeof evt.command === 'string') {
+    const success = !!(evt.response && evt.response.success);
+    return {
+      opId: (evt.response && evt.response.reply_to) || ('ui-' + Date.now()),
+      phase: success ? 'completed' : 'failed',
+      command: evt.command,
+      summary: evt.error || (evt.response && evt.response.data && evt.response.data.summary) || '',
+      at: new Date().toISOString()
+    };
+  }
+
+  return null;
+}
+
+function ingestTimeline(evt) {
+  const rec = extractTimelineRecord(evt);
+  if (!rec) return;
+
+  const current = timelineState.get(rec.opId) || {
+    opId: rec.opId,
+    command: rec.command,
+    phase: 'started',
+    updatedAt: rec.at,
+    steps: [],
+    rawEvents: []
+  };
+
+  current.command = rec.command || current.command;
+  current.phase = rec.phase || current.phase;
+  current.updatedAt = rec.at || current.updatedAt;
+  current.steps.push({
+    phase: rec.phase,
+    summary: rec.summary || '',
+    at: rec.at || new Date().toISOString()
+  });
+  current.rawEvents.push(evt);
+  if (current.steps.length > 10) current.steps = current.steps.slice(current.steps.length - 10);
+  if (current.rawEvents.length > 20) current.rawEvents = current.rawEvents.slice(current.rawEvents.length - 20);
+
+  timelineState.set(rec.opId, current);
+  if (!selectedOperationId) selectedOperationId = rec.opId;
+  renderTimeline();
+  renderOperationDetail();
+}
+
+function renderTimeline() {
+  timelineEl.innerHTML = '';
+  const items = filteredTimelineItems().slice(0, 40);
+
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'tl-empty';
+    empty.textContent = 'No operations yet';
+    timelineEl.appendChild(empty);
+    return;
+  }
+
+  for (const item of items) {
+    const card = document.createElement('div');
+    card.className = 'tl-card';
+    if (item.opId === selectedOperationId) {
+      card.classList.add('selected');
+    }
+    card.addEventListener('click', () => {
+      selectedOperationId = item.opId;
+      renderTimeline();
+      renderOperationDetail();
+    });
+
+    const head = document.createElement('div');
+    head.className = 'tl-head';
+
+    const title = document.createElement('div');
+    title.className = 'tl-title';
+    title.textContent = item.command + ' (' + item.opId + ')';
+
+    const badge = document.createElement('span');
+    const phaseClass = ['started', 'progress', 'completed', 'failed'].includes(item.phase) ? item.phase : 'progress';
+    badge.className = 'tl-badge ' + phaseClass;
+    badge.textContent = String(item.phase).toUpperCase();
+
+    head.appendChild(title);
+    head.appendChild(badge);
+    card.appendChild(head);
+
+    const steps = document.createElement('ul');
+    steps.className = 'tl-steps';
+    for (const step of item.steps.slice().reverse()) {
+      const li = document.createElement('li');
+      const msg = step.summary ? ' - ' + step.summary : '';
+      li.textContent = '[' + step.at + '] ' + step.phase + msg;
+      steps.appendChild(li);
+    }
+    card.appendChild(steps);
+
+    timelineEl.appendChild(card);
+  }
+}
+
+function shortCommand(cmd) {
+  if (!cmd) return '';
+  return cmd.startsWith('pilot.') ? cmd.slice(6) : cmd;
+}
+
+function inferArtifactPath(item) {
+  const cmd = shortCommand(item.command);
+  for (let i = auditCache.length - 1; i >= 0; i--) {
+    const ev = auditCache[i] || {};
+    if (ev.command === cmd && ev.artifact_path) {
+      return ev.artifact_path;
+    }
+  }
+  return '';
+}
+
+function renderOperationDetail() {
+  const item = selectedOperationId ? timelineState.get(selectedOperationId) : null;
+  if (!item) {
+    opDetailMeta.textContent = 'Select a timeline item';
+    opDetailArtifact.textContent = '';
+    opDetail.textContent = '[]';
+    return;
+  }
+  opDetailMeta.textContent = item.command + ' | ' + item.opId + ' | phase=' + item.phase;
+  const artifact = inferArtifactPath(item);
+  opDetailArtifact.textContent = artifact ? ('Artifact: ' + artifact) : 'Artifact: (not resolved)';
+  opDetail.textContent = JSON.stringify(item.rawEvents || [], null, 2);
+}
+
+failedOnlyToggle.addEventListener('change', renderTimeline);
+timelineCommandFilter.addEventListener('input', renderTimeline);
+timelineTextFilter.addEventListener('input', renderTimeline);
+
+function branchCreate() {
+  run('pilot.branch.create', {
+    branch: document.getElementById('branch-name').value,
+    base_branch: document.getElementById('branch-base').value,
+    group: document.getElementById('branch-group').value || null,
+    tags: tags(document.getElementById('branch-tags').value),
+    dry_run: true
+  });
+}
+function branchSync() {
+  run('pilot.branch.sync', {
+    branch: document.getElementById('sync-branch').value,
+    base_branch: document.getElementById('sync-base').value,
+    dry_run: true
+  });
+}
+function branchPrune() {
+  run('pilot.branch.prune', {
+    base_branch: document.getElementById('sync-base').value,
+    dry_run: true
+  });
+}
+function branchStatus() { run('pilot.branch.status', { group: null, tags: [] }); }
+
+function oracleScan() {
+  run('pilot.oracle.scan', {}, {
+    label: 'Oracle',
+    chip: oracleChip,
+    buttons: [oracleScanBtn, oracleQueryBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function oracleQuery() {
+  run('pilot.oracle.query', {
+    query: document.getElementById('oracle-query').value,
+    cli: true
+  }, {
+    label: 'Oracle',
+    chip: oracleChip,
+    buttons: [oracleScanBtn, oracleQueryBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function dashOracleScan() {
+  run('pilot.oracle.scan', {}, {
+    label: 'Oracle',
+    chip: dashOracleChip,
+    buttons: [dashOracleScanBtn, dashOracleQueryBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function dashOracleQuery() {
+  run('pilot.oracle.query', {
+    query: document.getElementById('dash-oracle-query').value,
+    cli: true
+  }, {
+    label: 'Oracle',
+    chip: dashOracleChip,
+    buttons: [dashOracleScanBtn, dashOracleQueryBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function healPayload(planOnly) {
+  const maxAttemptsRaw = document.getElementById('heal-max-attempts').value;
+  const maxFilesRaw = document.getElementById('heal-max-files').value;
+  const maxAttempts = parseInt(maxAttemptsRaw || '2', 10);
+  const maxFiles = parseInt(maxFilesRaw || '5', 10);
+  return {
+    log_file: document.getElementById('heal-log-file').value || 'test_output.json',
+    target: document.getElementById('heal-target').value || null,
+    max_attempts: Number.isFinite(maxAttempts) ? maxAttempts : 2,
+    max_files: Number.isFinite(maxFiles) ? maxFiles : 5,
+    verbose: !!document.getElementById('heal-verbose').checked,
+    plan_only: !!planOnly
+  };
+}
+
+function healPlan() {
+  run('pilot.heal.run', healPayload(true), {
+    label: 'Heal',
+    chip: healChip,
+    buttons: [healPlanBtn, healRunBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function healRun() {
+  run('pilot.heal.run', healPayload(false), {
+    label: 'Heal',
+    chip: healChip,
+    buttons: [healPlanBtn, healRunBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function dashHealPayload(planOnly) {
+  const maxAttemptsRaw = document.getElementById('dash-heal-max-attempts').value;
+  const maxFilesRaw = document.getElementById('dash-heal-max-files').value;
+  const maxAttempts = parseInt(maxAttemptsRaw || '2', 10);
+  const maxFiles = parseInt(maxFilesRaw || '5', 10);
+  return {
+    log_file: document.getElementById('dash-heal-log-file').value || 'test_output.json',
+    target: document.getElementById('dash-heal-target').value || null,
+    max_attempts: Number.isFinite(maxAttempts) ? maxAttempts : 2,
+    max_files: Number.isFinite(maxFiles) ? maxFiles : 5,
+    verbose: false,
+    plan_only: !!planOnly
+  };
+}
+
+function dashHealPlan() {
+  run('pilot.heal.run', dashHealPayload(true), {
+    label: 'Heal',
+    chip: dashHealChip,
+    buttons: [dashHealPlanBtn, dashHealRunBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function dashHealRun() {
+  run('pilot.heal.run', dashHealPayload(false), {
+    label: 'Heal',
+    chip: dashHealChip,
+    buttons: [dashHealPlanBtn, dashHealRunBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+async function oracleLoadReports() {
+  const res = await fetch('/api/reports?limit=200');
+  const data = await res.json();
+  const rows = (data && data.reports) ? data.reports : [];
+  oracleReportSelect.innerHTML = '';
+  if (!rows.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No report files found in ~/.pilot/reports';
+    oracleReportSelect.appendChild(opt);
+    oracleReportContent.textContent = 'No report files found.';
+    return;
+  }
+  for (const row of rows) {
+    const opt = document.createElement('option');
+    opt.value = row.path;
+    const kb = Math.max(1, Math.round((row.size_bytes || 0) / 1024));
+    opt.textContent = row.path + ' (' + kb + ' KB)';
+    oracleReportSelect.appendChild(opt);
+  }
+}
+
+async function oracleViewReport() {
+  const path = oracleReportSelect.value;
+  if (!path) {
+    oracleReportContent.textContent = 'No report selected.';
+    return;
+  }
+  const res = await fetch('/api/report?path=' + encodeURIComponent(path) + '&max_bytes=524288');
+  const data = await res.json();
+  if (!data || !data.ok) {
+    oracleReportContent.textContent = JSON.stringify(data, null, 2);
+    return;
+  }
+  oracleReportContent.textContent = data.content || '';
+}
+
+async function depRun(action) {
+  const isJsonAction = action === 'policy' || action === 'hook-policy';
+  const req = { action, json: isJsonAction };
+  if (action === 'push') {
+    req.branch = document.getElementById('dash-push-branch').value || 'main';
+    req.remote = document.getElementById('dash-push-remote').value || 'origin';
+  }
+  const res = await fetch('/api/dependencies/run', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  if (isJsonAction) {
+    try {
+      const parsed = JSON.parse(data.stdout || '{}');
+      if (action === 'policy') setDepStatus(depPolicyStatus, parsed);
+      if (action === 'hook-policy') setDepStatus(depHookStatus, parsed);
+      if (action === 'drift') setDepDriftStatus(parsed && parsed.ok ? 'PASS' : 'FAIL');
+    } catch (_) {}
+  }
+  if (action === 'drift' && !isJsonAction) {
+    setDepDriftStatus(data.ok ? 'PASS' : 'FAIL');
+  }
+  if (action.startsWith('bus-')) {
+    const text = String(data.stdout || '') + '\n' + String(data.stderr || '');
+    if (text.includes('RUNNING')) setBusStatus(true, 'bus shim reported RUNNING');
+    if (text.includes('STOPPED')) setBusStatus(false, 'bus shim reported STOPPED');
+  }
+  if (action === 'services-status' || action === 'services-start' || action === 'services-stop' || action === 'services-restart') {
+    if (typeof data.bus_running === 'boolean') {
+      setBusStatus(data.bus_running, data.bus_running ? 'service manager reported RUNNING' : 'service manager reported STOPPED');
+    }
+  }
+  depActionOut.textContent = JSON.stringify(data, null, 2);
+  if (depActionOutGlobal) {
+    depActionOutGlobal.textContent = JSON.stringify(data, null, 2);
+  }
+  updateDashChip(action, !!data.ok, data);
+  depLoadLogs();
+}
+
+function setChip(el, label, level) {
+  if (!el) return;
+  el.textContent = label;
+  el.className = 'chip ' + level;
+}
+
+function updateDashChip(action, ok, data) {
+  const suffix = ok ? 'PASS' : 'FAIL';
+  const level = ok ? 'ok' : 'fail';
+  if (action === 'policy') setChip(dashPolicyChip, 'Policy: ' + suffix, level);
+  if (action === 'hook-policy') setChip(dashHookChip, 'Hook: ' + suffix, level);
+  if (action === 'drift') setChip(dashDriftChip, 'Drift: ' + suffix, level);
+  if (action === 'bus-status' || action === 'bus-start' || action === 'bus-stop' || action === 'bus-restart') {
+    setChip(dashBusChip, 'Bus: ' + (ok ? 'RUNNING' : 'STOPPED'), ok ? 'ok' : 'fail');
+  }
+  if (action === 'db-status' || action === 'db-start' || action === 'db-restart') {
+    setChip(dashDbChip, 'DB: ' + (ok ? 'RUNNING' : 'STOPPED'), ok ? 'ok' : 'fail');
+  }
+  if (action === 'db-stop') {
+    setChip(dashDbChip, 'DB: ' + (ok ? 'STOPPED' : 'RUNNING'), ok ? 'ok' : 'fail');
+  }
+  if (action === 'services-status' || action === 'services-start' || action === 'services-stop' || action === 'services-restart') {
+    if (typeof data.bus_running === 'boolean') {
+      setChip(dashBusChip, 'Bus: ' + (data.bus_running ? 'RUNNING' : 'STOPPED'), data.bus_running ? 'ok' : 'fail');
+    }
+    if (typeof data.db_running === 'boolean') {
+      setChip(dashDbChip, 'DB: ' + (data.db_running ? 'RUNNING' : 'STOPPED'), data.db_running ? 'ok' : 'fail');
+    }
+  }
+  if (action === 'gate') setChip(dashGateChip, 'Gate: ' + suffix, level);
+  if (action === 'push') setChip(dashPushChip, 'Push: ' + suffix, level);
+  if (!ok && data && data.error) {
+    appendLive({ source: 'dashboard', action, error: data.error });
+  }
+}
+
+function setDepStatus(el, parsed) {
+  if (!parsed || typeof parsed !== 'object') {
+    el.textContent = 'invalid response';
+    el.className = 'dep-fail';
+    return;
+  }
+  if (parsed.ok) {
+    el.textContent = 'PASS';
+    el.className = 'dep-ok';
+    return;
+  }
+  const failed = Array.isArray(parsed.failed_checks) ? parsed.failed_checks.join(', ') : 'unknown';
+  el.textContent = 'FAIL: ' + failed;
+  el.className = 'dep-fail';
+}
+
+function setDepDriftStatus(text) {
+  if (!depDriftStatus) return;
+  const ok = text === 'PASS';
+  depDriftStatus.textContent = text;
+  depDriftStatus.className = ok ? 'dep-ok' : 'dep-fail';
+}
+
+async function depLoadLogs() {
+  const res = await fetch('/api/dependencies/logs');
+  const data = await res.json();
+  depLogs.textContent = JSON.stringify(data, null, 2);
+}
+
+async function agorgCreateProject() {
+  const req = {
+    name: document.getElementById('agorg-name').value.trim(),
+    root: document.getElementById('agorg-root').value.trim(),
+    master: document.getElementById('agorg-master').value.trim() || null,
+    parent: null,
+    scan_depth: parseInt(document.getElementById('agorg-depth').value || '4', 10),
+    autoscan: true, // Always scan for fleet model
+    import: true,   // Default to import for fleet model
+    default_scope: !!document.getElementById('agorg-default').checked
+  };
+  const data = await fetchJsonSafe('/api/agorg/create_project', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+  if (data.ok && data.agorg && data.agorg.master_path) {
+    agorgScanMaster(data.agorg.master_path);
+  }
+  refreshAgorgHeader();
+  agorgList();
+}
+
+async function agorgScanMaster(path) {
+  if (!path) path = document.getElementById('agorg-master').value.trim();
+  if (!path) return;
+  
+  const res = await fetch('/api/agorg/scan_master', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ path })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    renderHierarchy(data.items);
+  } else {
+    agorgOut.textContent = JSON.stringify(data, null, 2);
+  }
+}
+
+function renderHierarchy(items) {
+  const container = document.getElementById('agorg-hierarchy-tree');
+  container.innerHTML = '';
+  items.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'tree-node';
+    if (item.kind === 'agorg') el.classList.add('node-agorg');
+    else if (item.kind === 'ago') el.classList.add('node-ago');
+    
+    el.innerHTML = `
+      <span class="icon">${item.kind === 'agorg' ? '🏢' : item.kind === 'ago' ? '📦' : '📁'}</span>
+      <span class="name">${item.name}</span>
+      <span class="status-dot ${item.is_registered ? 'registered' : 'unregistered'}"></span>
+    `;
+    
+    el.onclick = () => {
+      document.querySelectorAll('.tree-node').forEach(n => n.classList.remove('selected'));
+      el.classList.add('selected');
+      // Load into Panel 1
+      document.getElementById('agorg-name').value = item.name;
+      document.getElementById('agorg-root').value = item.path;
+      // If it's none/unregistered, maybe show upgrade button?
+      if (!item.is_registered) {
+        agorgOut.textContent = `Directory: ${item.name}\nPath: ${item.path}\nStatus: Unregistered\nTip: Click "Import AGOrg" to register this as an Arqon entry.`;
+      }
+    };
+    
+    // Drag and Drop (Linkage)
+    el.draggable = true;
+    el.ondragstart = (e) => {
+      e.dataTransfer.setData('text/plain', JSON.stringify(item));
+    };
+    el.ondragover = (e) => { e.preventDefault(); el.classList.add('drag-over'); };
+    el.ondragleave = () => { el.classList.remove('drag-over'); };
+    el.ondrop = (e) => {
+      e.preventDefault();
+      el.classList.remove('drag-over');
+      const dragged = JSON.parse(e.dataTransfer.getData('text/plain'));
+      if (dragged.path === item.path) return;
+      
+      if (confirm(`Link "${dragged.name}" as a child of "${item.name}"?`)) {
+        agorgEditRelationship(item.path, null, [dragged.name]); // Simplified for now
+      }
+    };
+    
+    container.appendChild(el);
+  });
+}
+
+async function agorgEditRelationship(path, parent, children) {
+  const res = await fetch('/api/agorg/edit_relationship', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ path, parent, children })
+  });
+  const data = await res.json();
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+}
+
+async function agorgUpgradeAgo(path, name) {
+  const res = await fetch('/api/agorg/upgrade_ago', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ path, name })
+  });
+  const data = await res.json();
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+}
+
+async function agorgUpdate() {
+  const req = {
+    id: null, // Need to track selected ID
+    name: document.getElementById('agorg-name').value.trim(),
+    root: document.getElementById('agorg-root').value.trim(),
+    master: document.getElementById('agorg-master').value.trim()
+  };
+  // Finding the ID from some state or active
+  const activeRes = await fetch('/api/agorg/active');
+  const activeData = await activeRes.json();
+  if (!activeRes.ok || !activeData.active) {
+     agorgOut.textContent = "Error: No active AGOrg selected for update";
+     return;
+  }
+  req.id = activeData.active.id;
+  
+  const res = await fetch('/api/agorg/update', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  agorgOut.textContent = JSON.stringify(data, null, 2);
+  refreshAgorgHeader();
+}
+
+async function browseAgorgMaster() {
+  const start = document.getElementById('agorg-master').value || '/home';
+  const res = await fetch('/api/fs/pick-directory', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ start_dir: start })
+  });
+  const data = await res.json();
+  if (data.ok && data.path) {
+    document.getElementById('agorg-master').value = data.path;
+    agorgScanMaster(data.path);
+  }
+}
+
+function clearAgorgResults() {
+  agorgOut.textContent = '(results cleared)';
+  agorgDiscoveryOut.textContent = '';
+}
+
+function renderAgorgRegistry(agorgs) {
+  if (!agorgRegistryList) return;
+  agorgRegistryList.innerHTML = '';
+  if (!agorgs || agorgs.length === 0) {
+    agorgRegistryList.innerHTML = '<div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">No registered AGOrgs found.</div>';
+    return;
+  }
+
+  // Group by master_path
+  const grouped = {};
+  agorgs.forEach(ag => {
+     const path = ag.master_path || 'Independent Orgs';
+     if (!grouped[path]) grouped[path] = [];
+     grouped[path].push(ag);
+  });
+
+  for (const [path, nodes] of Object.entries(grouped)) {
+     if (path !== 'Independent Orgs') {
+       const h = document.createElement('div');
+       h.style = 'padding:8px 12px; background:#1c2635; color:#a8b9e3; font-size:0.75rem; font-weight:700; display:flex; align-items:center; gap:8px;';
+       h.innerHTML = `<span>📁 Master:</span> <span style="font-family:monospace; opacity:0.8;">${path}</span>`;
+       agorgRegistryList.appendChild(h);
+     }
+     
+     nodes.forEach(node => {
+        const el = document.createElement('div');
+        el.className = 'agorg-reg-item' + (path !== 'Independent Orgs' ? ' agorg-tree-node' : '');
+        el.style = 'display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem;';
+        el.innerHTML = `
+          <div style="display:flex; align-items:center;">
+            <span style="margin-right:8px; display:inline-flex; width:1.2rem;">🏢</span>
+            <span style="font-weight:600;">${node.name}</span>
+          </div>
+          <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#a8b9e3;">ORG</span>
+        `;
+        el.onclick = () => switchAgorgScope(node.id);
+        agorgRegistryList.appendChild(el);
+     });
+  }
+}
+
+async function agorgList() {
+  if (agorgRegistryList) {
+    agorgRegistryList.innerHTML = '<div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">Loading backend properties...</div>';
+  }
+  const data = await fetchJsonSafe('/api/agorg/list');
+  const text = JSON.stringify(data, null, 2);
+  if (agorgOut) agorgOut.textContent = text;
+  if (data.ok) {
+    renderAgorgRegistry(data.agorgs);
+    
+    // Attempt to mix in AGOs from the active tree to the registry view
+    const treeData = await fetchJsonSafe('/api/agorg/tree');
+    if (treeData.ok && treeData.tree && treeData.tree.length > 0) {
+       const agos = [];
+       const walk = (node) => {
+         (node.agos || []).forEach(a => agos.push(a));
+         (node.child_agorgs || []).forEach(walk);
+       };
+       treeData.tree.forEach(walk);
+       
+       const seen = new Set();
+       const uniqueAgos = agos.filter(a => {
+         if (seen.has(a.id)) return false;
+         seen.add(a.id);
+         return true;
+       });
+       
+       uniqueAgos.forEach(ago => {
+         const el = document.createElement('div');
+         el.className = 'agorg-reg-item agorg-tree-node';
+         el.style = 'display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem; margin-left:16px; border-left:1px solid #1c2635;';
+         el.innerHTML = `
+           <div style="display:flex; align-items:center;">
+             <span style="margin-right:8px; display:inline-flex; width:1.2rem;">🤖</span>
+             <span style="font-weight:600;">${ago.name}</span>
+           </div>
+           <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#6a7dff;">AGO</span>
+         `;
+         el.onclick = () => switchAgorgScope(ago.id);
+         if (agorgRegistryList) agorgRegistryList.appendChild(el);
+       });
+
+    }
+  } else {
+    if (agorgRegistryList) {
+      agorgRegistryList.innerHTML = `<div style="padding:10px; color:#ff6b6b; font-size:0.8rem;">Load Failed: ${data.error}</div>`;
+    }
+  }
+}
+
+async function agorgShowActive() {
+  if (agorgActiveDetails) {
+    agorgActiveDetails.innerHTML = '<em>Loading active scope...</em>';
+  }
+  const data = await fetchJsonSafe('/api/agorg/active');
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  
+  if (data.ok && data.active) {
+    if (agorgActiveDetails) {
+      agorgActiveDetails.innerHTML = `
+        <div style="color:#fff; font-weight:700; margin-bottom:4px; font-size:1.05rem;">${data.active.name}</div>
+        <div style="margin-bottom:2px;"><strong>ID:</strong> <span style="font-family:monospace; color:#6a7dff;">${data.active.id}</span></div>
+        <div style="margin-bottom:2px;"><strong>Root:</strong> <span style="font-family:monospace;">${data.active.root_path}</span></div>
+        <div style="margin-bottom:2px;"><strong>Master:</strong> <span style="font-family:monospace;">${data.active.master_path || 'None'}</span></div>
+      `;
+    }
+    // Highlight active in registry
+    Array.from(document.querySelectorAll('.agorg-reg-item')).forEach(el => el.classList.remove('active'));
+  } else {
+    if (agorgActiveDetails) {
+      agorgActiveDetails.innerHTML = `<em>No active scope set</em>`;
+    }
+  }
+  refreshAgorgHeader();
+}
+
+async function agorgUse() {
+  const req = { agorg: document.getElementById('agorg-use-id').value.trim() };
+  if (!req.agorg) return;
+  const data = await fetchJsonSafe('/api/agorg/use', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  refreshAgorgHeader();
+  if (data.ok) {
+    agorgList();
+    agorgShowActive();
+    agorgTree();
+  }
+}
+
+async function agorgLink() {
+  const req = {
+    parent: document.getElementById('agorg-link-parent').value.trim(),
+    child: document.getElementById('agorg-link-child').value.trim()
+  };
+  const res = await fetch('/api/agorg/link', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+}
+
+async function agorgDiscover() {
+  const req = {
+    root: document.getElementById('agorg-discover-root').value.trim(),
+    depth: parseInt(document.getElementById('agorg-discover-depth').value || '4', 10),
+    import_to: document.getElementById('agorg-discover-import-to').value.trim() || null
+  };
+  const res = await fetch('/api/agorg/discover', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgDiscoveryOut.textContent = text;
+  out.textContent = text;
+}
+
+async function agorgTree() {
+  const root = document.getElementById('agorg-use-id').value.trim();
+  const query = root ? ('?root=' + encodeURIComponent(root)) : '';
+  const res = await fetch('/api/agorg/tree' + query);
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgDiscoveryOut.textContent = text;
+  out.textContent = text;
+}
+
+function activateSubPanel(panelId, btn) {
+  const parent = btn.parentElement;
+  Array.from(parent.querySelectorAll('.sub-tab')).forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const card = parent.parentElement;
+  Array.from(card.querySelectorAll('.sub-panel')).forEach(p => p.classList.remove('active'));
+  document.getElementById(panelId).classList.add('active');
+}
+
+async function pickDirectory(startDir) {
+  const res = await fetch('/api/fs/pick-directory', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ start_dir: startDir || null })
+  });
+  return res.json();
+}
+
+async function browseAgorgRoot() {
+  const input = document.getElementById('agorg-root');
+  const nameInput = document.getElementById('agorg-name');
+  const data = await pickDirectory(input.value);
+  if (data && data.ok && data.path) {
+    input.value = data.path;
+    if (!nameInput.value.trim()) {
+      const cleanPath = data.path.replace(/\/$/, '');
+      const parts = cleanPath.split('/');
+      nameInput.value = parts[parts.length - 1] || 'Arqon';
+    }
+  } else {
+    const text = JSON.stringify(data, null, 2);
+    agorgOut.textContent = text;
+    out.textContent = text;
+  }
+}
+
+async function browseAgorgCreateDest() {
+  const input = document.getElementById('agorg-create-dest');
+  const data = await pickDirectory(input.value);
+  if (data && data.ok && data.path) {
+    input.value = data.path;
+  }
+}
+
+async function agorgBatchCreate() {
+  const req = {
+    destination: document.getElementById('agorg-create-dest').value.trim(),
+    name: document.getElementById('agorg-create-name').value.trim(),
+    siblings: document.getElementById('agorg-create-siblings').value.split('\n').map(s => s.trim()).filter(s => !!s),
+    use_git: !!document.getElementById('agorg-create-git').checked
+  };
+  if (!req.destination || !req.name) {
+    alert("Destination and Name are required.");
+    return;
+  }
+  const res = await fetch('/api/agorg/batch-create', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+  if (data.ok) {
+    agorgList();
+    agorgTree();
+  }
+}
+
+async function browseDiscoverRoot() {
+  const input = document.getElementById('agorg-discover-root');
+  const data = await pickDirectory(input.value);
+  if (data && data.ok && data.path) {
+    input.value = data.path;
+  } else {
+    const text = JSON.stringify(data, null, 2);
+    agorgOut.textContent = text;
+    out.textContent = text;
+  }
+}
+
+async function browseAgorgParent() {
+  const input = document.getElementById('agorg-parent');
+  const data = await pickDirectory(input.value);
+  if (data && data.ok && data.path) {
+    input.value = data.path;
+  } else {
+    const text = JSON.stringify(data, null, 2);
+    agorgOut.textContent = text;
+    out.textContent = text;
+  }
+}
+
+function multiRegister() {
+  run('pilot.multi.register', {
+    path: document.getElementById('repo-path').value,
+    name: document.getElementById('repo-name').value || null,
+    group: document.getElementById('repo-group').value || null,
+    tags: tags(document.getElementById('repo-tags').value)
+  });
+}
+function multiList() {
+  run('pilot.multi.list', { group: document.getElementById('multi-group').value || null, tags: tags(document.getElementById('multi-tags').value) });
+}
+function multiStatus() {
+  run('pilot.multi.status', { group: document.getElementById('multi-group').value || null, tags: tags(document.getElementById('multi-tags').value) });
+}
+function multiOrder() {
+  run('pilot.multi.order', { group: document.getElementById('multi-group').value || null, tags: tags(document.getElementById('multi-tags').value) });
+}
+function multiDag() {
+  run('pilot.multi.dag', {
+    group: document.getElementById('multi-group').value || null,
+    tags: tags(document.getElementById('multi-tags').value),
+    dry_run: true
+  }, {
+    label: 'DAG',
+    chip: multiDagChip,
+    buttons: [multiDagBtn],
+    runningLabel: 'DAG running...'
+  });
+}
+function multiPrsCreate() {
+  run('pilot.multi.prs.create', {
+    group: document.getElementById('multi-group').value || null,
+    tags: tags(document.getElementById('multi-tags').value),
+    dry_run: true,
+    head_branch: 'dev',
+    base_branch: 'main'
+  });
+}
+
+function multiApplyPayload(apply) {
+  const stageSizeRaw = parseInt(document.getElementById('multi-apply-stage-size').value || '2', 10);
+  const stageSize = Number.isFinite(stageSizeRaw) && stageSizeRaw > 0 ? stageSizeRaw : 2;
+  return {
+    branch: document.getElementById('multi-apply-branch').value || 'feat/pilot-wave13',
+    base_branch: document.getElementById('multi-apply-base').value || 'dev',
+    pr_base_branch: document.getElementById('multi-apply-pr-base').value || 'main',
+    group: document.getElementById('multi-group').value || null,
+    tags: tags(document.getElementById('multi-tags').value),
+    stage_size: stageSize,
+    continue_on_failure: !!document.getElementById('multi-apply-continue').checked,
+    apply: !!apply
+  };
+}
+
+function multiApplyDryRun() {
+  const payload = multiApplyPayload(false);
+  run('pilot.multi.apply', payload, {
+    label: 'Staged Apply',
+    chip: multiApplyChip,
+    buttons: [multiApplyDryBtn, multiApplyExecBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function multiApplyExecute() {
+  const payload = multiApplyPayload(true);
+  run('pilot.multi.apply', payload, {
+    label: 'Staged Apply',
+    chip: multiApplyChip,
+    buttons: [multiApplyDryBtn, multiApplyExecBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function dashBranchCreate() {
+  run('pilot.branch.create', {
+    branch: document.getElementById('dash-branch-name').value,
+    base_branch: document.getElementById('dash-branch-base').value || 'main',
+    group: document.getElementById('dash-branch-group').value || null,
+    tags: tags(document.getElementById('dash-branch-tags').value),
+    dry_run: true
+  });
+}
+
+function dashRunPolicy() { depRun('policy'); }
+function dashRunHookPolicy() { depRun('hook-policy'); }
+function dashRunDrift() { depRun('drift'); }
+function dashRunGate() { depRun('gate'); }
+function dashRunRepair() { depRun('repair'); }
+function dashStartBus() { depRun('bus-start'); }
+function dashStopBus() { depRun('bus-stop'); }
+function dashRestartBus() { depRun('bus-restart'); }
+function dashBusStatus() { depRun('bus-status'); }
+function dashDbStatus() { depRun('db-status'); }
+function dashDbStart() { depRun('db-start'); }
+function dashDbStop() { depRun('db-stop'); }
+function dashDbRestart() { depRun('db-restart'); }
+function dashServicesStatus() { depRun('services-status'); }
+function dashServicesStart() { depRun('services-start'); }
+function dashServicesStop() { depRun('services-stop'); }
+function dashServicesRestart() { depRun('services-restart'); }
+function dashRunPush() { depRun('push'); }
+
+async function dashExportEvidence() {
+  const res = await fetch('/api/evidence/export', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({})
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  out.textContent = text;
+  if (dashStatusOut) dashStatusOut.textContent = text;
+  appendLive({ source: 'dashboard', action: 'evidence-export', ok: !!data.ok, path: data.path || '' });
+}
+
+function codexPayloadFromUi() {
+  const raw = document.getElementById('codex-payload').value.trim();
+  if (!raw) return {};
+  return JSON.parse(raw);
+}
+
+async function codexRun(mode) {
+  let payload;
+  try {
+    payload = codexPayloadFromUi();
+  } catch (e) {
+    const msg = 'Invalid JSON payload: ' + e.message;
+    codexOut.textContent = msg;
+    out.textContent = msg;
+    return;
+  }
+  const req = {
+    contract_id: document.getElementById('codex-contract-id').value.trim(),
+    intent: document.getElementById('codex-intent').value.trim(),
+    command: document.getElementById('codex-command').value.trim(),
+    payload,
+    mode,
+    expected_effect: document.getElementById('codex-expected').value.trim(),
+    rollback_strategy: document.getElementById('codex-rollback').value.trim(),
+    verify_command: document.getElementById('codex-verify').value.trim(),
+    reconcile_notes: document.getElementById('codex-reconcile-notes').value.trim()
+  };
+  const res = await fetch('/api/codex/action', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const data = await res.json();
+  const text = JSON.stringify(data, null, 2);
+  codexOut.textContent = text;
+  out.textContent = text;
+  if (dashStatusOut) dashStatusOut.textContent = text;
+  if (data && data.contract && data.contract.contract_id) {
+    latestCodexContractId = data.contract.contract_id;
+    document.getElementById('codex-contract-id').value = latestCodexContractId;
+  }
+  appendLive({ source: 'codex_ui', mode, command: req.command, ok: !!data.ok });
+  if (mode === 'execute' || mode === 'reconcile' || mode === 'approve') loadHistory();
+  if (mode === 'execute' || mode === 'reconcile' || mode === 'approve' || mode === 'preview') codexLoadContracts();
+}
+
+function codexPreview() { codexRun('preview'); }
+function codexApprove() {
+  if (!document.getElementById('codex-contract-id').value.trim() && latestCodexContractId) {
+    document.getElementById('codex-contract-id').value = latestCodexContractId;
+  }
+  codexRun('approve');
+}
+function codexExecute() { codexRun('execute'); }
+function codexReconcile() {
+  if (!document.getElementById('codex-contract-id').value.trim() && latestCodexContractId) {
+    document.getElementById('codex-contract-id').value = latestCodexContractId;
+  }
+  codexRun('reconcile');
+}
+
+async function codexLoadContracts() {
+  const status = document.getElementById('codex-contract-filter').value.trim();
+  const qs = new URLSearchParams({ limit: '100' });
+  if (status) qs.set('status', status);
+  const res = await fetch('/api/codex/contracts?' + qs.toString());
+  const data = await res.json();
+  const items = (data && data.contracts) ? data.contracts : [];
+  codexContractSelect.innerHTML = '';
+  for (const c of items) {
+    const opt = document.createElement('option');
+    opt.value = c.contract_id;
+    opt.textContent = `${c.contract_id} | ${c.status} | ${c.command}`;
+    codexContractSelect.appendChild(opt);
+  }
+  if (items.length > 0) {
+    latestCodexContractId = items[0].contract_id;
+  }
+  codexContractsOut.textContent = JSON.stringify(items, null, 2);
+}
+
+async function codexLoadSelectedContract() {
+  const id = codexContractSelect.value || document.getElementById('codex-contract-id').value.trim();
+  if (!id) {
+    codexContractsOut.textContent = 'No contract selected.';
+    return;
+  }
+  const res = await fetch('/api/codex/contract?contract_id=' + encodeURIComponent(id));
+  const data = await res.json();
+  if (data && data.contract) {
+    const c = data.contract;
+    document.getElementById('codex-contract-id').value = c.contract_id || '';
+    document.getElementById('codex-intent').value = c.intent || '';
+    document.getElementById('codex-command').value = c.command || '';
+    document.getElementById('codex-payload').value = JSON.stringify(c.payload_original || {}, null, 2);
+    document.getElementById('codex-expected').value = c.expected_effect || '';
+    document.getElementById('codex-rollback').value = c.rollback_strategy || '';
+    document.getElementById('codex-verify').value = c.verify_command || '';
+    latestCodexContractId = c.contract_id || latestCodexContractId;
+  }
+  codexContractsOut.textContent = JSON.stringify(data, null, 2);
+}
+
+async function codexRetryFailedContract() {
+  await codexLoadSelectedContract();
+  await codexRun('approve');
+  await codexRun('execute');
+}
+
+async function loadHistory() {
+  const res = await fetch('/api/history');
+  const data = await res.json();
+  auditCache = (data && data.events) ? data.events : [];
+  renderOperationDetail();
+}
+
+
+function attachStream() {
+  streamHandle = new EventSource('/api/stream');
+  streamHandle.onopen = () => {
+    setBusStatus(true);
+  };
+  streamHandle.addEventListener('pilot_event', (evt) => {
+    if (streamPaused) return;
+    try {
+      const parsed = JSON.parse(evt.data);
+      if (parsed && parsed.source === 'bus_listener' && parsed.error) {
+        setBusStatus(false, parsed.error);
+      } else {
+        setBusStatus(true);
+      }
+      if (parsed && parsed.source === 'dependency_action' && parsed.action) {
+        updateDashChip(parsed.action, !!parsed.success, parsed);
+      }
+      appendLive(parsed);
+    } catch (_) {
+      appendLive({ raw: evt.data });
+    }
+  });
+  streamHandle.onerror = () => {
+    setBusStatus(false, 'stream disconnected, retrying...');
+    appendLive({ source: 'ui', warning: 'stream disconnected, retrying...' });
+  };
+}
+
+function toggleStream() {
+  streamPaused = !streamPaused;
+  streamToggleBtn.textContent = streamPaused ? 'Resume Stream' : 'Pause Stream';
+  appendLive({ source: 'ui', info: streamPaused ? 'stream paused' : 'stream resumed' });
+}
+
+attachStream();
+restoreBusStatus();
+loadHistory();
+oracleLoadReports();
+depLoadLogs();
+depRun('policy');
+depRun('hook-policy');
+depRun('drift');
+depRun('services-status');
+refreshAgorgHeader();
+codexLoadContracts();
+setInterval(loadHistory, 30000);
