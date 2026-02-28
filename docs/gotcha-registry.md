@@ -271,6 +271,18 @@ Keep this file current whenever a new failure class appears.
 3. For `pilot.multi.*`, set `group` and/or `tags` in UI/CLI payload.
 4. For Dashboard dependency actions above, run Pilot from a repo path inside the active AGOrg root.
 
+## G-019: Live Event Stream shows `agorg_scope: null`
+
+- Signature:
+  - SSE telemetry payloads include `agorg_scope: null`.
+- Cause:
+  - No active AGOrg is selected, or event source emitted outside scoped command flows.
+- Recovery:
+  1. Set active AGOrg:
+     - `./scripts/pilot_local.sh agorg use <id-or-name>`
+  2. Confirm:
+     - `./scripts/pilot_local.sh agorg show`
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`

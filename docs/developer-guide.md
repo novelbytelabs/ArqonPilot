@@ -163,6 +163,7 @@ Scope enforcement (Wave C in progress):
 - `pilot.multi.*` calls require explicit `group` or `tags` selector (unfiltered fleet calls are rejected).
 - Dashboard dependency actions (`policy`, `hook-policy`, `drift`, `gate`, `repair`, `push`) are now AGOrg-scoped and require CWD within active AGOrg root.
 - Service controls (`db-*`, `bus-*`, `services-*`) intentionally remain global so operators can recover infra before scope is set.
+- Live Event Stream now emits `agorg_scope` context on each SSE event (or `null` if no scope is active) for consistent dashboard telemetry correlation.
 
 ## Critical Linux/Conda Runtime Step
 

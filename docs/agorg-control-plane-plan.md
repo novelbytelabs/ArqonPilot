@@ -337,19 +337,17 @@ Add new commands/endpoints:
 
 ---
 
-### Wave C — Full Scope Enforcement 🔶 IN PROGRESS
-
-Until this wave is complete, "setting an AGOrg scope" is cosmetic — it changes the Hero badge but does NOT filter what other tabs show.
+### Wave C — Full Scope Enforcement ✅ COMPLETE
 
 | Feature | Status |
 |---------|--------|
-| Dashboard operations scoped to active AGOrg repos | 🔶 |
-| Oracle scans only within AGOrg boundary | 🔶 |
-| Heal targets only AGOrg repos | 🔶 |
+| Dashboard operations scoped to active AGOrg repos | ✅ |
+| Oracle scans only within AGOrg boundary | ✅ |
+| Heal targets only AGOrg repos | ✅ |
 | Dependencies checks scoped to AGOrg | ✅ |
-| Branch operations scoped to AGOrg repos | 🔶 |
-| Multi-repo actions scoped to AGOrg | 🔶 |
-| Telemetry stream tagged with AGOrg context | ⬜ |
+| Branch operations scoped to AGOrg repos | ✅ |
+| Multi-repo actions scoped to AGOrg | ✅ |
+| Telemetry stream tagged with AGOrg context | ✅ |
 | AGOrg link validation blocks circular loops | ✅ (Already done — `link_agorgs` has cycle detection at `agorg.rs:290-311`) |
 
 Current enforcement now active in UI command bridge:
@@ -359,6 +357,7 @@ Current enforcement now active in UI command bridge:
 3. Multi command selector guard: rejects unfiltered `pilot.multi.*` calls unless `group` or `tags` are explicitly set.
 4. Dashboard dependency actions (`policy`, `hook-policy`, `drift`, `gate`, `repair`, `push`) now require active AGOrg scope and CWD-in-scope checks.
 5. Global service controls (`db-*`, `bus-*`, `services-*`) remain available outside AGOrg scope by design.
+6. Live SSE telemetry events are annotated with `agorg_scope` (active scope context) when emitted to UI clients.
 
 ---
 

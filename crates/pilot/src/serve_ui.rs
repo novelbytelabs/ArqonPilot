@@ -2110,9 +2110,9 @@ mod tests {
         command_requires_multi_selector, command_scope_required,
         dependency_action_requires_cwd_scope, dependency_action_scope_required, is_safe_cli_token,
         load_persisted_agorg_reviews, load_persisted_codex_contracts, payload_has_multi_selector,
-        AgorgReviewRecord, CodexContractRecord,
+        with_event_agorg_scope, AgorgReviewRecord, CodexContractRecord,
     };
-    use serde_json::json;
+    use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2165,6 +2165,17 @@ mod tests {
         assert!(payload_has_multi_selector(
             &json!({"tags": ["apply-pilot"]})
         ));
+    }
+
+    #[test]
+    fn test_event_agorg_scope_annotation() {
+        let plain = json!({"source": "bus_listener"});
+        let tagged = with_event_agorg_scope(plain, None);
+        assert_eq!(tagged.get("agorg_scope"), Some(&Value::Null));
+
+        let existing = json!({"source": "ui_command", "agorg_scope": {"id":"x"}});
+        let preserved = with_event_agorg_scope(existing.clone(), None);
+        assert_eq!(preserved, existing);
     }
 
     #[test]
@@ -2263,12 +2274,20 @@ async fn stream_events(
     State(state): State<Arc<UiState>>,
 ) -> Sse<impl tokio_stream::Stream<Item = std::result::Result<Event, Infallible>>> {
     let rx = state.events.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|item| async move {
-        match item {
-            Ok(value) => Some(Ok(Event::default()
-                .event("pilot_event")
-                .data(value.to_string()))),
-            Err(_) => None,
+    let state_for_stream = state.clone();
+    let stream = BroadcastStream::new(rx).filter_map(move |item| {
+        let state = state_for_stream.clone();
+        async move {
+            match item {
+                Ok(value) => {
+                    let active_scope = state.agorg_store.get_active_agorg().await.ok().flatten();
+                    let tagged = with_event_agorg_scope(value, active_scope.as_ref());
+                    Some(Ok(Event::default()
+                        .event("pilot_event")
+                        .data(tagged.to_string())))
+                }
+                Err(_) => None,
+            }
         }
     });
 
@@ -2651,6 +2670,25 @@ fn enforce_dry_run(command: &str, payload: &mut Value) {
     if command == "pilot.heal.run" {
         payload["plan_only"] = json!(true);
     }
+}
+
+fn with_event_agorg_scope(value: Value, active_scope: Option<&agorg::Agorg>) -> Value {
+    let mut value = value;
+    if let Value::Object(ref mut map) = value {
+        if !map.contains_key("agorg_scope") {
+            let scope_value = active_scope
+                .map(|scope| {
+                    json!({
+                        "id": scope.id.to_string(),
+                        "name": scope.name,
+                        "root_path": scope.root_path
+                    })
+                })
+                .unwrap_or(Value::Null);
+            map.insert("agorg_scope".to_string(), scope_value);
+        }
+    }
+    value
 }
 
 const INDEX_HTML: &str = r#"<!doctype html>
