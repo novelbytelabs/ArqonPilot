@@ -236,6 +236,14 @@ curl -sS http://127.0.0.1:7788/api/system/temporary_components | jq
 
 Use Dashboard -> `Temporary Components Inventory` -> `Refresh Inventory` to confirm shim/editor status and exit criteria.
 
+5. Export temporary-component inventory artifact:
+
+```bash
+curl -sS -X POST http://127.0.0.1:7788/api/system/temporary_components/export | jq
+```
+
+Artifact path is returned as `path` and appears in timeline-linked event output.
+
 ## 4) Command rejected by Bus bridge
 
 The bridge currently only accepts namespaced `pilot.*` commands and strict contract payloads with:

@@ -399,6 +399,10 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
             "/api/system/temporary_components",
             get(get_temporary_components),
         )
+        .route(
+            "/api/system/temporary_components/export",
+            post(export_temporary_components_inventory),
+        )
         .route("/api/evidence/export", post(export_evidence_bundle))
         .route("/api/codex/action", post(run_codex_action))
         .route("/api/ui/session", get(api_ui_session_get))
@@ -2873,6 +2877,52 @@ async fn get_dependency_logs() -> Response {
 }
 
 async fn get_temporary_components() -> Response {
+    let payload = match build_temporary_components_payload().await {
+        Ok(v) => v,
+        Err(err) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to build temporary component inventory: {}", err),
+            )
+        }
+    };
+    Json(payload).into_response()
+}
+
+async fn export_temporary_components_inventory(State(state): State<Arc<UiState>>) -> Response {
+    let payload = match build_temporary_components_payload().await {
+        Ok(v) => v,
+        Err(err) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to build temporary component inventory: {}", err),
+            )
+        }
+    };
+    let path = match persist_temporary_components_inventory_report(&payload) {
+        Ok(v) => v,
+        Err(err) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to persist temporary component inventory: {}", err),
+            )
+        }
+    };
+    let _ = state.events.send(json!({
+        "source": "temporary_components",
+        "action": "export",
+        "ok": true,
+        "artifact_path": path
+    }));
+    Json(json!({
+        "ok": true,
+        "path": path,
+        "inventory": payload
+    }))
+    .into_response()
+}
+
+async fn build_temporary_components_payload() -> std::io::Result<Value> {
     let (shim_code, shim_stdout, shim_stderr) = match run_local_script(
         "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
     )
@@ -2911,12 +2961,11 @@ async fn get_temporary_components() -> Response {
             "exit_criteria": "Audited drag-link UX lands with deterministic mutation preview + apply."
         }),
     ];
-    Json(json!({
+    Ok(json!({
         "ok": true,
         "count": components.len(),
         "components": components,
     }))
-    .into_response()
 }
 
 async fn stream_events(
@@ -2978,6 +3027,10 @@ fn agorg_reconcile_action_report_path(ts: &str, mode: &str) -> PathBuf {
     reports_root().join(format!("agorg_reconcile_{}_{}.json", mode, ts))
 }
 
+fn temporary_components_inventory_report_path(ts: &str) -> PathBuf {
+    reports_root().join(format!("temporary_components_inventory_{}.json", ts))
+}
+
 fn now_stamp() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2999,6 +3052,17 @@ fn persist_agorg_policy_report(report: &agorg::AgorgReconcileReport) -> std::io:
 
 fn persist_agorg_reconcile_action_report(mode: &str, payload: &Value) -> std::io::Result<String> {
     let path = agorg_reconcile_action_report_path(&now_stamp(), mode);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let body = serde_json::to_string_pretty(payload)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    fs::write(&path, body)?;
+    Ok(path.display().to_string())
+}
+
+fn persist_temporary_components_inventory_report(payload: &Value) -> std::io::Result<String> {
+    let path = temporary_components_inventory_report_path(&now_stamp());
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -3972,6 +4036,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <div class="helper">Wave H transparency surface. Lists unavoidable shims/bridges and their runtime state.</div>
         <div class="row">
           <button class="btn secondary" onclick="dashRefreshTemporaryComponents()">Refresh Inventory</button>
+          <button class="btn secondary" onclick="dashExportTemporaryComponents()">Export Inventory Artifact</button>
         </div>
       <div class="pre-wrap">
         <div class="pre-actions">

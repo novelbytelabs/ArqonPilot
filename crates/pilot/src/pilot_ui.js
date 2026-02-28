@@ -578,6 +578,23 @@ function extractTimelineRecord(evt) {
     };
   }
 
+  if (typeof evt.source === 'string' && typeof evt.action === 'string') {
+    const phase = evt.ok === false ? 'failed' : 'completed';
+    const opId = evt.artifact_path
+      ? ('artifact:' + String(evt.artifact_path))
+      : ((evt.source + ':' + evt.action + ':' + Date.now()));
+    const summary = evt.artifact_path
+      ? ('artifact=' + evt.artifact_path)
+      : (evt.error || evt.message || '');
+    return {
+      opId,
+      phase,
+      command: evt.source + '.' + evt.action,
+      summary,
+      at: new Date().toISOString()
+    };
+  }
+
   return null;
 }
 
@@ -2210,6 +2227,23 @@ async function dashRefreshTemporaryComponents() {
       count: Number(data.count || 0)
     });
   }
+}
+
+async function dashExportTemporaryComponents() {
+  const data = await fetchJsonSafe('/api/system/temporary_components/export', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({})
+  });
+  const text = JSON.stringify(data, null, 2);
+  if (dashTempComponentsOut) dashTempComponentsOut.textContent = text;
+  out.textContent = text;
+  appendLive({
+    source: 'dashboard',
+    action: 'temporary-components-export',
+    ok: !!(data && data.ok),
+    artifact_path: (data && data.path) ? data.path : ''
+  });
 }
 
 async function dashAgorgPolicyReport() {

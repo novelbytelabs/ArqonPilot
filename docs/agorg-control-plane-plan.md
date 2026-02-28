@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 18:40 EST — Wave G closed, Wave H in progress
+**Last updated**: 2026-02-28 18:55 EST — Wave G closed, Wave H in progress
 
 ---
 
@@ -530,6 +530,10 @@ Delivered so far:
    - ArqonBus shim runtime state (`running`/`stopped`) with status command output.
    - Hierarchy editor gap with current safe path + explicit exit criteria.
 4. Removed ambiguous `TODO` wording from AGOrg hierarchy helper text.
+5. Added inventory artifact export path:
+   - `POST /api/system/temporary_components/export`
+   - persists report artifact under `~/.pilot/reports/temporary_components_inventory_<ts>.json`
+   - emits artifact-linked timeline event.
 
 Acceptance:
 
@@ -844,9 +848,27 @@ Verification completed:
 3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
 4. `./scripts/prepush_gate.sh` ✅
 
+### Iteration Update (2026-02-28 18:55 EST)
+
+Completed in this iteration:
+
+1. **Wave H inventory evidence loop**
+   - Added backend export endpoint for temporary component inventory artifacts.
+   - Added dashboard button `Export Inventory Artifact`.
+2. **Timeline traceability hardening**
+   - Timeline now ingests dashboard/action events directly.
+   - Artifact-backed events appear with `ARTIFACT` badge and openable path in Operation Detail.
+
+Verification completed:
+
+1. `node -c crates/pilot/src/pilot_ui.js` ✅
+2. `cargo check -p pilot --locked` ✅
+3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+4. `./scripts/prepush_gate.sh` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave H hard-close** — complete burn-down inventory workflow (UI + docs + gotchas) and lock operator checklist.
+1. **Wave H hard-close** — finalize operator checklist for temporary-component inventory + export and verify no hidden placeholders remain.
 2. **Wave H native bus path** — continue reducing shim dependency where frozen fleet permits.
 3. **Wave H hierarchy editor hardening** — add deterministic preview/apply relationship editing UX before drag-link work.
 4. **Wave I planning** — define post-burn-down roadmap once temporary inventory is fully closed.
