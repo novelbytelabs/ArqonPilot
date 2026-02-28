@@ -81,7 +81,16 @@ pub struct AgorgReconcileReport {
     pub issue_count: usize,
     pub off_policy_count: usize,
     pub prune_candidate_paths: Vec<String>,
+    pub duplicate_resolutions: Vec<AgorgDuplicateResolution>,
     pub issues: Vec<AgorgReconcileIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgorgDuplicateResolution {
+    pub kind: String,
+    pub key: String,
+    pub winner_repo_path: String,
+    pub loser_repo_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -679,7 +688,7 @@ impl AgorgStore {
             });
         }
 
-        let (dup_issues, dup_prunes) = duplicate_merge_heuristics(&facts);
+        let (dup_issues, dup_prunes, duplicate_resolutions) = duplicate_merge_heuristics(&facts);
         issues.extend(dup_issues);
         prune_candidates.extend(dup_prunes);
 
@@ -697,6 +706,7 @@ impl AgorgStore {
             issue_count: issues.len(),
             off_policy_count: prune_candidate_paths.len(),
             prune_candidate_paths,
+            duplicate_resolutions,
             issues,
         })
     }
@@ -1116,9 +1126,14 @@ fn choose_primary(indices: &[usize], facts: &[AgoReconcileFacts]) -> usize {
 
 fn duplicate_merge_heuristics(
     facts: &[AgoReconcileFacts],
-) -> (Vec<AgorgReconcileIssue>, HashSet<String>) {
+) -> (
+    Vec<AgorgReconcileIssue>,
+    HashSet<String>,
+    Vec<AgorgDuplicateResolution>,
+) {
     let mut issues: Vec<AgorgReconcileIssue> = Vec::new();
     let mut prune_candidates: HashSet<String> = HashSet::new();
+    let mut resolutions: Vec<AgorgDuplicateResolution> = Vec::new();
 
     let mut canonical_groups: HashMap<String, Vec<usize>> = HashMap::new();
     for (idx, f) in facts.iter().enumerate() {
@@ -1129,18 +1144,20 @@ fn duplicate_merge_heuristics(
                 .push(idx);
         }
     }
-    for (_canonical, idxs) in canonical_groups {
+    for (canonical, idxs) in canonical_groups {
         if idxs.len() <= 1 {
             continue;
         }
         let primary = choose_primary(&idxs, facts);
         let primary_path = facts[primary].repo_path.clone();
+        let mut losers: Vec<String> = Vec::new();
         for idx in idxs {
             if idx == primary {
                 continue;
             }
             let loser = &facts[idx];
             prune_candidates.insert(loser.repo_path.clone());
+            losers.push(loser.repo_path.clone());
             issues.push(AgorgReconcileIssue {
                 repo_name: loser.name.clone(),
                 repo_path: loser.repo_path.clone(),
@@ -1152,6 +1169,13 @@ fn duplicate_merge_heuristics(
                 ),
             });
         }
+        losers.sort();
+        resolutions.push(AgorgDuplicateResolution {
+            kind: "canonical_path".to_string(),
+            key: canonical,
+            winner_repo_path: primary_path,
+            loser_repo_paths: losers,
+        });
     }
 
     let mut name_groups: HashMap<String, Vec<usize>> = HashMap::new();
@@ -1161,18 +1185,20 @@ fn duplicate_merge_heuristics(
             .or_default()
             .push(idx);
     }
-    for (_name, idxs) in name_groups {
+    for (name, idxs) in name_groups {
         if idxs.len() <= 1 {
             continue;
         }
         let primary = choose_primary(&idxs, facts);
         let primary_path = facts[primary].repo_path.clone();
+        let mut losers: Vec<String> = Vec::new();
         for idx in idxs {
             if idx == primary {
                 continue;
             }
             let loser = &facts[idx];
             prune_candidates.insert(loser.repo_path.clone());
+            losers.push(loser.repo_path.clone());
             issues.push(AgorgReconcileIssue {
                 repo_name: loser.name.clone(),
                 repo_path: loser.repo_path.clone(),
@@ -1184,9 +1210,18 @@ fn duplicate_merge_heuristics(
                 ),
             });
         }
+        losers.sort();
+        resolutions.push(AgorgDuplicateResolution {
+            kind: "name".to_string(),
+            key: name,
+            winner_repo_path: primary_path,
+            loser_repo_paths: losers,
+        });
     }
 
-    (issues, prune_candidates)
+    resolutions
+        .sort_by(|a, b| (a.kind.as_str(), a.key.as_str()).cmp(&(b.kind.as_str(), b.key.as_str())));
+    (issues, prune_candidates, resolutions)
 }
 
 pub fn discover_hierarchy(root: &Path, depth: usize) -> Result<DiscoverResult> {
@@ -1485,12 +1520,15 @@ mod tests {
                 has_pyproject: false,
             },
         ];
-        let (issues, prune) = duplicate_merge_heuristics(&facts);
+        let (issues, prune, resolutions) = duplicate_merge_heuristics(&facts);
         assert!(issues
             .iter()
             .any(|i| i.code == "duplicate_name_merge_candidate"));
         assert!(prune.contains("/root/archive/ArqonCore"));
         assert!(!prune.contains("/root/ArqonCore"));
+        assert!(resolutions
+            .iter()
+            .any(|r| r.kind == "name" && r.key == "arqoncore"));
     }
 
     #[test]
@@ -1515,12 +1553,15 @@ mod tests {
                 has_pyproject: true,
             },
         ];
-        let (issues, prune) = duplicate_merge_heuristics(&facts);
+        let (issues, prune, resolutions) = duplicate_merge_heuristics(&facts);
         assert!(issues
             .iter()
             .any(|i| i.code == "duplicate_path_merge_candidate"));
         assert!(prune.contains("/root/alias/ArqonBus"));
         assert!(!prune.contains("/root/ArqonBus"));
+        assert!(resolutions
+            .iter()
+            .any(|r| r.kind == "canonical_path" && r.key == "/canonical/ArqonBus"));
     }
 }
 

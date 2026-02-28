@@ -2601,6 +2601,7 @@ mod tests {
             issue_count: 1,
             off_policy_count: 1,
             prune_candidate_paths: vec!["/tmp/arqon/archive/old".to_string()],
+            duplicate_resolutions: vec![],
             issues: vec![AgorgReconcileIssue {
                 repo_name: "old".to_string(),
                 repo_path: "/tmp/arqon/archive/old".to_string(),
@@ -2734,7 +2735,7 @@ fn list_agorg_policy_reports(limit: usize) -> std::io::Result<Vec<Value>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
-    let mut files: Vec<PathBuf> = fs::read_dir(root)?
+    let mut files: Vec<PathBuf> = fs::read_dir(&root)?
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| {
             path.file_name()
@@ -2748,7 +2749,19 @@ fn list_agorg_policy_reports(limit: usize) -> std::io::Result<Vec<Value>> {
     files.truncate(limit);
     Ok(files
         .iter()
-        .map(|path| json!({ "path": path.display().to_string() }))
+        .map(|path| {
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            json!({ "path": rel, "name": name })
+        })
         .collect())
 }
 
@@ -3732,6 +3745,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <div class="row">
           <button class="btn secondary" onclick="dashAgorgPolicyReports()">Refresh Artifacts</button>
           <select id="dash-agorg-report-select"></select>
+          <button class="btn secondary" onclick="dashAgorgPolicyOpen()">Open</button>
         </div>
       <div class="pre-wrap">
         <div class="pre-actions">
@@ -3739,6 +3753,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button class="action-btn" onclick="clearElement('dash-agorg-policy-out')">CLEAR</button>
         </div>
         <pre id="dash-agorg-policy-out">No AGOrg policy action run yet.</pre>
+      </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-agorg-duplicates-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-agorg-duplicates-out')">CLEAR</button>
+        </div>
+        <pre id="dash-agorg-duplicates-out">No duplicate merge candidates yet.</pre>
       </div>
       </div>
 
@@ -4099,8 +4120,16 @@ Recommended flow:
             <div class="row">
               <button class="btn secondary" onclick="agorgLoadPolicyReports()">Refresh Policy Artifacts</button>
               <select id="agorg-policy-report-select"></select>
+              <button class="btn secondary" onclick="agorgOpenPolicyReport()">Open</button>
             </div>
             <div class="helper" style="margin-top:8px;">`Discover Preview` lets you approve/reject before import. `Import` is one-shot create + autoscan + import.</div>
+            <div class="pre-wrap">
+              <div class="pre-actions">
+                <button class="action-btn" onclick="copyToClipboard('agorg-duplicate-preview-out', this)">COPY</button>
+                <button class="action-btn" onclick="clearElement('agorg-duplicate-preview-out')">CLEAR</button>
+              </div>
+              <pre id="agorg-duplicate-preview-out">No duplicate merge candidates yet.</pre>
+            </div>
           </div>
 
           <!-- Sub-Panel: Create -->

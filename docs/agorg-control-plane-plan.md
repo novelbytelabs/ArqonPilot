@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-27 21:01 EST — Definitive audit-verified version
+**Last updated**: 2026-02-28 17:06 EST — Wave E hard-close iteration
 
 ---
 
@@ -395,7 +395,7 @@ Wave D close-out details:
 
 ---
 
-### Wave E — Reconciliation UX + Artifacts 🔶 IN PROGRESS
+### Wave E — Reconciliation UX + Artifacts ✅ COMPLETE
 
 Goal:
 1. Make reconciliation a first-class operator workflow from Dashboard + AGOrg tab.
@@ -407,13 +407,14 @@ Delivered:
 4. Dashboard and AGOrg controls for `Policy Report`, `Reconcile Dry Run`, `Reconcile Apply`.
 5. Contract tests for report/dry-run/apply response shape.
 
-Remaining:
-1. Add explicit winner/loser visualization for duplicate merge decisions in UI prior to apply.
-2. Add report open/view from artifact selectors.
+Completed in hard-close:
+1. Added explicit winner/loser duplicate-resolution visualization in both Dashboard and AGOrg panels.
+2. Added artifact `Open` actions wired to `/api/report/read` from both report selectors.
+3. Extended policy artifact listing response with stable `name` + relative `path` fields for deterministic selector rendering.
 
 Acceptance:
 1. Operator can run report -> dry-run -> apply entirely from UI.
-2. Operator can inspect artifact list and identify latest report deterministically.
+2. Operator can inspect artifact list, open selected artifact, and identify latest report deterministically.
 3. Duplicate merge decisions are visible before mutation.
 
 ---
@@ -658,9 +659,28 @@ Known temporary/bridge components (explicit inventory):
 1. **ArqonBus compatibility shim** (`scripts/arqonbus_shim.sh`) — currently required when frozen ArqonBus checkout is not directly runnable in this workspace.
 2. **UI drag-link interaction note** (`Master Hierarchy` helper text contains `TODO`) — interactive linkage UX is partially implemented and not yet a fully hardened relationship editor.
 
+### Iteration Update (2026-02-28 17:06 EST)
+
+Completed in this iteration:
+
+1. **Wave E UI hard-close delivered**
+   - Dashboard and AGOrg now show duplicate merge winner/loser previews from `report.duplicate_resolutions`.
+   - Policy artifact selectors now support explicit `Open` actions to load report JSON via `/api/report/read`.
+2. **Policy artifact selector contract hardened**
+   - `/api/agorg/policy_reports` now returns stable `name` + relative `path` entries to avoid fragile filename parsing in UI.
+3. **Reconcile response handling unified**
+   - Report, dry-run, and apply handlers now sync duplicate preview panels in both Dashboard and AGOrg surfaces.
+
+Verification completed:
+
+1. `node -c crates/pilot/src/pilot_ui.js` ✅
+2. `cargo check -p pilot --locked` ✅
+3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+4. `./scripts/prepush_gate.sh` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave E hard-close** — finish duplicate winner/loser visualization + artifact open/view from selectors.
-2. **Wave F execution start** — implement branch/dependency conformance checks and classify them in reconcile report.
+1. **Wave F execution start** — implement branch/dependency conformance checks and classify them in reconcile report.
+2. **Wave F API/UI surfacing** — add policy-class filters and per-class counts (`policy_branch`, `policy_dependency`, `metadata`, `topology`) in reconcile output.
 3. **Wave G kickoff** — promote Dashboard to primary AGOrg control center for full reconcile workflow.
 4. **Wave H planning** — explicit burn-down plan for temporary components (shim + linkage TODO) with exit criteria.

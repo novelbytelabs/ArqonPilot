@@ -61,6 +61,7 @@ const agorgDiscoveryOut = document.getElementById('agorg-discovery-out');
 const agorgDiscoveryReview = document.getElementById('agorg-discovery-review');
 const agorgReviewSelect = document.getElementById('agorg-review-select');
 const agorgPolicyReportSelect = document.getElementById('agorg-policy-report-select');
+const agorgDuplicatePreviewOut = document.getElementById('agorg-duplicate-preview-out');
 const codexOut = document.getElementById('codex-out');
 const codexContractsOut = document.getElementById('codex-contracts-out');
 const codexContractSelect = document.getElementById('codex-contract-select');
@@ -77,6 +78,7 @@ const dashOracleChip = document.getElementById('dash-oracle-chip');
 const dashHealChip = document.getElementById('dash-heal-chip');
 const dashAgorgReportSelect = document.getElementById('dash-agorg-report-select');
 const dashAgorgPolicyOut = document.getElementById('dash-agorg-policy-out');
+const dashAgorgDuplicatesOut = document.getElementById('dash-agorg-duplicates-out');
 const dashOracleScanBtn = document.getElementById('dash-oracle-scan-btn');
 const dashOracleQueryBtn = document.getElementById('dash-oracle-query-btn');
 const dashHealPlanBtn = document.getElementById('dash-heal-plan-btn');
@@ -1504,6 +1506,8 @@ async function agorgReconcile() {
   out.textContent = text;
   if (data && data.ok) {
     appendLive({ source: 'agorg_policy', action: 'report', artifact_path: data.artifact_path || '' });
+    if (agorgDuplicatePreviewOut) agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
+    if (dashAgorgDuplicatesOut) dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
     await agorgLoadPolicyReports();
   }
 }
@@ -1522,6 +1526,12 @@ async function agorgReconcileDryRun() {
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
   out.textContent = text;
+  if (agorgDuplicatePreviewOut && data && data.report) {
+    agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
+  }
+  if (dashAgorgDuplicatesOut && data && data.report) {
+    dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
+  }
   appendLive({
     source: 'agorg_policy',
     action: 'dry_run',
@@ -1544,6 +1554,12 @@ async function agorgReconcileApply() {
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
   out.textContent = text;
+  if (agorgDuplicatePreviewOut && data && data.before) {
+    agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.before);
+  }
+  if (dashAgorgDuplicatesOut && data && data.before) {
+    dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.before);
+  }
   appendLive({ source: 'agorg_policy', action: 'apply', ok: !!data.ok, pruned: data.pruned || 0 });
   if (data && data.ok) {
     await agorgTree();
@@ -1565,12 +1581,38 @@ function renderPolicyReportSelect(selectEl, rows) {
   }
   for (const row of items) {
     const path = String(row.path || '');
-    const file = path.split('/').pop() || path;
+    const file = String(row.name || (path.split('/').pop() || path));
     const opt = document.createElement('option');
     opt.value = path;
     opt.textContent = file;
     selectEl.appendChild(opt);
   }
+}
+
+function renderDuplicateResolutionText(report) {
+  const rows = Array.isArray(report && report.duplicate_resolutions)
+    ? report.duplicate_resolutions
+    : [];
+  if (!rows.length) return 'No duplicate merge candidates.';
+  return rows
+    .map((r, i) => {
+      const losers = Array.isArray(r.loser_repo_paths) ? r.loser_repo_paths.join(', ') : '';
+      return `${i + 1}. [${r.kind}] key=${r.key}\n   winner=${r.winner_repo_path}\n   losers=${losers}`;
+    })
+    .join('\n');
+}
+
+async function openReportPath(path, targetEl, fallbackEl) {
+  if (!path) {
+    const msg = JSON.stringify({ ok: false, error: 'No report selected' }, null, 2);
+    if (targetEl) targetEl.textContent = msg;
+    if (fallbackEl) fallbackEl.textContent = msg;
+    return;
+  }
+  const data = await fetchJsonSafe('/api/report/read?path=' + encodeURIComponent(path) + '&max_bytes=200000');
+  const text = JSON.stringify(data, null, 2);
+  if (targetEl) targetEl.textContent = text;
+  if (fallbackEl) fallbackEl.textContent = text;
 }
 
 async function agorgLoadPolicyReports() {
@@ -1583,6 +1625,11 @@ async function agorgLoadPolicyReports() {
   }
   renderPolicyReportSelect(agorgPolicyReportSelect, data.reports);
   renderPolicyReportSelect(dashAgorgReportSelect, data.reports);
+}
+
+async function agorgOpenPolicyReport() {
+  const selected = agorgPolicyReportSelect && agorgPolicyReportSelect.value ? agorgPolicyReportSelect.value : '';
+  await openReportPath(selected, agorgOut, out);
 }
 
 async function agorgLoadReviews() {
@@ -1836,6 +1883,8 @@ async function dashAgorgPolicyReport() {
     const offPolicy = (data.report && Number(data.report.off_policy_count)) || 0;
     setChip(dashDriftChip, 'Drift: ' + (offPolicy > 0 ? 'FAIL' : 'PASS'), offPolicy > 0 ? 'fail' : 'ok');
     appendLive({ source: 'dashboard', action: 'agorg-policy-report', ok: true, artifact_path: data.artifact_path || '' });
+    if (dashAgorgDuplicatesOut) dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
+    if (agorgDuplicatePreviewOut) agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
     await agorgLoadPolicyReports();
   }
 }
@@ -1850,6 +1899,12 @@ async function dashAgorgReconcileDryRun() {
   if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = text;
   out.textContent = text;
   if (dashStatusOut) dashStatusOut.textContent = text;
+  if (dashAgorgDuplicatesOut && data && data.report) {
+    dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
+  }
+  if (agorgDuplicatePreviewOut && data && data.report) {
+    agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
+  }
   appendLive({
     source: 'dashboard',
     action: 'agorg-reconcile-dry-run',
@@ -1868,6 +1923,12 @@ async function dashAgorgReconcileApply() {
   if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = text;
   out.textContent = text;
   if (dashStatusOut) dashStatusOut.textContent = text;
+  if (dashAgorgDuplicatesOut && data && data.before) {
+    dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.before);
+  }
+  if (agorgDuplicatePreviewOut && data && data.before) {
+    agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.before);
+  }
   appendLive({ source: 'dashboard', action: 'agorg-reconcile-apply', ok: !!data.ok, pruned: data.pruned || 0 });
   if (data && data.ok) {
     await agorgTree();
@@ -1881,6 +1942,11 @@ async function dashAgorgPolicyReports() {
   const selected = dashAgorgReportSelect && dashAgorgReportSelect.value ? dashAgorgReportSelect.value : '';
   const payload = { ok: true, selected_artifact: selected || null };
   if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = JSON.stringify(payload, null, 2);
+}
+
+async function dashAgorgPolicyOpen() {
+  const selected = dashAgorgReportSelect && dashAgorgReportSelect.value ? dashAgorgReportSelect.value : '';
+  await openReportPath(selected, dashAgorgPolicyOut, out);
 }
 
 async function dashExportEvidence() {
