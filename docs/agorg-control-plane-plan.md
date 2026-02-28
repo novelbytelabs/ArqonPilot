@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 19:05 EST — Wave G closed, Wave H closed
+**Last updated**: 2026-02-28 19:20 EST — Wave I in progress
 
 ---
 
@@ -547,6 +547,39 @@ Acceptance:
 
 ---
 
+### Wave I — Acceptance Matrix Execution 🔶 IN PROGRESS
+
+Goal:
+
+1. Make wave closure gates executable and auditable from both CLI and Dashboard.
+
+Planned scope:
+
+1. Add wave acceptance matrix runner script with `quick`/`full` profiles.
+2. Add API endpoint to execute matrix and persist artifact.
+3. Add Dashboard controls for running matrix and opening artifact.
+4. Ensure matrix runs are timeline-linked with clear pass/fail semantics.
+
+Delivered so far:
+
+1. Added script:
+   - `scripts/wave_acceptance_matrix.sh --wave I --profile {quick|full}`
+2. Added API endpoint:
+   - `POST /api/system/acceptance_matrix/run`
+3. Added Dashboard `Wave Acceptance Matrix` card:
+   - run matrix
+   - open artifact
+4. Matrix run artifacts now persist under `~/.pilot/reports/acceptance_matrix_wave_i_<profile>_<ts>.json` and emit timeline-linked events.
+
+Acceptance:
+
+1. Operator can execute Wave I matrix from UI and CLI. ✅
+2. Matrix result includes deterministic check list + artifact path. ✅
+3. Matrix run appears in timeline with artifact linkage. ✅
+4. Full-profile matrix should remain green on healthy repo state. ⬜
+
+---
+
 ## Gotcha Reference
 
 All known gotchas are documented in `docs/gotcha-registry.md`. The following are directly relevant to AGOrg development:
@@ -887,9 +920,28 @@ Verification completed:
 3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
 4. `./scripts/prepush_gate.sh` ✅
 
+### Iteration Update (2026-02-28 19:20 EST)
+
+Completed in this iteration:
+
+1. **Wave I acceptance matrix execution path**
+   - Added script `scripts/wave_acceptance_matrix.sh` with quick/full profiles.
+   - Added API endpoint `POST /api/system/acceptance_matrix/run`.
+   - Added Dashboard card + artifact open flow.
+2. **Traceability**
+   - Matrix runs emit timeline events with `artifact_path`.
+
+Verification completed:
+
+1. `./scripts/wave_acceptance_matrix.sh --wave I --profile quick` ✅
+2. `node -c crates/pilot/src/pilot_ui.js` ✅
+3. `cargo check -p pilot --locked` ✅
+4. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+5. `./scripts/prepush_gate.sh` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave I planning** — define next roadmap after temporary-component burn-down closure.
+1. **Wave I hard-close** — run `full` profile from UI/API path and confirm deterministic green baseline.
 2. **Wave I native bus path** — continue reducing shim dependency where frozen fleet permits.
 3. **Wave I hierarchy editor hardening** — add deterministic preview/apply relationship editing UX before drag-link work.
-4. **Wave I acceptance matrix** — lock objective hard-close gates for future waves before implementation.
+4. **Wave J planning** — define next roadmap once Wave I hard-close is complete.

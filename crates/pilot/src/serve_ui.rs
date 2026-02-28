@@ -198,6 +198,12 @@ struct AgorgDashboardOverviewRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct AcceptanceMatrixRequest {
+    wave: Option<String>,
+    profile: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AgorgPreferencesQuery {
     agorg: Option<String>,
 }
@@ -402,6 +408,10 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route(
             "/api/system/temporary_components/checklist",
             get(get_temporary_components_checklist),
+        )
+        .route(
+            "/api/system/acceptance_matrix/run",
+            post(run_acceptance_matrix),
         )
         .route(
             "/api/system/temporary_components/export",
@@ -2978,6 +2988,66 @@ async fn get_temporary_components_checklist() -> Response {
     .into_response()
 }
 
+async fn run_acceptance_matrix(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AcceptanceMatrixRequest>,
+) -> Response {
+    let wave = req.wave.unwrap_or_else(|| "I".to_string());
+    let profile = req.profile.unwrap_or_else(|| "quick".to_string());
+    let cmd = format!(
+        "./scripts/wave_acceptance_matrix.sh --wave {} --profile {}",
+        wave, profile
+    );
+    let (exit_code, stdout, stderr) = match run_local_script(&cmd).await {
+        Ok(v) => v,
+        Err(err) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("acceptance matrix execution failed: {}", err),
+            )
+        }
+    };
+    let parsed: Value = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(err) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!(
+                    "acceptance matrix output was not valid JSON: {}; stderr={}",
+                    err, stderr
+                ),
+            )
+        }
+    };
+    let path = match persist_acceptance_matrix_report(&parsed, &wave, &profile) {
+        Ok(v) => v,
+        Err(err) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to persist acceptance matrix artifact: {}", err),
+            )
+        }
+    };
+    let overall_ok = parsed.get("ok").and_then(Value::as_bool).unwrap_or(false) && exit_code == 0;
+    let _ = state.events.send(json!({
+        "source": "acceptance_matrix",
+        "action": "run",
+        "wave": wave,
+        "profile": profile,
+        "ok": overall_ok,
+        "artifact_path": path
+    }));
+    Json(json!({
+        "ok": overall_ok,
+        "wave": wave,
+        "profile": profile,
+        "exit_code": exit_code,
+        "artifact_path": path,
+        "result": parsed
+    }))
+    .into_response()
+}
+
 async fn export_temporary_components_inventory(State(state): State<Arc<UiState>>) -> Response {
     let payload = match build_temporary_components_payload().await {
         Ok(v) => v,
@@ -3120,6 +3190,15 @@ fn temporary_components_inventory_report_path(ts: &str) -> PathBuf {
     reports_root().join(format!("temporary_components_inventory_{}.json", ts))
 }
 
+fn acceptance_matrix_report_path(ts: &str, wave: &str, profile: &str) -> PathBuf {
+    reports_root().join(format!(
+        "acceptance_matrix_wave_{}_{}_{}.json",
+        wave.to_lowercase(),
+        profile.to_lowercase(),
+        ts
+    ))
+}
+
 fn file_contains_text(path: &str, needle: &str) -> bool {
     fs::read_to_string(path)
         .map(|content| content.contains(needle))
@@ -3158,6 +3237,21 @@ fn persist_agorg_reconcile_action_report(mode: &str, payload: &Value) -> std::io
 
 fn persist_temporary_components_inventory_report(payload: &Value) -> std::io::Result<String> {
     let path = temporary_components_inventory_report_path(&now_stamp());
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let body = serde_json::to_string_pretty(payload)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    fs::write(&path, body)?;
+    Ok(path.display().to_string())
+}
+
+fn persist_acceptance_matrix_report(
+    payload: &Value,
+    wave: &str,
+    profile: &str,
+) -> std::io::Result<String> {
+    let path = acceptance_matrix_report_path(&now_stamp(), wave, profile);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -4040,8 +4134,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
 <body>
 <div class="wrap">
   <div class="hero">
-    <h1>Arqon Pilot Control Panel</h1>
-    <h2 class="muted">The Operating System for Synthetic Life</h2>
+    <h1>Arqon Pilot</h1>
+    <h2 class="muted">Orchestrating Autonomous Evolution</h2>
     <div class="bus-status-row">
       <div class="status-left">
         ArqonBus:
@@ -4147,6 +4241,27 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button class="action-btn" onclick="clearElement('dash-temp-checklist-out')">CLEAR</button>
         </div>
         <pre id="dash-temp-checklist-out">No temporary component checklist run yet.</pre>
+      </div>
+      </div>
+
+      <div class="card">
+        <h3>Wave Acceptance Matrix</h3>
+        <div class="helper">Wave I deterministic closure checks. Runs the acceptance matrix script and persists an artifact.</div>
+        <div class="row">
+          <input id="dash-accept-wave" placeholder="I" value="I" />
+          <select id="dash-accept-profile">
+            <option value="quick">quick</option>
+            <option value="full">full</option>
+          </select>
+          <button class="btn secondary" onclick="dashRunAcceptanceMatrix()">Run Matrix</button>
+        </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="openDashAcceptanceArtifact()">OPEN ARTIFACT</button>
+          <button class="action-btn" onclick="copyToClipboard('dash-acceptance-matrix-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-acceptance-matrix-out')">CLEAR</button>
+        </div>
+        <pre id="dash-acceptance-matrix-out">No acceptance matrix run yet.</pre>
       </div>
       </div>
 

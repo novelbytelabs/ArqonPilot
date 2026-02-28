@@ -86,6 +86,7 @@ const dashAgorgOffpolicyChip = document.getElementById('dash-agorg-offpolicy-chi
 const dashAgorgOverviewOut = document.getElementById('dash-agorg-overview-out');
 const dashTempComponentsOut = document.getElementById('dash-temp-components-out');
 const dashTempChecklistOut = document.getElementById('dash-temp-checklist-out');
+const dashAcceptanceMatrixOut = document.getElementById('dash-acceptance-matrix-out');
 const dashAgorgReportSelect = document.getElementById('dash-agorg-report-select');
 const dashAgorgPolicyOut = document.getElementById('dash-agorg-policy-out');
 const dashAgorgDuplicatesOut = document.getElementById('dash-agorg-duplicates-out');
@@ -2260,6 +2261,36 @@ async function dashExportTemporaryComponents() {
     ok: !!(data && data.ok),
     artifact_path: (data && data.path) ? data.path : ''
   });
+}
+
+async function dashRunAcceptanceMatrix() {
+  const wave = readInputValue('dash-accept-wave') || 'I';
+  const profile = readInputValue('dash-accept-profile') || 'quick';
+  const data = await fetchJsonSafe('/api/system/acceptance_matrix/run', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ wave, profile })
+  });
+  const text = JSON.stringify(data, null, 2);
+  if (dashAcceptanceMatrixOut) dashAcceptanceMatrixOut.textContent = text;
+  out.textContent = text;
+  appendLive({
+    source: 'dashboard',
+    action: 'acceptance-matrix-run',
+    ok: !!(data && data.ok),
+    artifact_path: (data && data.artifact_path) ? data.artifact_path : ''
+  });
+}
+
+async function openDashAcceptanceArtifact() {
+  const path = extractArtifactPathFromJsonText(dashAcceptanceMatrixOut ? dashAcceptanceMatrixOut.textContent : '');
+  if (!path) {
+    const msg = JSON.stringify({ ok: false, error: 'No artifact_path found in acceptance matrix output.' }, null, 2);
+    if (dashAcceptanceMatrixOut) dashAcceptanceMatrixOut.textContent = msg;
+    out.textContent = msg;
+    return;
+  }
+  await openReportPath(path, dashAcceptanceMatrixOut, out);
 }
 
 async function dashAgorgPolicyReport() {

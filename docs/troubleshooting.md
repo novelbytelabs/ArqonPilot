@@ -252,6 +252,14 @@ curl -sS http://127.0.0.1:7788/api/system/temporary_components/checklist | jq
 
 `overall_pass=true` indicates Wave H operational checklist is green.
 
+7. Run Wave acceptance matrix:
+
+```bash
+./scripts/wave_acceptance_matrix.sh --wave I --profile quick | jq
+```
+
+or through UI Dashboard `Wave Acceptance Matrix` card (artifact path returned as `artifact_path`).
+
 ## 4) Command rejected by Bus bridge
 
 The bridge currently only accepts namespaced `pilot.*` commands and strict contract payloads with:
