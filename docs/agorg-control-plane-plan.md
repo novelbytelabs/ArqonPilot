@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 19:20 EST — Wave I in progress
+**Last updated**: 2026-02-28 20:10 EST — Wave I in progress (API parser hardened)
 
 ---
 
@@ -939,9 +939,28 @@ Verification completed:
 4. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
 5. `./scripts/prepush_gate.sh` ✅
 
+### Iteration Update (2026-02-28 20:10 EST)
+
+Completed in this iteration:
+
+1. **Wave I API parser hardening**
+   - `POST /api/system/acceptance_matrix/run` now parses JSON from mixed stdout instead of requiring stdout to be pure JSON.
+   - Added helper `parse_json_from_mixed_output` to tolerate runtime prefix lines before JSON payloads.
+2. **Regression tests added**
+   - `test_parse_json_from_mixed_output_plain_json`
+   - `test_parse_json_from_mixed_output_with_prefix_line`
+3. **Wave I full-profile CLI evidence**
+   - `./scripts/wave_acceptance_matrix.sh --wave I --profile full` reports `ok=true`, `checks=4`, `failed_checks=[]`.
+
+Verification completed:
+
+1. `cargo test -p pilot --locked test_parse_json_from_mixed_output_` ✅
+2. `cargo check -p pilot --locked` ✅
+3. `./scripts/wave_acceptance_matrix.sh --wave I --profile full` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave I hard-close** — run `full` profile from UI/API path and confirm deterministic green baseline.
-2. **Wave I native bus path** — continue reducing shim dependency where frozen fleet permits.
-3. **Wave I hierarchy editor hardening** — add deterministic preview/apply relationship editing UX before drag-link work.
-4. **Wave J planning** — define next roadmap once Wave I hard-close is complete.
+1. **Wave I hard-close (runtime evidence)** — execute full-profile matrix from live UI/API path on the operator host and attach artifact path in timeline evidence.
+2. **Wave I runtime stability** — keep only one `pilot serve` instance active and avoid concurrent matrix/gate runs to prevent lock/process contention.
+3. **Wave I native bus path** — continue reducing shim dependency where frozen fleet permits.
+4. **Wave J planning** — define next roadmap once Wave I hard-close runtime evidence is captured.

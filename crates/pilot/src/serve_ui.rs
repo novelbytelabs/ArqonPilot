@@ -2625,8 +2625,8 @@ mod tests {
         command_requires_multi_selector, command_requires_mutation, command_scope_required,
         dependency_action_requires_cwd_scope, dependency_action_scope_required,
         filter_prune_paths_by_class, is_safe_cli_token, load_persisted_agorg_reviews,
-        load_persisted_codex_contracts, payload_has_multi_selector, with_event_agorg_scope,
-        AgorgReviewRecord, CodexContractRecord,
+        load_persisted_codex_contracts, parse_json_from_mixed_output, payload_has_multi_selector,
+        with_event_agorg_scope, AgorgReviewRecord, CodexContractRecord,
     };
     use crate::agorg::{AgorgReconcileIssue, AgorgReconcileReport};
     use serde_json::{json, Value};
@@ -2881,6 +2881,21 @@ mod tests {
         assert_eq!(out["before"]["off_policy_count"], 1);
         assert_eq!(out["after"]["off_policy_count"], 0);
     }
+
+    #[test]
+    fn test_parse_json_from_mixed_output_plain_json() {
+        let raw = r#"{"ok":true,"checks":[]}"#;
+        let parsed = parse_json_from_mixed_output(raw).unwrap();
+        assert_eq!(parsed["ok"], true);
+    }
+
+    #[test]
+    fn test_parse_json_from_mixed_output_with_prefix_line() {
+        let raw = "cuquantum\n{\n  \"ok\": true,\n  \"checks\": []\n}\n";
+        let parsed = parse_json_from_mixed_output(raw).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert!(parsed["checks"].as_array().is_some());
+    }
 }
 
 async fn get_dependency_logs() -> Response {
@@ -3007,7 +3022,7 @@ async fn run_acceptance_matrix(
             )
         }
     };
-    let parsed: Value = match serde_json::from_str(&stdout) {
+    let parsed: Value = match parse_json_from_mixed_output(&stdout) {
         Ok(v) => v,
         Err(err) => {
             return error_response(
@@ -3244,6 +3259,25 @@ fn persist_temporary_components_inventory_report(payload: &Value) -> std::io::Re
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     fs::write(&path, body)?;
     Ok(path.display().to_string())
+}
+
+fn parse_json_from_mixed_output(stdout: &str) -> Result<Value, serde_json::Error> {
+    if let Ok(v) = serde_json::from_str::<Value>(stdout) {
+        return Ok(v);
+    }
+    if let Some(start) = stdout.find('{') {
+        let tail = &stdout[start..];
+        if let Ok(v) = serde_json::from_str::<Value>(tail) {
+            return Ok(v);
+        }
+        if let Some(end) = tail.rfind('}') {
+            let candidate = &tail[..=end];
+            if let Ok(v) = serde_json::from_str::<Value>(candidate) {
+                return Ok(v);
+            }
+        }
+    }
+    serde_json::from_str(stdout)
 }
 
 fn persist_acceptance_matrix_report(

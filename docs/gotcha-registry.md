@@ -258,6 +258,35 @@ Keep this file current whenever a new failure class appears.
   - default discovery is flat-fleet (nested repos skipped, `archive/` skipped).
   - set `PILOT_AGORG_ALLOW_NESTED_REPOS=1` only when nested-repo discovery is intentionally required.
 
+## G-018: Acceptance Matrix API returns 500 with "output was not valid JSON"
+
+- Signature:
+  - `POST /api/system/acceptance_matrix/run` returns:
+    - `{"error":"acceptance matrix output was not valid JSON ...","ok":false}`
+- Cause:
+  - Script output may include non-JSON prefix lines before JSON payload.
+  - Strict parse of full `stdout` fails even though trailing body is valid JSON.
+- Recovery:
+  1. Ensure parser uses mixed-output extraction path (`parse_json_from_mixed_output`).
+  2. Re-run matrix:
+     - `./scripts/wave_acceptance_matrix.sh --wave I --profile full`
+  3. Confirm:
+     - `ok=true`
+     - `failed_checks=[]`
+
+## G-019: Acceptance matrix/gate appears hung due concurrent stale runs
+
+- Signature:
+  - UI/API matrix call appears to hang indefinitely.
+  - Multiple stale `prepush_gate.sh` / matrix processes are still active.
+- Cause:
+  - Overlapping matrix/gate invocations contend on shared resources and lock state.
+- Recovery:
+  1. Keep a single `pilot serve` instance active.
+  2. Ensure only one matrix/gate run is active at a time.
+  3. If needed, stop stale runs, then re-run one clean command:
+     - `./scripts/wave_acceptance_matrix.sh --wave I --profile full`
+
 ## G-017: AGOrg looks clean but policy drift still exists
 
 - Signature:
