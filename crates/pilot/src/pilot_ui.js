@@ -59,6 +59,7 @@ const agorgActiveDetails = document.getElementById('agorg-active-details');
 const agorgOut = document.getElementById('agorg-out');
 const agorgDiscoveryOut = document.getElementById('agorg-discovery-out');
 const agorgDiscoveryReview = document.getElementById('agorg-discovery-review');
+const agorgReviewSelect = document.getElementById('agorg-review-select');
 const codexOut = document.getElementById('codex-out');
 const codexContractsOut = document.getElementById('codex-contracts-out');
 const codexContractSelect = document.getElementById('codex-contract-select');
@@ -98,6 +99,7 @@ let latestCodexContractId = '';
 let currentTab = 'dashboard';
 let agorgDiscoveryCache = null;
 let agorgApprovedPaths = new Set();
+let currentAgorgReviewId = '';
 
 function activatePanel(tabName) {
   currentTab = tabName;
@@ -850,6 +852,14 @@ async function agorgCreateProject() {
   if (data.discovery) {
     setDiscoveryCache(data.discovery);
   }
+  if (data.review && data.review.review_id) {
+    currentAgorgReviewId = data.review.review_id;
+    if (Array.isArray(data.review.approved_paths)) {
+      agorgApprovedPaths = new Set(data.review.approved_paths);
+    }
+    renderAgorgDiscoveryReview();
+    agorgLoadReviews();
+  }
   if (data.ok && data.agorg && data.agorg.master_path) {
     agorgScanMaster(data.agorg.master_path);
   }
@@ -1159,6 +1169,14 @@ async function agorgDiscover() {
   out.textContent = text;
   if (data.ok && data.discovery) {
     setDiscoveryCache(data.discovery);
+    if (data.review && data.review.review_id) {
+      currentAgorgReviewId = data.review.review_id;
+      if (Array.isArray(data.review.approved_paths)) {
+        agorgApprovedPaths = new Set(data.review.approved_paths);
+      }
+      renderAgorgDiscoveryReview();
+      agorgLoadReviews();
+    }
   }
 }
 
@@ -1168,6 +1186,19 @@ function setDiscoveryCache(discovery) {
   agorgApprovedPaths = new Set(
     candidates.filter(c => c.kind === 'ago').map(c => c.path)
   );
+  currentAgorgReviewId = '';
+  renderAgorgDiscoveryReview();
+}
+
+function setDiscoveryFromReview(review) {
+  if (!review || !Array.isArray(review.candidates)) return;
+  agorgDiscoveryCache = {
+    root: review.root,
+    depth: review.depth,
+    candidates: review.candidates
+  };
+  agorgApprovedPaths = new Set(Array.isArray(review.approved_paths) ? review.approved_paths : []);
+  currentAgorgReviewId = review.review_id || '';
   renderAgorgDiscoveryReview();
 }
 
@@ -1214,8 +1245,8 @@ function agorgSelectAllReview(approve) {
 
 async function getActiveAgorgId() {
   const active = await fetchJsonSafe('/api/agorg/active');
-  if (!active?.ok || !active.agorg?.id) return null;
-  return active.agorg.id;
+  if (!active?.ok || !active.active?.id) return null;
+  return active.active.id;
 }
 
 async function agorgDiscoverPreview() {
@@ -1230,6 +1261,14 @@ async function agorgDiscoverPreview() {
   out.textContent = JSON.stringify(data, null, 2);
   if (data.ok && data.discovery) {
     setDiscoveryCache(data.discovery);
+    if (data.review && data.review.review_id) {
+      currentAgorgReviewId = data.review.review_id;
+      if (Array.isArray(data.review.approved_paths)) {
+        agorgApprovedPaths = new Set(data.review.approved_paths);
+      }
+      renderAgorgDiscoveryReview();
+      agorgLoadReviews();
+    }
   }
 }
 
@@ -1251,7 +1290,8 @@ async function agorgImportApproved() {
     root: agorgDiscoveryCache.root || document.getElementById('agorg-master').value.trim(),
     depth: agorgDiscoveryCache.depth || parseInt(document.getElementById('agorg-depth').value || '4', 10),
     candidates: approved,
-    prune_missing: !!(pruneEl && pruneEl.checked)
+    prune_missing: !!(pruneEl && pruneEl.checked),
+    review_id: currentAgorgReviewId || null
   };
   const data = await fetchJsonSafe('/api/agorg/import_selected', {
     method: 'POST',
@@ -1262,9 +1302,13 @@ async function agorgImportApproved() {
   agorgOut.textContent = text;
   out.textContent = text;
   if (data.ok) {
+    if (data.review && data.review.review_id) {
+      currentAgorgReviewId = data.review.review_id;
+    }
     await agorgTree();
     await agorgList();
     await agorgShowActive();
+    await agorgLoadReviews();
   }
 }
 
@@ -1282,6 +1326,35 @@ async function agorgReconcile() {
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
   out.textContent = text;
+}
+
+async function agorgLoadReviews() {
+  if (!agorgReviewSelect) return;
+  const activeId = await getActiveAgorgId();
+  const q = activeId ? ('?agorg=' + encodeURIComponent(activeId) + '&limit=100') : '?limit=100';
+  const data = await fetchJsonSafe('/api/agorg/reviews' + q);
+  if (!data.ok || !Array.isArray(data.reviews)) {
+    agorgReviewSelect.innerHTML = '';
+    return;
+  }
+  agorgReviewSelect.innerHTML = data.reviews.map((r) => {
+    const ts = new Date((r.updated_at_unix || 0) * 1000).toLocaleString();
+    const label = `${r.status} | ${r.root} | ${ts}`;
+    const selected = (r.review_id === currentAgorgReviewId) ? 'selected' : '';
+    return `<option value="${r.review_id}" ${selected}>${label}</option>`;
+  }).join('');
+}
+
+async function agorgLoadSelectedReview() {
+  if (!agorgReviewSelect || !agorgReviewSelect.value) return;
+  const id = agorgReviewSelect.value;
+  const data = await fetchJsonSafe('/api/agorg/review?review_id=' + encodeURIComponent(id));
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+  if (data.ok && data.review) {
+    setDiscoveryFromReview(data.review);
+  }
 }
 
 async function agorgTree() {

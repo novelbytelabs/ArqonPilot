@@ -112,7 +112,9 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
     - Use `Create AGOrg Project` to define scope + autoscan hierarchy.
     - Use `Discover Preview` to load candidates into the review panel before mutation.
     - Use `Approve All` / `Reject All` and per-row checkboxes in Discovery Review.
+    - Use `Refresh Reviews` / `Load Review` to resume previous review sessions.
     - Use `Import Approved` to import only selected AGO candidates.
+    - Use `Reconcile Report` to detect off-policy paths and metadata drift.
     - Use `List AGOrgs` and `Show Active` to verify current scope.
     - Use `Use Scope` to switch Control Panel context.
     - Use `Discover` to scan a root path with configurable depth.

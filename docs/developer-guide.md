@@ -132,6 +132,7 @@ Core AGOrg commands:
 ./scripts/pilot_local.sh agorg use Arqon
 ./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4
 ./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4 --import-to Arqon --prune-missing
+./scripts/pilot_local.sh agorg reconcile --agorg Arqon
 ./scripts/pilot_local.sh agorg tree
 ./scripts/pilot_local.sh agorg create-project --name Arqon --root /home/irbsurfer/Projects/arqon/Arqon --autoscan --import --prune-missing --default-scope
 ```
@@ -146,8 +147,20 @@ UI review/import flow:
 - In AGOrg panel (`Import Existing`):
   1. `Discover Preview` to fetch candidates.
   2. Approve/reject candidates in `Discovery Review`.
-  3. `Import Approved` to apply selected AGO candidates only.
-  4. Keep `prune stale AGO rows` enabled for deterministic reconciliation.
+  3. `Refresh Reviews` / `Load Review` to resume a prior review session.
+  4. `Import Approved` to apply selected AGO candidates only.
+  5. Keep `prune stale AGO rows` enabled for deterministic reconciliation.
+  6. Run `Reconcile Report` to surface off-policy entries and metadata gaps.
+
+Review artifact:
+- persisted at `~/.pilot/reports/agorg_reviews.jsonl`
+- each entry includes review id, selected approvals, and import summary (if applied).
+
+Scope enforcement (Wave C in progress):
+- UI command bridge now requires an active AGOrg for:
+  - `pilot.branch.*`, `pilot.multi.*`, `pilot.oracle.*`, `pilot.heal.*`, `pilot.navigate.*`
+- Repo-local command families (`branch`, `oracle`, `heal`, `navigate`) are blocked if current working directory is outside active AGOrg root.
+- `pilot.multi.*` calls require explicit `group` or `tags` selector (unfiltered fleet calls are rejected).
 
 ## Critical Linux/Conda Runtime Step
 

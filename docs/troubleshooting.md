@@ -484,3 +484,47 @@ Notes:
 - `--prune-missing` keeps AGO rows aligned with the current discovery result.
 - To intentionally include nested repos in discovery, set:
   - `PILOT_AGORG_ALLOW_NESTED_REPOS=1`
+
+Quick audit command:
+
+```bash
+./scripts/pilot_local.sh agorg reconcile --agorg Arqon
+```
+
+This reports off-policy entries (nested/archive) and metadata gaps (e.g., missing `pyproject.toml`).
+
+## 2.3) Discovery review selections disappear after refresh
+
+Symptoms:
+- You made approve/reject selections in AGOrg Discovery Review.
+- Page reload seems to reset visible selections.
+
+Recovery:
+1. Click `Refresh Reviews`.
+2. Select the latest session in `Saved Review Sessions`.
+3. Click `Load Review` to restore candidate/approval state.
+
+Artifact path:
+- `~/.pilot/reports/agorg_reviews.jsonl`
+
+## 2.4) Scope guard blocks command execution
+
+Symptoms:
+- UI/API returns one of:
+  - `No active AGOrg scope selected`
+  - `Current repo path ... is outside active AGOrg scope`
+  - `Scope guard: multi-repo command requires explicit selector (group or tags)`
+
+Fix:
+1. Set/verify active scope:
+
+```bash
+./scripts/pilot_local.sh agorg show
+./scripts/pilot_local.sh agorg use Arqon
+```
+
+2. For `pilot.multi.*`, always set at least one selector:
+- `group`
+- or `tags`
+
+3. If running repo-local actions (`oracle/heal/branch/navigate`), ensure current directory is within AGOrg root.

@@ -314,44 +314,49 @@ Add new commands/endpoints:
 | Progress feedback (SSE/WS pipe) | ⬜ | No real-time progress events. Fire-and-forget only. |
 | Configurable default destination | ⬜ | Currently hardcoded/browser-picked. No per-AGOrg config. |
 
-#### B.3 — Registration Review/Approval Step 🔶 PARTIAL
+#### B.3 — Registration Review/Approval Step ✅ COMPLETE
 
 | Feature | Status |
 |---------|--------|
 | After Discovery, show preview panel with classification per item | ✅ |
 | Let operator approve/reject before import | ✅ |
-| Persist review decisions/history as artifact | ⬜ |
-| Precursor to full Reconciliation (B.4) | 🔶 |
+| Persist review decisions/history as artifact | ✅ |
+| Resume/replay prior review sessions in UI | ✅ |
+| Precursor to full Reconciliation (B.4) | ✅ |
 
 #### B.4 — Reconciliation 🔶 PARTIAL
 
 | Feature | Status |
 |---------|--------|
 | Duplicate detection | ⬜ |
-| Candidate quality checks | 🔶 |
-| Policy conformance checks | 🔶 |
+| Candidate quality checks | ✅ |
+| Policy conformance checks | ✅ |
 | Reconciliation report artifact | ⬜ |
 
-**Progress note:** discovery now enforces flat-fleet defaults (skips nested repos and `archive/` by default), but this is forward-looking only and does not auto-prune already imported AGO rows.
+**Progress note:** `agorg reconcile` (CLI/API/UI button) now reports off-policy items (nested/archive/missing metadata). Import reconciliation via `--prune-missing` is operational; artifact persistence is the next close-out.
 
 ---
 
-### Wave C — Full Scope Enforcement ⬜ NOT STARTED
+### Wave C — Full Scope Enforcement 🔶 IN PROGRESS
 
 Until this wave is complete, "setting an AGOrg scope" is cosmetic — it changes the Hero badge but does NOT filter what other tabs show.
 
 | Feature | Status |
 |---------|--------|
-| Dashboard operations scoped to active AGOrg repos | ⬜ |
-| Oracle scans only within AGOrg boundary | ⬜ |
-| Heal targets only AGOrg repos | ⬜ |
+| Dashboard operations scoped to active AGOrg repos | 🔶 |
+| Oracle scans only within AGOrg boundary | 🔶 |
+| Heal targets only AGOrg repos | 🔶 |
 | Dependencies checks scoped to AGOrg | ⬜ |
-| Branch operations scoped to AGOrg repos | ⬜ |
-| Multi-repo actions scoped to AGOrg | ⬜ |
+| Branch operations scoped to AGOrg repos | 🔶 |
+| Multi-repo actions scoped to AGOrg | 🔶 |
 | Telemetry stream tagged with AGOrg context | ⬜ |
 | AGOrg link validation blocks circular loops | ✅ (Already done — `link_agorgs` has cycle detection at `agorg.rs:290-311`) |
 
-**Prerequisite**: finish Wave B reconciliation controls so scope enforcement operates on clean AGO sets.
+Current enforcement now active in UI command bridge:
+
+1. Active AGOrg scope required for `pilot.branch.*`, `pilot.multi.*`, `pilot.oracle.*`, `pilot.heal.*`, `pilot.navigate.*`.
+2. CWD boundary guard for repo-local command families (`branch/oracle/heal/navigate`): rejects execution when current repo path is outside active AGOrg root.
+3. Multi command selector guard: rejects unfiltered `pilot.multi.*` calls unless `group` or `tags` are explicitly set.
 
 ---
 
@@ -538,6 +543,20 @@ Conclusion:
 
 1. Reconciliation via import+prune is now operational and deterministic.
 2. Stale AGO rows can be corrected without manual DB edits.
+
+### B.3 Persistence + Replay Evidence Snapshot (2026-02-28)
+
+Implemented:
+
+1. Review sessions persist to `~/.pilot/reports/agorg_reviews.jsonl`.
+2. `Discover Preview` returns a persisted `review_id`.
+3. `Import Approved` updates the same review record with selected approvals and import summary.
+4. AGOrg panel can `Refresh Reviews` and `Load Review` to restore candidate/approval state.
+
+Validation:
+
+1. `serve_ui::tests::test_agorg_review_persistence_roundtrip` passes.
+2. `agorg` CLI and pre-push gate remain green after integration.
 
 ---
 

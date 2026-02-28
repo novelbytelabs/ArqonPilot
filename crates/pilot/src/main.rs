@@ -707,6 +707,8 @@ enum AgorgCommands {
     Tree(AgorgTreeArgs),
     /// Link one AGOrg as child of another (cycle-safe)
     Link(AgorgLinkArgs),
+    /// Run AGOrg reconciliation report
+    Reconcile(AgorgReconcileArgs),
 }
 
 #[derive(Args, Clone)]
@@ -802,6 +804,13 @@ struct AgorgLinkArgs {
     /// Child AGOrg UUID or name
     #[arg(long)]
     child: String,
+}
+
+#[derive(Args, Clone)]
+struct AgorgReconcileArgs {
+    /// Optional AGOrg UUID or name (defaults to active scope)
+    #[arg(long)]
+    agorg: Option<String>,
 }
 
 #[tokio::main]
@@ -2255,6 +2264,9 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Agorg(AgorgArgs {
             command: AgorgCommands::Link(_),
         }) => "agorg.link",
+        Commands::Agorg(AgorgArgs {
+            command: AgorgCommands::Reconcile(_),
+        }) => "agorg.reconcile",
         Commands::Db(DbArgs {
             command: DbCommands::Ensure,
         }) => "db.ensure",
@@ -2501,6 +2513,32 @@ async fn run_agorg(args: &AgorgArgs) -> Result<CommandReport> {
             Ok(CommandReport::ok(
                 "agorg.link",
                 format!("Linked {} -> {}", parent, child),
+            ))
+        }
+        AgorgCommands::Reconcile(args) => {
+            let id = match args.agorg.as_deref() {
+                Some(v) => resolve_agorg_ref(&store, v).await?,
+                None => {
+                    store
+                        .get_active_agorg()
+                        .await?
+                        .ok_or_else(|| {
+                            miette!("No active AGOrg; pass --agorg or set active scope")
+                        })?
+                        .id
+                }
+            };
+            let report = store.reconcile_agorg(id).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).into_diagnostic()?
+            );
+            Ok(CommandReport::ok(
+                "agorg.reconcile",
+                format!(
+                    "Reconciled AGOrg {} (issues={}, off_policy={})",
+                    report.agorg_id, report.issue_count, report.off_policy_count
+                ),
             ))
         }
     }

@@ -45,6 +45,8 @@ struct UiState {
     allowed_commands: Option<HashSet<String>>,
     codex_contracts: Arc<Mutex<HashMap<String, CodexContractRecord>>>,
     codex_contracts_log: PathBuf,
+    agorg_reviews: Arc<Mutex<HashMap<String, AgorgReviewRecord>>>,
+    agorg_reviews_log: PathBuf,
     agorg_store: AgorgStore,
 }
 
@@ -152,11 +154,23 @@ struct AgorgImportSelectedRequest {
     depth: Option<usize>,
     candidates: Vec<agorg::DiscoverCandidate>,
     prune_missing: Option<bool>,
+    review_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct AgorgReconcileRequest {
     agorg: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgReviewsQuery {
+    limit: Option<usize>,
+    agorg: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgReviewQuery {
+    review_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -240,11 +254,28 @@ struct CodexContractRecord {
     updated_at_unix: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AgorgReviewRecord {
+    review_id: String,
+    status: String,
+    agorg_id: Option<String>,
+    root: String,
+    depth: usize,
+    prune_missing: bool,
+    candidates: Vec<agorg::DiscoverCandidate>,
+    approved_paths: Vec<String>,
+    imported_summary: Option<agorg::ImportDiscoverySummary>,
+    created_at_unix: u64,
+    updated_at_unix: u64,
+}
+
 pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
     let (event_tx, _) = broadcast::channel(512);
     spawn_bus_telemetry_listener(cfg.bus.clone(), event_tx.clone());
     let codex_contracts_log = codex_contracts_log_path();
     let contract_seed = load_persisted_codex_contracts(&codex_contracts_log).unwrap_or_default();
+    let agorg_reviews_log = agorg_reviews_log_path();
+    let agorg_review_seed = load_persisted_agorg_reviews(&agorg_reviews_log).unwrap_or_default();
     let agorg_store = AgorgStore::from_env();
     if let Err(e) = agorg_store.initialize().await {
         eprintln!(
@@ -259,6 +290,8 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         allowed_commands: cfg.allowed_commands,
         codex_contracts: Arc::new(Mutex::new(contract_seed)),
         codex_contracts_log,
+        agorg_reviews: Arc::new(Mutex::new(agorg_review_seed)),
+        agorg_reviews_log,
         agorg_store,
     });
 
@@ -291,6 +324,8 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
             "/api/agorg/import_selected",
             post(api_agorg_import_selected),
         )
+        .route("/api/agorg/reviews", get(get_agorg_reviews))
+        .route("/api/agorg/review", get(get_agorg_review))
         .route("/api/agorg/reconcile", post(api_agorg_reconcile))
         .route("/api/agorg/tree", get(api_agorg_tree))
         .route("/api/agorg/link", post(api_agorg_link))
@@ -350,6 +385,56 @@ async fn run_command(
 
     if req.payload.get("schema_version").is_none() {
         req.payload["schema_version"] = json!(1);
+    }
+
+    if command_scope_required(&req.command) {
+        let active_scope = match state.agorg_store.get_active_agorg().await {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        };
+        let Some(scope) = active_scope else {
+            return error_response(
+                StatusCode::PRECONDITION_FAILED,
+                "No active AGOrg scope selected. Set AGOrg scope before running this command.",
+            );
+        };
+        req.payload["agorg_scope"] = json!({
+            "id": scope.id.to_string(),
+            "name": scope.name,
+            "root_path": scope.root_path
+        });
+
+        if command_requires_cwd_scope(&req.command) {
+            let cwd = match std::env::current_dir() {
+                Ok(v) => canonicalize_path_lossy(&v),
+                Err(err) => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        &format!("Cannot resolve current working directory: {err}"),
+                    )
+                }
+            };
+            let scope_root = canonicalize_path_lossy(Path::new(&scope.root_path));
+            if !path_is_within(&cwd, &scope_root) {
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    &format!(
+                        "Current repo path '{}' is outside active AGOrg scope '{}'",
+                        cwd.display(),
+                        scope_root.display()
+                    ),
+                );
+            }
+        }
+
+        if command_requires_multi_selector(&req.command)
+            && !payload_has_multi_selector(&req.payload)
+        {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "Scope guard: multi-repo command requires explicit selector (group or tags).",
+            );
+        }
     }
 
     if let Some(allowlist) = &state.allowed_commands {
@@ -461,6 +546,44 @@ async fn get_codex_contract(
         return error_response(StatusCode::NOT_FOUND, "contract_id not found");
     };
     Json(json!({"ok": true, "contract": contract})).into_response()
+}
+
+async fn get_agorg_reviews(
+    State(state): State<Arc<UiState>>,
+    Query(q): Query<AgorgReviewsQuery>,
+) -> Response {
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let agorg_filter = q.agorg.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let reviews = state.agorg_reviews.lock().await;
+    let mut items: Vec<AgorgReviewRecord> = reviews
+        .values()
+        .filter(|r| {
+            if let Some(target) = agorg_filter {
+                r.agorg_id.as_deref() == Some(target)
+            } else {
+                true
+            }
+        })
+        .cloned()
+        .collect();
+    items.sort_by(|a, b| b.updated_at_unix.cmp(&a.updated_at_unix));
+    items.truncate(limit);
+    Json(json!({"ok": true, "reviews": items})).into_response()
+}
+
+async fn get_agorg_review(
+    State(state): State<Arc<UiState>>,
+    Query(q): Query<AgorgReviewQuery>,
+) -> Response {
+    let id = q.review_id.trim();
+    if id.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "review_id is required");
+    }
+    let reviews = state.agorg_reviews.lock().await;
+    let Some(review) = reviews.get(id) else {
+        return error_response(StatusCode::NOT_FOUND, "review_id not found");
+    };
+    Json(json!({"ok": true, "review": review})).into_response()
 }
 
 async fn api_agorg_list(State(state): State<Arc<UiState>>) -> Response {
@@ -592,11 +715,36 @@ async fn api_agorg_discover(
         Ok(v) => v,
         Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
     };
+    let review_id = new_agorg_review_id();
+    let mut review_record = AgorgReviewRecord {
+        review_id: review_id.clone(),
+        status: if req.import_to.is_some() {
+            "imported".to_string()
+        } else {
+            "previewed".to_string()
+        },
+        agorg_id: None,
+        root: scan.root.clone(),
+        depth: scan.depth,
+        prune_missing: req.prune_missing.unwrap_or(false),
+        candidates: scan.candidates.clone(),
+        approved_paths: scan
+            .candidates
+            .iter()
+            .filter(|c| c.kind == "ago")
+            .map(|c| c.path.clone())
+            .collect(),
+        imported_summary: None,
+        created_at_unix: now_unix(),
+        updated_at_unix: now_unix(),
+    };
+
     if let Some(target) = req.import_to.as_deref() {
         let id = match resolve_agorg_ref(&state.agorg_store, target.trim()).await {
             Ok(v) => v,
             Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
         };
+        review_record.agorg_id = Some(id.to_string());
         let prune_missing = req.prune_missing.unwrap_or(false);
         match state
             .agorg_store
@@ -604,13 +752,37 @@ async fn api_agorg_discover(
             .await
         {
             Ok(summary) => {
-                return Json(json!({"ok": true, "discovery": scan, "import_summary": summary}))
-                    .into_response();
+                review_record.imported_summary = Some(summary.clone());
+                if let Err(err) =
+                    upsert_agorg_review(&state, review_record.clone(), Some("imported")).await
+                {
+                    let _ = state.events.send(json!({
+                        "source": "agorg_review",
+                        "phase": "persist_warning",
+                        "review_id": review_record.review_id,
+                        "error": err.to_string()
+                    }));
+                }
+                return Json(json!({
+                    "ok": true,
+                    "discovery": scan,
+                    "import_summary": summary,
+                    "review": review_record
+                }))
+                .into_response();
             }
             Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
         };
     }
-    Json(json!({"ok": true, "discovery": scan})).into_response()
+    if let Err(err) = upsert_agorg_review(&state, review_record.clone(), Some("previewed")).await {
+        let _ = state.events.send(json!({
+            "source": "agorg_review",
+            "phase": "persist_warning",
+            "review_id": review_record.review_id,
+            "error": err.to_string()
+        }));
+    }
+    Json(json!({"ok": true, "discovery": scan, "review": review_record})).into_response()
 }
 
 async fn api_agorg_import_selected(
@@ -633,7 +805,35 @@ async fn api_agorg_import_selected(
         .await
     {
         Ok(summary) => {
-            Json(json!({"ok": true, "agorg_id": id, "import_summary": summary})).into_response()
+            let approved_paths: Vec<String> = discovery
+                .candidates
+                .iter()
+                .filter(|c| c.kind == "ago")
+                .map(|c| c.path.clone())
+                .collect();
+            let review_record = AgorgReviewRecord {
+                review_id: req.review_id.clone().unwrap_or_else(new_agorg_review_id),
+                status: "imported".to_string(),
+                agorg_id: Some(id.to_string()),
+                root: discovery.root.clone(),
+                depth: discovery.depth,
+                prune_missing,
+                candidates: discovery.candidates.clone(),
+                approved_paths,
+                imported_summary: Some(summary.clone()),
+                created_at_unix: now_unix(),
+                updated_at_unix: now_unix(),
+            };
+            if let Err(err) = upsert_agorg_review(&state, review_record.clone(), None).await {
+                let _ = state.events.send(json!({
+                    "source": "agorg_review",
+                    "phase": "persist_warning",
+                    "review_id": review_record.review_id,
+                    "error": err.to_string()
+                }));
+            }
+            Json(json!({"ok": true, "agorg_id": id, "import_summary": summary, "review": review_record}))
+                .into_response()
         }
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
     }
@@ -1743,8 +1943,20 @@ fn new_codex_contract_id() -> String {
     format!("codex-{}", nanos)
 }
 
+fn new_agorg_review_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("agorg-review-{}", nanos)
+}
+
 fn codex_contracts_log_path() -> PathBuf {
     reports_root().join("codex_contracts.jsonl")
+}
+
+fn agorg_reviews_log_path() -> PathBuf {
+    reports_root().join("agorg_reviews.jsonl")
 }
 
 fn append_codex_contract_record(
@@ -1792,6 +2004,65 @@ fn load_persisted_codex_contracts(
     Ok(contracts)
 }
 
+fn append_agorg_review_record(path: &PathBuf, record: &AgorgReviewRecord) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    let line = serde_json::to_string(record)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    writeln!(file, "{}", line)?;
+    Ok(())
+}
+
+fn load_persisted_agorg_reviews(
+    path: &PathBuf,
+) -> std::io::Result<HashMap<String, AgorgReviewRecord>> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    let file = OpenOptions::new().read(true).open(path)?;
+    let reader = BufReader::new(file);
+    let mut reviews = HashMap::new();
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Result<AgorgReviewRecord> = serde_json::from_str(trimmed);
+        if let Ok(record) = parsed {
+            let replace = reviews
+                .get(&record.review_id)
+                .map(|current: &AgorgReviewRecord| {
+                    current.updated_at_unix <= record.updated_at_unix
+                })
+                .unwrap_or(true);
+            if replace {
+                reviews.insert(record.review_id.clone(), record);
+            }
+        }
+    }
+    Ok(reviews)
+}
+
+async fn upsert_agorg_review(
+    state: &Arc<UiState>,
+    mut record: AgorgReviewRecord,
+    set_status: Option<&str>,
+) -> std::io::Result<()> {
+    let mut reviews = state.agorg_reviews.lock().await;
+    if let Some(existing) = reviews.get(&record.review_id).cloned() {
+        record.created_at_unix = existing.created_at_unix;
+    }
+    if let Some(status) = set_status {
+        record.status = status.to_string();
+    }
+    record.updated_at_unix = now_unix();
+    reviews.insert(record.review_id.clone(), record.clone());
+    append_agorg_review_record(&state.agorg_reviews_log, &record)
+}
+
 fn is_safe_cli_token(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
@@ -1801,8 +2072,10 @@ fn is_safe_cli_token(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_codex_contract_record, is_safe_cli_token, load_persisted_codex_contracts,
-        CodexContractRecord,
+        append_agorg_review_record, append_codex_contract_record, command_requires_cwd_scope,
+        command_requires_multi_selector, command_scope_required, is_safe_cli_token,
+        load_persisted_agorg_reviews, load_persisted_codex_contracts, payload_has_multi_selector,
+        AgorgReviewRecord, CodexContractRecord,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -1819,6 +2092,32 @@ mod tests {
         assert!(!is_safe_cli_token("main;rm -rf /"));
         assert!(!is_safe_cli_token("origin && whoami"));
         assert!(!is_safe_cli_token("bad token"));
+    }
+
+    #[test]
+    fn test_scope_command_classification() {
+        assert!(command_scope_required("pilot.multi.status"));
+        assert!(command_scope_required("pilot.branch.create"));
+        assert!(command_scope_required("pilot.oracle.scan"));
+        assert!(!command_scope_required("pilot.know.record"));
+
+        assert!(command_requires_cwd_scope("pilot.branch.status"));
+        assert!(command_requires_cwd_scope("pilot.oracle.query"));
+        assert!(!command_requires_cwd_scope("pilot.multi.status"));
+
+        assert!(command_requires_multi_selector("pilot.multi.apply"));
+        assert!(!command_requires_multi_selector("pilot.branch.create"));
+    }
+
+    #[test]
+    fn test_payload_multi_selector() {
+        assert!(!payload_has_multi_selector(&json!({})));
+        assert!(!payload_has_multi_selector(&json!({"group": ""})));
+        assert!(!payload_has_multi_selector(&json!({"tags": []})));
+        assert!(payload_has_multi_selector(&json!({"group": "core"})));
+        assert!(payload_has_multi_selector(
+            &json!({"tags": ["apply-pilot"]})
+        ));
     }
 
     #[test]
@@ -1862,6 +2161,44 @@ mod tests {
             load_persisted_codex_contracts(&path).unwrap();
         let got = loaded.get("codex-1").unwrap();
         assert_eq!(got.status, "executed");
+        assert_eq!(got.updated_at_unix, 3);
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_agorg_review_persistence_roundtrip() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("pilot_agorg_review_test_{}", nanos));
+        fs::create_dir_all(&base).unwrap();
+        let path = base.join("agorg_reviews.jsonl");
+
+        let r1 = AgorgReviewRecord {
+            review_id: "agorg-review-1".to_string(),
+            status: "previewed".to_string(),
+            agorg_id: Some("ag-1".to_string()),
+            root: "/tmp/root".to_string(),
+            depth: 4,
+            prune_missing: true,
+            candidates: vec![],
+            approved_paths: vec!["/tmp/root/repo-a".to_string()],
+            imported_summary: None,
+            created_at_unix: 1,
+            updated_at_unix: 1,
+        };
+        let mut r2 = r1.clone();
+        r2.status = "imported".to_string();
+        r2.updated_at_unix = 3;
+
+        append_agorg_review_record(&path, &r1).unwrap();
+        append_agorg_review_record(&path, &r2).unwrap();
+
+        let loaded = load_persisted_agorg_reviews(&path).unwrap();
+        let got = loaded.get("agorg-review-1").unwrap();
+        assert_eq!(got.status, "imported");
         assert_eq!(got.updated_at_unix, 3);
 
         let _ = fs::remove_dir_all(base);
@@ -2190,6 +2527,51 @@ fn command_requires_mutation(command: &str, payload: &Value) -> bool {
         | "pilot.multi.prs.create" => !payload_truthy_bool(payload, "dry_run"),
         _ => is_mutating_command(command),
     }
+}
+
+fn command_scope_required(command: &str) -> bool {
+    command.starts_with("pilot.branch.")
+        || command.starts_with("pilot.multi.")
+        || command.starts_with("pilot.oracle.")
+        || command.starts_with("pilot.heal.")
+        || command.starts_with("pilot.navigate.")
+}
+
+fn command_requires_cwd_scope(command: &str) -> bool {
+    command.starts_with("pilot.branch.")
+        || command.starts_with("pilot.oracle.")
+        || command.starts_with("pilot.heal.")
+        || command.starts_with("pilot.navigate.")
+}
+
+fn command_requires_multi_selector(command: &str) -> bool {
+    command.starts_with("pilot.multi.")
+}
+
+fn payload_has_multi_selector(payload: &Value) -> bool {
+    let group_ok = payload
+        .get("group")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let tags_ok = payload
+        .get("tags")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str())
+                .any(|s| !s.trim().is_empty())
+        })
+        .unwrap_or(false);
+    group_ok || tags_ok
+}
+
+fn canonicalize_path_lossy(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn path_is_within(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
 }
 
 fn enforce_dry_run(command: &str, payload: &mut Value) {
@@ -3219,7 +3601,11 @@ Recommended flow:
           <div class="row">
             <button class="btn secondary" onclick="agorgSelectAllReview(true)">Approve All</button>
             <button class="btn secondary" onclick="agorgSelectAllReview(false)">Reject All</button>
+            <button class="btn secondary" onclick="agorgLoadReviews()">Refresh Reviews</button>
+            <button class="btn secondary" onclick="agorgLoadSelectedReview()">Load Review</button>
           </div>
+          <label class="field-label" for="agorg-review-select">Saved Review Sessions</label>
+          <select id="agorg-review-select"></select>
           <div class="helper">Only approved AGO candidates are imported by `Import Approved`.</div>
           <div id="agorg-discovery-review" class="timeline" style="max-height: 320px; overflow-y: auto; padding: 8px; border: 1px solid #2d426c; border-radius: 10px; background: rgba(0,0,0,0.2);">
             <div class="tl-empty">Run Discover Preview to populate candidates.</div>

@@ -244,6 +244,31 @@ Keep this file current whenever a new failure class appears.
   - default discovery is flat-fleet (nested repos skipped, `archive/` skipped).
   - set `PILOT_AGORG_ALLOW_NESTED_REPOS=1` only when nested-repo discovery is intentionally required.
 
+## G-017: AGOrg looks clean but policy drift still exists
+
+- Signature:
+  - Discovery/import succeeds, but downstream operations still fail scope expectations.
+  - Hidden issues include missing `pyproject.toml` or legacy off-policy entries.
+- Recovery:
+  1. Run:
+     - `./scripts/pilot_local.sh agorg reconcile --agorg Arqon`
+  2. Fix reported issues (or prune/reimport for off-policy paths).
+  3. Re-run reconcile until issue count is acceptable.
+
+## G-018: Scope guard rejects command as unscoped
+
+- Signature:
+  - `No active AGOrg scope selected`
+  - `Current repo path ... is outside active AGOrg scope`
+  - `Scope guard: multi-repo command requires explicit selector (group or tags)`
+- Cause:
+  - command family now enforces AGOrg scope and selector requirements.
+- Recovery:
+  1. Set active AGOrg:
+     - `./scripts/pilot_local.sh agorg use <id-or-name>`
+  2. Ensure current repo path is under AGOrg root for repo-local commands.
+  3. For `pilot.multi.*`, set `group` and/or `tags` in UI/CLI payload.
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`

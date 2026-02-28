@@ -12,7 +12,8 @@ fn test_agorg_help_surface() -> Result<(), Box<dyn std::error::Error>> {
         .stdout(predicates::str::contains("create-project"))
         .stdout(predicates::str::contains("discover"))
         .stdout(predicates::str::contains("tree"))
-        .stdout(predicates::str::contains("link"));
+        .stdout(predicates::str::contains("link"))
+        .stdout(predicates::str::contains("reconcile"));
 
     Ok(())
 }
