@@ -85,6 +85,7 @@ const dashAgorgIssuesChip = document.getElementById('dash-agorg-issues-chip');
 const dashAgorgOffpolicyChip = document.getElementById('dash-agorg-offpolicy-chip');
 const dashAgorgOverviewOut = document.getElementById('dash-agorg-overview-out');
 const dashTempComponentsOut = document.getElementById('dash-temp-components-out');
+const dashTempChecklistOut = document.getElementById('dash-temp-checklist-out');
 const dashAgorgReportSelect = document.getElementById('dash-agorg-report-select');
 const dashAgorgPolicyOut = document.getElementById('dash-agorg-policy-out');
 const dashAgorgDuplicatesOut = document.getElementById('dash-agorg-duplicates-out');
@@ -2229,6 +2230,21 @@ async function dashRefreshTemporaryComponents() {
   }
 }
 
+async function dashRunTemporaryChecklist() {
+  const data = await fetchJsonSafe('/api/system/temporary_components/checklist');
+  const text = JSON.stringify(data, null, 2);
+  if (dashTempChecklistOut) dashTempChecklistOut.textContent = text;
+  if (data && data.ok) {
+    const pass = !!data.overall_pass;
+    appendLive({
+      source: 'dashboard',
+      action: 'temporary-components-checklist',
+      ok: pass,
+      summary: pass ? 'all required checklist items passed' : 'one or more required checklist items failed'
+    });
+  }
+}
+
 async function dashExportTemporaryComponents() {
   const data = await fetchJsonSafe('/api/system/temporary_components/export', {
     method: 'POST',
@@ -2539,6 +2555,7 @@ async function bootUi() {
   await depRun('services-status');
   await refreshAgorgHeader();
   await dashRefreshTemporaryComponents();
+  await dashRunTemporaryChecklist();
   await agorgLoadPolicyReports();
   await codexLoadContracts();
   setInterval(loadHistory, 30000);

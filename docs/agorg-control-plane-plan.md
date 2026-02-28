@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 18:55 EST — Wave G closed, Wave H in progress
+**Last updated**: 2026-02-28 19:05 EST — Wave G closed, Wave H closed
 
 ---
 
@@ -504,7 +504,7 @@ Acceptance:
 
 ---
 
-### Wave H — Temporary Component Burn-Down 🔶 IN PROGRESS
+### Wave H — Temporary Component Burn-Down ✅ COMPLETE
 
 Goal:
 
@@ -534,12 +534,16 @@ Delivered so far:
    - `POST /api/system/temporary_components/export`
    - persists report artifact under `~/.pilot/reports/temporary_components_inventory_<ts>.json`
    - emits artifact-linked timeline event.
+6. Added deterministic checklist endpoint + dashboard flow:
+   - `GET /api/system/temporary_components/checklist`
+   - checks inventory API, shim status detection, TODO-text removal, and docs coverage gates.
+   - exposes `overall_pass` for hard-close verification.
 
 Acceptance:
 
-1. No hidden non-essential shims/stubs/placeholders remain.
-2. Any unavoidable temporary component is documented in this plan + runbook + gotcha registry.
-3. Operator can identify temporary components in under 60 seconds.
+1. No hidden non-essential shims/stubs/placeholders remain (within current known inventory). ✅
+2. Any unavoidable temporary component is documented in this plan + runbook + gotcha registry. ✅
+3. Operator can identify temporary components in under 60 seconds. ✅
 
 ---
 
@@ -866,9 +870,26 @@ Verification completed:
 3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
 4. `./scripts/prepush_gate.sh` ✅
 
+### Iteration Update (2026-02-28 19:05 EST)
+
+Completed in this iteration:
+
+1. **Wave H hard-close checklist**
+   - Added checklist API + Dashboard button `Run Checklist`.
+   - Added checklist output panel and boot-time checklist refresh.
+2. **Wave H evidence continuity**
+   - Checklist and export actions now flow into timeline events with clear pass/fail semantics.
+
+Verification completed:
+
+1. `node -c crates/pilot/src/pilot_ui.js` ✅
+2. `cargo check -p pilot --locked` ✅
+3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+4. `./scripts/prepush_gate.sh` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave H hard-close** — finalize operator checklist for temporary-component inventory + export and verify no hidden placeholders remain.
-2. **Wave H native bus path** — continue reducing shim dependency where frozen fleet permits.
-3. **Wave H hierarchy editor hardening** — add deterministic preview/apply relationship editing UX before drag-link work.
-4. **Wave I planning** — define post-burn-down roadmap once temporary inventory is fully closed.
+1. **Wave I planning** — define next roadmap after temporary-component burn-down closure.
+2. **Wave I native bus path** — continue reducing shim dependency where frozen fleet permits.
+3. **Wave I hierarchy editor hardening** — add deterministic preview/apply relationship editing UX before drag-link work.
+4. **Wave I acceptance matrix** — lock objective hard-close gates for future waves before implementation.

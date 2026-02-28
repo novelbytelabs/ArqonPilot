@@ -72,6 +72,7 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
     - Oracle + Heal quick actions for fast triage and plan/repair loops.
     - Branch + Multi quick actions for cohort branch and status operations.
     - Temporary Components Inventory shows active bridge/shim state and exit criteria (`Refresh Inventory`).
+    - Use `Run Checklist` for deterministic Wave H pass/fail gates.
     - Use `Export Inventory Artifact` to persist temporary-component evidence under `~/.pilot/reports/`.
     - Follow the in-panel `Recommended Sequence` strips:
       - Dashboard: `Status -> Bus Health -> Oracle Query -> Heal Plan -> Heal Run -> Push Safe`

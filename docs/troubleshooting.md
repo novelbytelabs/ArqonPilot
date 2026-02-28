@@ -244,6 +244,14 @@ curl -sS -X POST http://127.0.0.1:7788/api/system/temporary_components/export | 
 
 Artifact path is returned as `path` and appears in timeline-linked event output.
 
+6. Run temporary-component checklist:
+
+```bash
+curl -sS http://127.0.0.1:7788/api/system/temporary_components/checklist | jq
+```
+
+`overall_pass=true` indicates Wave H operational checklist is green.
+
 ## 4) Command rejected by Bus bridge
 
 The bridge currently only accepts namespaced `pilot.*` commands and strict contract payloads with:

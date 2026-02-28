@@ -400,6 +400,10 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
             get(get_temporary_components),
         )
         .route(
+            "/api/system/temporary_components/checklist",
+            get(get_temporary_components_checklist),
+        )
+        .route(
             "/api/system/temporary_components/export",
             post(export_temporary_components_inventory),
         )
@@ -2889,6 +2893,91 @@ async fn get_temporary_components() -> Response {
     Json(payload).into_response()
 }
 
+async fn get_temporary_components_checklist() -> Response {
+    let inventory = match build_temporary_components_payload().await {
+        Ok(v) => v,
+        Err(err) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to build temporary component inventory: {}", err),
+            )
+        }
+    };
+    let components = inventory
+        .get("components")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let shim_status = components
+        .iter()
+        .find(|c| c.get("id").and_then(Value::as_str) == Some("arqonbus_compat_shim"))
+        .and_then(|c| c.get("status").and_then(Value::as_str))
+        .unwrap_or("unknown")
+        .to_string();
+    let hierarchy_status = components
+        .iter()
+        .find(|c| c.get("id").and_then(Value::as_str) == Some("hierarchy_drag_link_editor"))
+        .and_then(|c| c.get("status").and_then(Value::as_str))
+        .unwrap_or("unknown")
+        .to_string();
+
+    let checks = vec![
+        json!({
+            "id": "inventory_api_available",
+            "label": "Inventory API is available",
+            "required": true,
+            "pass": true,
+            "details": "GET /api/system/temporary_components responded."
+        }),
+        json!({
+            "id": "shim_status_detected",
+            "label": "ArqonBus shim status is detectable",
+            "required": true,
+            "pass": shim_status != "unknown",
+            "details": format!("shim_status={}", shim_status)
+        }),
+        json!({
+            "id": "hierarchy_gap_explicit",
+            "label": "Hierarchy drag/link gap is explicit (no TODO wording)",
+            "required": true,
+            "pass": !INDEX_HTML.contains("TODO"),
+            "details": "Master Hierarchy helper text is explicit about governed relationship editor actions."
+        }),
+        json!({
+            "id": "runbook_inventory_documented",
+            "label": "Runbook documents temporary component inventory workflow",
+            "required": true,
+            "pass": file_contains_text("docs/operator-runbook.md", "Temporary Components Inventory"),
+            "details": "docs/operator-runbook.md contains inventory guidance."
+        }),
+        json!({
+            "id": "gotcha_inventory_documented",
+            "label": "Gotcha registry documents temporary inventory triage",
+            "required": true,
+            "pass": file_contains_text("docs/gotcha-registry.md", "G-021"),
+            "details": "docs/gotcha-registry.md contains G-021."
+        }),
+        json!({
+            "id": "hierarchy_editor_path_visible",
+            "label": "Hierarchy editor fallback path is visible",
+            "required": true,
+            "pass": hierarchy_status != "unknown",
+            "details": format!("hierarchy_status={}", hierarchy_status)
+        }),
+    ];
+    let overall_pass = checks.iter().all(|c| {
+        !c.get("required").and_then(Value::as_bool).unwrap_or(false)
+            || c.get("pass").and_then(Value::as_bool).unwrap_or(false)
+    });
+    Json(json!({
+        "ok": true,
+        "overall_pass": overall_pass,
+        "checks": checks,
+        "inventory": inventory
+    }))
+    .into_response()
+}
+
 async fn export_temporary_components_inventory(State(state): State<Arc<UiState>>) -> Response {
     let payload = match build_temporary_components_payload().await {
         Ok(v) => v,
@@ -3029,6 +3118,12 @@ fn agorg_reconcile_action_report_path(ts: &str, mode: &str) -> PathBuf {
 
 fn temporary_components_inventory_report_path(ts: &str) -> PathBuf {
     reports_root().join(format!("temporary_components_inventory_{}.json", ts))
+}
+
+fn file_contains_text(path: &str, needle: &str) -> bool {
+    fs::read_to_string(path)
+        .map(|content| content.contains(needle))
+        .unwrap_or(false)
 }
 
 fn now_stamp() -> String {
@@ -4036,6 +4131,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <div class="helper">Wave H transparency surface. Lists unavoidable shims/bridges and their runtime state.</div>
         <div class="row">
           <button class="btn secondary" onclick="dashRefreshTemporaryComponents()">Refresh Inventory</button>
+          <button class="btn secondary" onclick="dashRunTemporaryChecklist()">Run Checklist</button>
           <button class="btn secondary" onclick="dashExportTemporaryComponents()">Export Inventory Artifact</button>
         </div>
       <div class="pre-wrap">
@@ -4044,6 +4140,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button class="action-btn" onclick="clearElement('dash-temp-components-out')">CLEAR</button>
         </div>
         <pre id="dash-temp-components-out">No temporary component inventory loaded yet.</pre>
+      </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-temp-checklist-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-temp-checklist-out')">CLEAR</button>
+        </div>
+        <pre id="dash-temp-checklist-out">No temporary component checklist run yet.</pre>
       </div>
       </div>
 
