@@ -257,7 +257,7 @@ Add new commands/endpoints:
 
 ---
 
-## Rollout Waves — Audit-Verified Status (2026-02-27)
+## Rollout Waves — Audit-Verified Status (2026-02-28)
 
 ### Wave A — Foundation ✅ COMPLETE
 
@@ -273,7 +273,7 @@ Add new commands/endpoints:
 
 ---
 
-### Wave B — CRUD + Discovery 🔶 IN PROGRESS (~80%)
+### Wave B — CRUD + Discovery 🔶 IN PROGRESS (~90%)
 
 #### B.1 — Import Existing Ecosystem (PRIMARY PATH)
 
@@ -328,11 +328,12 @@ Add new commands/endpoints:
 
 | Feature | Status |
 |---------|--------|
-| Duplicate detection | ⬜ |
+| Duplicate detection | ✅ |
 | Candidate quality checks | ✅ |
 | Policy conformance checks | ✅ |
 | Reconciliation report artifact | ✅ |
 | Reconciliation apply (dry-run + apply) | ✅ |
+| UI duplicate resolution controls (winner/loser preview) | ⬜ |
 
 **Progress note:** `agorg reconcile` (CLI/API/UI) reports off-policy items. UI/API now support:
 1. `POST /api/agorg/policy_report` (persisted artifact in `~/.pilot/reports/agorg_policy_report_<ts>.json`)
@@ -340,7 +341,7 @@ Add new commands/endpoints:
 3. `POST /api/agorg/reconcile_apply` (dry-run preview or mutation apply)
 4. Dashboard + AGOrg panel controls for report/dry-run/apply.
 
-Remaining B.4 close-out is duplicate-name/path merge heuristics; prune-path apply is complete.
+Remaining B.4 close-out is UI presentation of duplicate merge winners/losers before apply.
 
 ---
 
@@ -394,25 +395,93 @@ Wave D close-out details:
 
 ---
 
-## Infrastructure Prerequisite: Extract JS from serve_ui.rs
+### Wave E — Reconciliation UX + Artifacts 🔶 IN PROGRESS
 
-**Priority: HIGH — Do this before ANY future UI work.**
+Goal:
+1. Make reconciliation a first-class operator workflow from Dashboard + AGOrg tab.
 
-The Pilot UI's entire JavaScript (~1500 lines) is embedded as a Rust string literal inside `serve_ui.rs`. This is the single biggest source of repeated breakage. See G-015 in the Gotcha Registry.
+Delivered:
+1. `POST /api/agorg/policy_report` persisted artifact generation.
+2. `GET /api/agorg/policy_reports` artifact listing.
+3. `POST /api/agorg/reconcile_apply` dry-run/apply execution.
+4. Dashboard and AGOrg controls for `Policy Report`, `Reconcile Dry Run`, `Reconcile Apply`.
+5. Contract tests for report/dry-run/apply response shape.
 
-**The problem:**
-- `cargo check` cannot validate JavaScript. A fatal JS `SyntaxError` (e.g., duplicate `const`) will compile fine in Rust but kill the entire browser page.
-- No JS linting, no formatting, no IDE error detection.
-- The file is ~4766 lines total, making navigation error-prone.
-- Two separate clusters of DOM `const` declarations exist ~30 lines apart, making duplicate declarations nearly invisible.
+Remaining:
+1. Add explicit winner/loser visualization for duplicate merge decisions in UI prior to apply.
+2. Add report open/view from artifact selectors.
 
-**The fix:**
-1. Extract the `<script>` block into a separate `pilot_ui.js` file.
-2. Serve it as a static asset via Axum (`ServeFile` or `ServeDir`).
-3. Reference it from the HTML: `<script src="/static/pilot_ui.js"></script>`.
-4. Enable standard JS tooling: ESLint, Prettier, IDE error highlighting.
+Acceptance:
+1. Operator can run report -> dry-run -> apply entirely from UI.
+2. Operator can inspect artifact list and identify latest report deterministically.
+3. Duplicate merge decisions are visible before mutation.
 
-**Expected impact:** Eliminates the entire class of "UI is completely dead but cargo check passes" failures.
+---
+
+### Wave F — AGOrg Policy Conformance (Branch + Dependency) ⬜ PLANNED
+
+Goal:
+1. Extend reconciliation beyond path/metadata to branch/dependency policy conformance.
+
+Planned scope:
+1. Branch policy checks:
+   - default base/release branch mismatch against AGOrg preferences.
+   - branch naming convention drift.
+2. Dependency policy checks:
+   - missing/invalid repo group/tags.
+   - broken or cyclic dependency links in AGOrg context.
+3. Reconcile report extension:
+   - classify issues by `policy_branch`, `policy_dependency`, `metadata`, `topology`.
+4. Guided fix actions:
+   - dry-run mutations first, explicit apply second.
+
+Acceptance:
+1. Reconcile report includes branch/dependency conformance for every in-scope AGO.
+2. Operator can apply branch/dependency policy fixes with audit trail.
+3. No unscoped fleet mutations allowed.
+
+---
+
+### Wave G — Unified Dashboard Control Plane ⬜ PLANNED
+
+Goal:
+1. Make Dashboard the primary command center; tabs become specialized drill-down views.
+
+Planned scope:
+1. Dashboard AGOrg overview card:
+   - scope health, conformance score, unresolved issues.
+2. Action contract orchestration:
+   - clear preview/approve/execute/reconcile sequence for AGOrg policy operations.
+3. Event-first UX:
+   - timeline entries linked to report artifacts and specific reconcile actions.
+4. State continuity:
+   - preserve filters, selected AGOrg, and pending action context across reload/restart.
+
+Acceptance:
+1. Core AGOrg operations can be executed from Dashboard without tab hopping.
+2. Every mutation is visible in timeline with artifact linkage.
+3. Session restore brings operator back to in-progress workflow state.
+
+---
+
+### Wave H — Temporary Component Burn-Down ⬜ PLANNED
+
+Goal:
+1. Remove avoidable bridge components and surface any unavoidable ones explicitly.
+
+Current known temporary components:
+1. ArqonBus compatibility shim (`scripts/arqonbus_shim.sh`) — required when frozen Bus checkout is not directly runnable.
+2. Master Hierarchy linkage UX note (`TODO`) — partial drag/link interaction, not yet hardened.
+
+Planned scope:
+1. Replace shim path with native bus integration path where feasible.
+2. Convert hierarchy linkage TODO into explicit audited relationship editor.
+3. Add periodic inventory check in docs + runbook so no hidden placeholders/stubs accumulate.
+
+Acceptance:
+1. No hidden non-essential shims/stubs/placeholders remain.
+2. Any unavoidable temporary component is documented in this plan + runbook + gotcha registry.
+3. Operator can identify temporary components in under 60 seconds.
 
 ---
 
@@ -440,34 +509,13 @@ All known gotchas are documented in `docs/gotcha-registry.md`. The following are
 - During manual revert, the rendering function was deleted from the JS block, but calls to it remained in `agorgList()`. This threw a `ReferenceError` that halted all subsequent JS execution in the same call chain.
 - **Rule**: When removing a function, always search for all call sites. A `ReferenceError` in an `async` function will silently swallow the error in the caller if not wrapped in try/catch.
 
-**G-D: `switchAgorgScope` sends wrong request body shape** ⚠️ ACTIVE BUG
-- `switchAgorgScope` at `serve_ui.rs:3409` sends `{ id }` but `/api/agorg/use` expects `AgorgUseRequest { agorg: String }`.
-- This means clicking any AGOrg in the Hero Dropdown or Registry to switch scope **silently fails** with a 400 Bad Request because `req.agorg` is empty.
-- **Fix**: Change line 3410 from `const req = { id };` to `const req = { agorg: id };`.
-- **Severity**: HIGH — scope switching from UI is fundamentally broken until this is fixed.
+**G-D: `switchAgorgScope` request shape mismatch** ✅ RESOLVED
+- Historical issue: UI sent `{ id }` while `/api/agorg/use` expects `{ agorg }`.
+- Resolution: scope switch path now sends `{ agorg: <id> }` and is validated in current UI flow.
 
-**G-E: `agorgDelete()` function missing but button exists** ⚠️ ACTIVE BUG
-- The Delete button at `serve_ui.rs:2979` calls `agorgDelete()`, but this JS function does not exist anywhere in the codebase.
-- Clicking the button throws a `ReferenceError` and silently fails.
-- **Fix**: Add the missing function:
-  ```javascript
-  async function agorgDelete() {
-    const data = await fetchJsonSafe('/api/agorg/active');
-    if (!data.ok || !data.active) {
-      agorgOut.textContent = 'Error: No active AGOrg to delete';
-      return;
-    }
-    if (!confirm(`Delete AGOrg "${data.active.name}"? This removes the record but NOT the files.`)) return;
-    const res = await fetchJsonSafe('/api/agorg/delete', {
-      method: 'POST',
-      headers: {'content-type':'application/json'},
-      body: JSON.stringify({ id: data.active.id })
-    });
-    agorgOut.textContent = JSON.stringify(res, null, 2);
-    if (res.ok) { agorgList(); refreshAgorgHeader(); agorgShowActive(); }
-  }
-  ```
-- **Severity**: MEDIUM — the backend handler exists and works; only the JS binding is missing.
+**G-E: `agorgDelete()` missing handler** ✅ RESOLVED
+- Historical issue: AGOrg Delete button called undefined JS function.
+- Resolution: `agorgDelete()` is implemented and wired end-to-end (UI + backend route).
 
 ---
 
@@ -612,9 +660,7 @@ Known temporary/bridge components (explicit inventory):
 
 ## Recommended Next Session Priority
 
-1. **Wave B.4 final close** — add explicit duplicate resolution actions in UI (show preferred winner + prune candidates inline before apply).
-2. **Wave E hardening** — add artifact open/view action from Dashboard + AGOrg panel policy artifact selectors.
-3. **Temporary-component burn-down** — remove/replace the remaining bridge pieces where feasible:
-   - eliminate dependency on ArqonBus compatibility shim when native Bus integration is stable
-   - close `Master Hierarchy` linkage TODO into a first-class, audited relationship flow
-4. **Wave F start** — AGOrg policy reconciliation surface for branch/dependency conformance (beyond path/metadata checks).
+1. **Wave E hard-close** — finish duplicate winner/loser visualization + artifact open/view from selectors.
+2. **Wave F execution start** — implement branch/dependency conformance checks and classify them in reconcile report.
+3. **Wave G kickoff** — promote Dashboard to primary AGOrg control center for full reconcile workflow.
+4. **Wave H planning** — explicit burn-down plan for temporary components (shim + linkage TODO) with exit criteria.
