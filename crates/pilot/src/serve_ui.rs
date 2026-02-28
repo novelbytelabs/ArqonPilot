@@ -176,6 +176,22 @@ struct AgorgReviewQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct AgorgPolicyReportsQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgPolicyReportRequest {
+    agorg: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgReconcileApplyRequest {
+    agorg: Option<String>,
+    dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AgorgPreferencesQuery {
     agorg: Option<String>,
 }
@@ -351,7 +367,13 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         )
         .route("/api/agorg/reviews", get(get_agorg_reviews))
         .route("/api/agorg/review", get(get_agorg_review))
+        .route("/api/agorg/policy_reports", get(get_agorg_policy_reports))
+        .route("/api/agorg/policy_report", post(api_agorg_policy_report))
         .route("/api/agorg/reconcile", post(api_agorg_reconcile))
+        .route(
+            "/api/agorg/reconcile_apply",
+            post(api_agorg_reconcile_apply),
+        )
         .route("/api/agorg/tree", get(api_agorg_tree))
         .route("/api/agorg/link", post(api_agorg_link))
         .route("/api/agorg/scan_master", post(api_agorg_scan_master))
@@ -611,6 +633,14 @@ async fn get_agorg_review(
         return error_response(StatusCode::NOT_FOUND, "review_id not found");
     };
     Json(json!({"ok": true, "review": review})).into_response()
+}
+
+async fn get_agorg_policy_reports(Query(q): Query<AgorgPolicyReportsQuery>) -> Response {
+    let limit = q.limit.unwrap_or(40).clamp(1, 500);
+    match list_agorg_policy_reports(limit) {
+        Ok(items) => Json(json!({"ok": true, "reports": items})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
 }
 
 async fn api_agorg_list(State(state): State<Arc<UiState>>) -> Response {
@@ -1034,6 +1064,109 @@ async fn api_agorg_reconcile(
 
     match state.agorg_store.reconcile_agorg(id).await {
         Ok(report) => Json(json!({"ok": true, "report": report})).into_response(),
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_agorg_policy_report(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgPolicyReportRequest>,
+) -> Response {
+    let id = if let Some(value) = req.agorg.as_deref() {
+        match resolve_agorg_ref(&state.agorg_store, value.trim()).await {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        }
+    } else {
+        match state.agorg_store.get_active_agorg().await {
+            Ok(Some(ag)) => ag.id,
+            Ok(None) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "No active AGOrg; set scope first or pass agorg",
+                )
+            }
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        }
+    };
+    match state.agorg_store.reconcile_agorg(id).await {
+        Ok(report) => match persist_agorg_policy_report(&report) {
+            Ok(path) => {
+                Json(json!({"ok": true, "report": report, "artifact_path": path})).into_response()
+            }
+            Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+        },
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_agorg_reconcile_apply(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgReconcileApplyRequest>,
+) -> Response {
+    if !state.allow_mutations {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "reconcile apply blocked in read-only UI mode",
+        );
+    }
+    let id = if let Some(value) = req.agorg.as_deref() {
+        match resolve_agorg_ref(&state.agorg_store, value.trim()).await {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        }
+    } else {
+        match state.agorg_store.get_active_agorg().await {
+            Ok(Some(ag)) => ag.id,
+            Ok(None) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "No active AGOrg; set scope first or pass agorg",
+                )
+            }
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        }
+    };
+    let dry_run = req.dry_run.unwrap_or(true);
+    let report = match state.agorg_store.reconcile_agorg(id).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    if dry_run {
+        return Json(json!({
+            "ok": true,
+            "dry_run": true,
+            "planned_prune_count": report.prune_candidate_paths.len(),
+            "planned_prune_paths": report.prune_candidate_paths,
+            "report": report
+        }))
+        .into_response();
+    }
+    match state
+        .agorg_store
+        .prune_ago_paths(report.agorg_id, &report.prune_candidate_paths)
+        .await
+    {
+        Ok(pruned) => {
+            let after = match state.agorg_store.reconcile_agorg(report.agorg_id).await {
+                Ok(v) => v,
+                Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+            };
+            let _ = state.events.send(json!({
+                "source": "agorg_reconcile_apply",
+                "agorg_id": report.agorg_id.to_string(),
+                "pruned": pruned,
+                "remaining_off_policy": after.off_policy_count
+            }));
+            Json(json!({
+                "ok": true,
+                "dry_run": false,
+                "pruned": pruned,
+                "before": report,
+                "after": after
+            }))
+            .into_response()
+        }
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
     }
 }
@@ -2492,6 +2625,52 @@ fn reports_root() -> PathBuf {
     PathBuf::from(home).join(".pilot").join("reports")
 }
 
+fn agorg_policy_report_path(ts: &str) -> PathBuf {
+    reports_root().join(format!("agorg_policy_report_{}.json", ts))
+}
+
+fn now_stamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    secs.to_string()
+}
+
+fn persist_agorg_policy_report(report: &agorg::AgorgReconcileReport) -> std::io::Result<String> {
+    let path = agorg_policy_report_path(&now_stamp());
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let payload = serde_json::to_string_pretty(report)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    fs::write(&path, payload)?;
+    Ok(path.display().to_string())
+}
+
+fn list_agorg_policy_reports(limit: usize) -> std::io::Result<Vec<Value>> {
+    let root = reports_root();
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files: Vec<PathBuf> = fs::read_dir(root)?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("agorg_policy_report_") && n.ends_with(".json"))
+                .unwrap_or(false)
+        })
+        .collect();
+    files.sort();
+    files.reverse();
+    files.truncate(limit);
+    Ok(files
+        .iter()
+        .map(|path| json!({ "path": path.display().to_string() }))
+        .collect())
+}
+
 fn list_report_files(limit: usize) -> std::io::Result<Vec<Value>> {
     let root = reports_root();
     if !root.exists() {
@@ -3461,6 +3640,27 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
       </div>
 
+      <div class="card">
+        <h3>AGOrg Policy Reconcile</h3>
+        <div class="helper">Generate policy artifact, preview prune impact, then apply reconciliation when ready.</div>
+        <div class="row">
+          <button class="btn secondary" onclick="dashAgorgPolicyReport()">Policy Report</button>
+          <button class="btn secondary" onclick="dashAgorgReconcileDryRun()">Reconcile Dry Run</button>
+          <button class="btn" onclick="dashAgorgReconcileApply()">Reconcile Apply</button>
+        </div>
+        <div class="row">
+          <button class="btn secondary" onclick="dashAgorgPolicyReports()">Refresh Artifacts</button>
+          <select id="dash-agorg-report-select"></select>
+        </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-agorg-policy-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-agorg-policy-out')">CLEAR</button>
+        </div>
+        <pre id="dash-agorg-policy-out">No AGOrg policy action run yet.</pre>
+      </div>
+      </div>
+
     </div>
 
     <div class="status">
@@ -3810,8 +4010,14 @@ Recommended flow:
             <div class="row">
               <button class="btn secondary" onclick="agorgDiscoverPreview()">Discover Preview</button>
               <button class="btn secondary" onclick="agorgImportApproved()">Import Approved</button>
-              <button class="btn secondary" onclick="agorgReconcile()">Reconcile Report</button>
+              <button class="btn secondary" onclick="agorgReconcile()">Policy Report</button>
+              <button class="btn secondary" onclick="agorgReconcileDryRun()">Reconcile Dry Run</button>
+              <button class="btn secondary" onclick="agorgReconcileApply()">Reconcile Apply</button>
               <button class="btn" onclick="agorgCreateProject()">Import</button>
+            </div>
+            <div class="row">
+              <button class="btn secondary" onclick="agorgLoadPolicyReports()">Refresh Policy Artifacts</button>
+              <select id="agorg-policy-report-select"></select>
             </div>
             <div class="helper" style="margin-top:8px;">`Discover Preview` lets you approve/reject before import. `Import` is one-shot create + autoscan + import.</div>
           </div>

@@ -150,13 +150,17 @@ UI review/import flow:
   3. `Refresh Reviews` / `Load Review` to resume a prior review session.
   4. `Import Approved` to apply selected AGO candidates only.
   5. Keep `prune stale AGO rows` enabled for deterministic reconciliation.
-  6. Run `Reconcile Report` to surface off-policy entries and metadata gaps.
+  6. Run `Policy Report` to surface off-policy entries and metadata gaps.
+  7. Run `Reconcile Dry Run` to preview prune candidates.
+  8. Run `Reconcile Apply` to execute approved reconciliation.
+  9. Use `Refresh Policy Artifacts` to reload persisted reports.
 
 Review artifact:
 - persisted at `~/.pilot/reports/agorg_reviews.jsonl`
 - each entry includes review id, selected approvals, and import summary (if applied).
 
 Scope enforcement (Wave C in progress):
+Scope enforcement (Wave C complete):
 - UI command bridge now requires an active AGOrg for:
   - `pilot.branch.*`, `pilot.multi.*`, `pilot.oracle.*`, `pilot.heal.*`, `pilot.navigate.*`
 - Repo-local command families (`branch`, `oracle`, `heal`, `navigate`) are blocked if current working directory is outside active AGOrg root.
@@ -164,6 +168,11 @@ Scope enforcement (Wave C in progress):
 - Dashboard dependency actions (`policy`, `hook-policy`, `drift`, `gate`, `repair`, `push`) are now AGOrg-scoped and require CWD within active AGOrg root.
 - Service controls (`db-*`, `bus-*`, `services-*`) intentionally remain global so operators can recover infra before scope is set.
 - Live Event Stream now emits `agorg_scope` context on each SSE event (or `null` if no scope is active) for consistent dashboard telemetry correlation.
+
+AGOrg policy endpoints (Wave E foundation):
+- `POST /api/agorg/policy_report` (returns `report` + persisted `artifact_path`)
+- `GET /api/agorg/policy_reports?limit=50` (returns artifact list)
+- `POST /api/agorg/reconcile_apply` (`dry_run=true|false`)
 
 Wave D (profiles + multi-instance + restore):
 - Per-AGOrg profile/preferences are persisted in AGOrg settings and editable from AGOrg panel:

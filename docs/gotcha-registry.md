@@ -236,8 +236,22 @@ Keep this file current whenever a new failure class appears.
 - Cause:
   - discovery guardrails affect new scans but do not retroactively delete already imported AGO rows.
 - Recovery:
-  1. Reconcile import with prune:
+ 1. Reconcile import with prune:
      - `./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4 --import-to Arqon --prune-missing`
+
+## G-017: Reconcile Apply blocked in UI with "read-only mode"
+
+- Signature:
+  - UI/API returns:
+    - `reconcile apply blocked in read-only UI mode`
+- Cause:
+  - `pilot serve` started without mutation enable flag.
+- Recovery:
+  1. Restart serve with:
+     - `pilot serve ... --ui-allow-mutations`
+  2. Re-run:
+     - `Reconcile Dry Run` first
+     - then `Reconcile Apply`
   2. Verify:
      - `./scripts/pilot_local.sh agorg tree --root Arqon`
 - Notes:

@@ -681,6 +681,28 @@ impl AgorgStore {
         })
     }
 
+    pub async fn prune_ago_paths(&self, agorg_id: Uuid, repo_paths: &[String]) -> Result<usize> {
+        self.initialize().await?;
+        if repo_paths.is_empty() {
+            return Ok(0);
+        }
+        let canonical_paths: Vec<String> = repo_paths
+            .iter()
+            .map(|p| canonicalize_or_input(Path::new(p)))
+            .collect();
+        let client = self.connect().await?;
+        let deleted = client
+            .execute(
+                "DELETE FROM agos
+                 WHERE agorg_id = $1
+                   AND repo_path = ANY($2::text[])",
+                &[&agorg_id, &canonical_paths],
+            )
+            .await
+            .into_diagnostic()?;
+        Ok(deleted as usize)
+    }
+
     pub async fn create_project(
         &self,
         name: &str,

@@ -60,6 +60,7 @@ const agorgOut = document.getElementById('agorg-out');
 const agorgDiscoveryOut = document.getElementById('agorg-discovery-out');
 const agorgDiscoveryReview = document.getElementById('agorg-discovery-review');
 const agorgReviewSelect = document.getElementById('agorg-review-select');
+const agorgPolicyReportSelect = document.getElementById('agorg-policy-report-select');
 const codexOut = document.getElementById('codex-out');
 const codexContractsOut = document.getElementById('codex-contracts-out');
 const codexContractSelect = document.getElementById('codex-contract-select');
@@ -74,6 +75,8 @@ const dashGateChip = document.getElementById('dash-gate-chip');
 const dashPushChip = document.getElementById('dash-push-chip');
 const dashOracleChip = document.getElementById('dash-oracle-chip');
 const dashHealChip = document.getElementById('dash-heal-chip');
+const dashAgorgReportSelect = document.getElementById('dash-agorg-report-select');
+const dashAgorgPolicyOut = document.getElementById('dash-agorg-policy-out');
 const dashOracleScanBtn = document.getElementById('dash-oracle-scan-btn');
 const dashOracleQueryBtn = document.getElementById('dash-oracle-query-btn');
 const dashHealPlanBtn = document.getElementById('dash-heal-plan-btn');
@@ -1491,7 +1494,7 @@ async function agorgReconcile() {
     agorgOut.textContent = JSON.stringify({ ok: false, error: 'No active AGOrg scope selected' }, null, 2);
     return;
   }
-  const data = await fetchJsonSafe('/api/agorg/reconcile', {
+  const data = await fetchJsonSafe('/api/agorg/policy_report', {
     method: 'POST',
     headers: {'content-type':'application/json'},
     body: JSON.stringify({ agorg: activeId })
@@ -1499,6 +1502,87 @@ async function agorgReconcile() {
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
   out.textContent = text;
+  if (data && data.ok) {
+    appendLive({ source: 'agorg_policy', action: 'report', artifact_path: data.artifact_path || '' });
+    await agorgLoadPolicyReports();
+  }
+}
+
+async function agorgReconcileDryRun() {
+  const activeId = await getActiveAgorgId();
+  if (!activeId) {
+    agorgOut.textContent = JSON.stringify({ ok: false, error: 'No active AGOrg scope selected' }, null, 2);
+    return;
+  }
+  const data = await fetchJsonSafe('/api/agorg/reconcile_apply', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ agorg: activeId, dry_run: true })
+  });
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+  appendLive({
+    source: 'agorg_policy',
+    action: 'dry_run',
+    ok: !!data.ok,
+    planned_prune_count: data.planned_prune_count || 0
+  });
+}
+
+async function agorgReconcileApply() {
+  const activeId = await getActiveAgorgId();
+  if (!activeId) {
+    agorgOut.textContent = JSON.stringify({ ok: false, error: 'No active AGOrg scope selected' }, null, 2);
+    return;
+  }
+  const data = await fetchJsonSafe('/api/agorg/reconcile_apply', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ agorg: activeId, dry_run: false })
+  });
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+  appendLive({ source: 'agorg_policy', action: 'apply', ok: !!data.ok, pruned: data.pruned || 0 });
+  if (data && data.ok) {
+    await agorgTree();
+    await agorgList();
+    await agorgShowActive();
+  }
+}
+
+function renderPolicyReportSelect(selectEl, rows) {
+  if (!selectEl) return;
+  const items = Array.isArray(rows) ? rows : [];
+  selectEl.innerHTML = '';
+  if (!items.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No policy artifacts yet';
+    selectEl.appendChild(opt);
+    return;
+  }
+  for (const row of items) {
+    const path = String(row.path || '');
+    const file = path.split('/').pop() || path;
+    const opt = document.createElement('option');
+    opt.value = path;
+    opt.textContent = file;
+    selectEl.appendChild(opt);
+  }
+}
+
+async function agorgLoadPolicyReports() {
+  const data = await fetchJsonSafe('/api/agorg/policy_reports?limit=50');
+  if (!data || !data.ok) {
+    const text = JSON.stringify(data, null, 2);
+    agorgOut.textContent = text;
+    out.textContent = text;
+    return;
+  }
+  renderPolicyReportSelect(agorgPolicyReportSelect, data.reports);
+  renderPolicyReportSelect(dashAgorgReportSelect, data.reports);
 }
 
 async function agorgLoadReviews() {
@@ -1738,6 +1822,67 @@ function dashServicesStop() { depRun('services-stop'); }
 function dashServicesRestart() { depRun('services-restart'); }
 function dashRunPush() { depRun('push'); }
 
+async function dashAgorgPolicyReport() {
+  const data = await fetchJsonSafe('/api/agorg/policy_report', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({})
+  });
+  const text = JSON.stringify(data, null, 2);
+  if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = text;
+  out.textContent = text;
+  if (dashStatusOut) dashStatusOut.textContent = text;
+  if (data && data.ok) {
+    const offPolicy = (data.report && Number(data.report.off_policy_count)) || 0;
+    setChip(dashDriftChip, 'Drift: ' + (offPolicy > 0 ? 'FAIL' : 'PASS'), offPolicy > 0 ? 'fail' : 'ok');
+    appendLive({ source: 'dashboard', action: 'agorg-policy-report', ok: true, artifact_path: data.artifact_path || '' });
+    await agorgLoadPolicyReports();
+  }
+}
+
+async function dashAgorgReconcileDryRun() {
+  const data = await fetchJsonSafe('/api/agorg/reconcile_apply', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ dry_run: true })
+  });
+  const text = JSON.stringify(data, null, 2);
+  if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = text;
+  out.textContent = text;
+  if (dashStatusOut) dashStatusOut.textContent = text;
+  appendLive({
+    source: 'dashboard',
+    action: 'agorg-reconcile-dry-run',
+    ok: !!data.ok,
+    planned_prune_count: data.planned_prune_count || 0
+  });
+}
+
+async function dashAgorgReconcileApply() {
+  const data = await fetchJsonSafe('/api/agorg/reconcile_apply', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ dry_run: false })
+  });
+  const text = JSON.stringify(data, null, 2);
+  if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = text;
+  out.textContent = text;
+  if (dashStatusOut) dashStatusOut.textContent = text;
+  appendLive({ source: 'dashboard', action: 'agorg-reconcile-apply', ok: !!data.ok, pruned: data.pruned || 0 });
+  if (data && data.ok) {
+    await agorgTree();
+    await agorgList();
+    await agorgShowActive();
+  }
+}
+
+async function dashAgorgPolicyReports() {
+  await agorgLoadPolicyReports();
+  const selected = dashAgorgReportSelect && dashAgorgReportSelect.value ? dashAgorgReportSelect.value : '';
+  const payload = { ok: true, selected_artifact: selected || null };
+  if (dashAgorgPolicyOut) dashAgorgPolicyOut.textContent = JSON.stringify(payload, null, 2);
+}
+
 async function dashExportEvidence() {
   const res = await fetch('/api/evidence/export', {
     method: 'POST',
@@ -1926,6 +2071,7 @@ async function bootUi() {
   await depRun('drift');
   await depRun('services-status');
   await refreshAgorgHeader();
+  await agorgLoadPolicyReports();
   await codexLoadContracts();
   setInterval(loadHistory, 30000);
   document.querySelectorAll('input, textarea, select').forEach((el) => {

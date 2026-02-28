@@ -114,7 +114,10 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
     - Use `Approve All` / `Reject All` and per-row checkboxes in Discovery Review.
     - Use `Refresh Reviews` / `Load Review` to resume previous review sessions.
     - Use `Import Approved` to import only selected AGO candidates.
-    - Use `Reconcile Report` to detect off-policy paths and metadata drift.
+    - Use `Policy Report` to detect off-policy paths and metadata drift.
+    - Use `Reconcile Dry Run` before mutation to preview prune impact.
+    - Use `Reconcile Apply` only after reviewing dry-run output.
+    - Use `Refresh Policy Artifacts` to list persisted reconciliation artifacts.
     - Use `List AGOrgs` and `Show Active` to verify current scope.
     - Use `Use Scope` to switch Control Panel context.
     - Use `Discover` to scan a root path with configurable depth.
@@ -142,6 +145,13 @@ Managed DB defaults:
 - logs: `~/.arqon/pilot/db/postgres.log`
 - endpoint: Unix socket on Linux/macOS, local TCP fallback on Windows
 - identity guard: Pilot refuses migration if DB identity is not `arqon_pilot`
+
+AGOrg reconciliation artifacts:
+- `~/.pilot/reports/agorg_policy_report_<timestamp>.json`
+- UI/API support:
+  - `POST /api/agorg/policy_report`
+  - `GET /api/agorg/policy_reports`
+  - `POST /api/agorg/reconcile_apply`
 
 ## 4. Controlled Apply Workflow
 

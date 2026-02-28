@@ -273,7 +273,7 @@ Add new commands/endpoints:
 
 ---
 
-### Wave B — CRUD + Discovery 🔶 IN PROGRESS (~70%)
+### Wave B — CRUD + Discovery 🔶 IN PROGRESS (~80%)
 
 #### B.1 — Import Existing Ecosystem (PRIMARY PATH)
 
@@ -331,9 +331,16 @@ Add new commands/endpoints:
 | Duplicate detection | ⬜ |
 | Candidate quality checks | ✅ |
 | Policy conformance checks | ✅ |
-| Reconciliation report artifact | ⬜ |
+| Reconciliation report artifact | ✅ |
+| Reconciliation apply (dry-run + apply) | ✅ |
 
-**Progress note:** `agorg reconcile` (CLI/API/UI button) now reports off-policy items (nested/archive/missing metadata). Import reconciliation via `--prune-missing` is operational; artifact persistence is the next close-out.
+**Progress note:** `agorg reconcile` (CLI/API/UI) reports off-policy items. UI/API now support:
+1. `POST /api/agorg/policy_report` (persisted artifact in `~/.pilot/reports/agorg_policy_report_<ts>.json`)
+2. `GET /api/agorg/policy_reports` (artifact listing)
+3. `POST /api/agorg/reconcile_apply` (dry-run preview or mutation apply)
+4. Dashboard + AGOrg panel controls for report/dry-run/apply.
+
+Remaining B.4 close-out is duplicate-name/path merge heuristics; prune-path apply is complete.
 
 ---
 
