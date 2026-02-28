@@ -2600,12 +2600,14 @@ mod tests {
             total_agos: 3,
             issue_count: 1,
             off_policy_count: 1,
+            class_counts: std::collections::BTreeMap::from([("topology".to_string(), 1usize)]),
             prune_candidate_paths: vec!["/tmp/arqon/archive/old".to_string()],
             duplicate_resolutions: vec![],
             issues: vec![AgorgReconcileIssue {
                 repo_name: "old".to_string(),
                 repo_path: "/tmp/arqon/archive/old".to_string(),
                 severity: "warn".to_string(),
+                issue_class: "topology".to_string(),
                 code: "archive_path".to_string(),
                 message: "off-policy".to_string(),
             }],
@@ -2620,6 +2622,7 @@ mod tests {
         assert_eq!(out["artifact_path"], "/tmp/report.json");
         assert_eq!(out["report"]["agorg_name"], "Arqon");
         assert_eq!(out["report"]["off_policy_count"], 1);
+        assert_eq!(out["report"]["class_counts"]["topology"], 1);
     }
 
     #[test]
@@ -3761,6 +3764,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <pre id="dash-agorg-duplicates-out">No duplicate merge candidates yet.</pre>
       </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-agorg-class-counts-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-agorg-class-counts-out')">CLEAR</button>
+        </div>
+        <pre id="dash-agorg-class-counts-out">No issue class counts yet.</pre>
+      </div>
       </div>
 
     </div>
@@ -4129,6 +4139,13 @@ Recommended flow:
                 <button class="action-btn" onclick="clearElement('agorg-duplicate-preview-out')">CLEAR</button>
               </div>
               <pre id="agorg-duplicate-preview-out">No duplicate merge candidates yet.</pre>
+            </div>
+            <div class="pre-wrap">
+              <div class="pre-actions">
+                <button class="action-btn" onclick="copyToClipboard('agorg-class-counts-out', this)">COPY</button>
+                <button class="action-btn" onclick="clearElement('agorg-class-counts-out')">CLEAR</button>
+              </div>
+              <pre id="agorg-class-counts-out">No issue class counts yet.</pre>
             </div>
           </div>
 

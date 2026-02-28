@@ -1,7 +1,7 @@
 use crate::db_runtime::PilotDbManager;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tokio_postgres::{Client, NoTls};
@@ -68,6 +68,7 @@ pub struct AgorgReconcileIssue {
     pub repo_name: String,
     pub repo_path: String,
     pub severity: String,
+    pub issue_class: String,
     pub code: String,
     pub message: String,
 }
@@ -80,6 +81,7 @@ pub struct AgorgReconcileReport {
     pub total_agos: usize,
     pub issue_count: usize,
     pub off_policy_count: usize,
+    pub class_counts: BTreeMap<String, usize>,
     pub prune_candidate_paths: Vec<String>,
     pub duplicate_resolutions: Vec<AgorgDuplicateResolution>,
     pub issues: Vec<AgorgReconcileIssue>,
@@ -606,6 +608,24 @@ impl AgorgStore {
         let agos: Vec<AgoRecord> = rows.iter().map(row_to_ago).collect();
 
         let root = PathBuf::from(&agorg.root_path);
+        let settings = self
+            .get_agorg_settings(agorg_id)
+            .await?
+            .unwrap_or_else(|| serde_json::json!({}));
+        let default_branch = settings
+            .get("default_branch")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("dev")
+            .trim()
+            .to_string();
+        let release_branch = settings
+            .get("release_branch")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("main")
+            .trim()
+            .to_string();
         let mut issues: Vec<AgorgReconcileIssue> = Vec::new();
         let mut prune_candidates: HashSet<String> = HashSet::new();
         let mut facts: Vec<AgoReconcileFacts> = Vec::new();
@@ -618,6 +638,7 @@ impl AgorgStore {
                     repo_name: ago.name.clone(),
                     repo_path: ago.repo_path.clone(),
                     severity: "error".to_string(),
+                    issue_class: "metadata".to_string(),
                     code: "repo_missing".to_string(),
                     message: "Repository path does not exist on disk".to_string(),
                 });
@@ -647,6 +668,7 @@ impl AgorgStore {
                     repo_name: ago.name.clone(),
                     repo_path: ago.repo_path.clone(),
                     severity: "warn".to_string(),
+                    issue_class: "topology".to_string(),
                     code: "archive_path".to_string(),
                     message: "Repository is under archive/; off-policy for active AGOrg fleet"
                         .to_string(),
@@ -659,6 +681,7 @@ impl AgorgStore {
                     repo_name: ago.name.clone(),
                     repo_path: ago.repo_path.clone(),
                     severity: "warn".to_string(),
+                    issue_class: "topology".to_string(),
                     code: "nested_repo".to_string(),
                     message: format!(
                         "Repository is nested depth={} under AGOrg root; flat-fleet policy expects top-level",
@@ -673,9 +696,77 @@ impl AgorgStore {
                     repo_name: ago.name.clone(),
                     repo_path: ago.repo_path.clone(),
                     severity: "warn".to_string(),
+                    issue_class: "metadata".to_string(),
                     code: "missing_pyproject".to_string(),
                     message: "pyproject.toml not found".to_string(),
                 });
+            }
+
+            if !ago
+                .relationship_parent
+                .as_deref()
+                .map(|v| v.eq_ignore_ascii_case(&agorg.name))
+                .unwrap_or(false)
+            {
+                issues.push(AgorgReconcileIssue {
+                    repo_name: ago.name.clone(),
+                    repo_path: ago.repo_path.clone(),
+                    severity: "warn".to_string(),
+                    issue_class: "policy_dependency".to_string(),
+                    code: "dependency_parent_mismatch".to_string(),
+                    message: format!(
+                        "relationship parent '{}' does not match AGOrg '{}'",
+                        ago.relationship_parent
+                            .clone()
+                            .unwrap_or_else(|| "<none>".to_string()),
+                        agorg.name
+                    ),
+                });
+            }
+
+            let mut child_norm: HashSet<String> = HashSet::new();
+            for child in &ago.relationship_children {
+                let c = child.trim().to_ascii_lowercase();
+                if c.is_empty() {
+                    continue;
+                }
+                if c == ago.name.to_ascii_lowercase() {
+                    issues.push(AgorgReconcileIssue {
+                        repo_name: ago.name.clone(),
+                        repo_path: ago.repo_path.clone(),
+                        severity: "warn".to_string(),
+                        issue_class: "policy_dependency".to_string(),
+                        code: "dependency_self_link".to_string(),
+                        message: "relationship children includes self".to_string(),
+                    });
+                }
+                if !child_norm.insert(c) {
+                    issues.push(AgorgReconcileIssue {
+                        repo_name: ago.name.clone(),
+                        repo_path: ago.repo_path.clone(),
+                        severity: "warn".to_string(),
+                        issue_class: "policy_dependency".to_string(),
+                        code: "dependency_duplicate_child".to_string(),
+                        message: format!("relationship children contains duplicate '{}'", child),
+                    });
+                }
+            }
+
+            if let Some(branch) = current_branch_name(&path) {
+                let is_policy_branch = branch == default_branch || branch == release_branch;
+                if !is_policy_branch && !is_allowed_feature_branch(&branch) {
+                    issues.push(AgorgReconcileIssue {
+                        repo_name: ago.name.clone(),
+                        repo_path: ago.repo_path.clone(),
+                        severity: "warn".to_string(),
+                        issue_class: "policy_branch".to_string(),
+                        code: "branch_name_off_policy".to_string(),
+                        message: format!(
+                            "branch '{}' is outside policy (expected '{}'/'{}' or standard feature prefixes)",
+                            branch, default_branch, release_branch
+                        ),
+                    });
+                }
             }
             facts.push(AgoReconcileFacts {
                 name: ago.name.clone(),
@@ -691,6 +782,10 @@ impl AgorgStore {
         let (dup_issues, dup_prunes, duplicate_resolutions) = duplicate_merge_heuristics(&facts);
         issues.extend(dup_issues);
         prune_candidates.extend(dup_prunes);
+        let mut class_counts: BTreeMap<String, usize> = BTreeMap::new();
+        for issue in &issues {
+            *class_counts.entry(issue.issue_class.clone()).or_insert(0) += 1;
+        }
 
         let prune_candidate_paths: Vec<String> = {
             let mut v: Vec<String> = prune_candidates.into_iter().collect();
@@ -705,6 +800,7 @@ impl AgorgStore {
             total_agos: agos.len(),
             issue_count: issues.len(),
             off_policy_count: prune_candidate_paths.len(),
+            class_counts,
             prune_candidate_paths,
             duplicate_resolutions,
             issues,
@@ -1162,6 +1258,7 @@ fn duplicate_merge_heuristics(
                 repo_name: loser.name.clone(),
                 repo_path: loser.repo_path.clone(),
                 severity: "warn".to_string(),
+                issue_class: "topology".to_string(),
                 code: "duplicate_path_merge_candidate".to_string(),
                 message: format!(
                     "Repo canonical path overlaps another AGO; prefer '{}' and prune this entry",
@@ -1203,6 +1300,7 @@ fn duplicate_merge_heuristics(
                 repo_name: loser.name.clone(),
                 repo_path: loser.repo_path.clone(),
                 severity: "warn".to_string(),
+                issue_class: "topology".to_string(),
                 code: "duplicate_name_merge_candidate".to_string(),
                 message: format!(
                     "Repo name duplicates another AGO; prefer '{}' and prune this entry",
@@ -1222,6 +1320,39 @@ fn duplicate_merge_heuristics(
     resolutions
         .sort_by(|a, b| (a.kind.as_str(), a.key.as_str()).cmp(&(b.kind.as_str(), b.key.as_str())));
     (issues, prune_candidates, resolutions)
+}
+
+fn current_branch_name(repo_path: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .arg("rev-parse")
+        .arg("--abbrev-ref")
+        .arg("HEAD")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        None
+    } else {
+        Some(branch)
+    }
+}
+
+fn is_allowed_feature_branch(branch: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "feat/",
+        "fix/",
+        "docs/",
+        "test/",
+        "refactor/",
+        "chore/",
+        "perf/",
+    ];
+    PREFIXES.iter().any(|p| branch.starts_with(p))
 }
 
 pub fn discover_hierarchy(root: &Path, depth: usize) -> Result<DiscoverResult> {

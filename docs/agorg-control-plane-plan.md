@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 17:06 EST — Wave E hard-close iteration
+**Last updated**: 2026-02-28 17:16 EST — Wave F execution start
 
 ---
 
@@ -419,7 +419,7 @@ Acceptance:
 
 ---
 
-### Wave F — AGOrg Policy Conformance (Branch + Dependency) ⬜ PLANNED
+### Wave F — AGOrg Policy Conformance (Branch + Dependency) 🔶 IN PROGRESS
 
 Goal:
 1. Extend reconciliation beyond path/metadata to branch/dependency policy conformance.
@@ -435,6 +435,17 @@ Planned scope:
    - classify issues by `policy_branch`, `policy_dependency`, `metadata`, `topology`.
 4. Guided fix actions:
    - dry-run mutations first, explicit apply second.
+
+Delivered so far:
+1. `AgorgReconcileIssue` now carries explicit `issue_class` values (`policy_branch`, `policy_dependency`, `metadata`, `topology`).
+2. `AgorgReconcileReport` now includes `class_counts` for deterministic per-class drift visibility.
+3. Reconcile now emits dependency-policy issues:
+   - `dependency_parent_mismatch`
+   - `dependency_self_link`
+   - `dependency_duplicate_child`
+4. Reconcile now emits branch-policy issue:
+   - `branch_name_off_policy` (when branch is outside base/release and standard branch prefixes).
+5. Dashboard + AGOrg UI now render class-count summaries from reconcile reports.
 
 Acceptance:
 1. Reconcile report includes branch/dependency conformance for every in-scope AGO.
@@ -678,9 +689,30 @@ Verification completed:
 3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
 4. `./scripts/prepush_gate.sh` ✅
 
+### Iteration Update (2026-02-28 17:16 EST)
+
+Completed in this iteration:
+
+1. **Wave F execution started with policy class model**
+   - Added `issue_class` on reconcile issues.
+   - Added `class_counts` map on reconcile reports.
+2. **Branch/dependency policy checks added to reconcile**
+   - Parent relationship mismatch checks.
+   - Duplicate/self child-link checks.
+   - Branch naming policy checks against AGOrg branch preferences and allowed prefixes.
+3. **UI surfacing added**
+   - Dashboard and AGOrg policy cards now show issue class counts in dedicated outputs.
+
+Verification completed:
+
+1. `node -c crates/pilot/src/pilot_ui.js` ✅
+2. `cargo check -p pilot --locked` ✅
+3. `cargo test -p pilot --locked test_duplicate_` ✅
+4. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave F execution start** — implement branch/dependency conformance checks and classify them in reconcile report.
-2. **Wave F API/UI surfacing** — add policy-class filters and per-class counts (`policy_branch`, `policy_dependency`, `metadata`, `topology`) in reconcile output.
+1. **Wave F hard-close** — add policy-class filtering controls and drill-down navigation in AGOrg/Dashboard.
+2. **Wave F guided fixes** — add explicit dry-run/apply fix actions for branch/dependency policy classes.
 3. **Wave G kickoff** — promote Dashboard to primary AGOrg control center for full reconcile workflow.
 4. **Wave H planning** — explicit burn-down plan for temporary components (shim + linkage TODO) with exit criteria.

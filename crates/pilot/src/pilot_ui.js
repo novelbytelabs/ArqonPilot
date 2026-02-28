@@ -62,6 +62,7 @@ const agorgDiscoveryReview = document.getElementById('agorg-discovery-review');
 const agorgReviewSelect = document.getElementById('agorg-review-select');
 const agorgPolicyReportSelect = document.getElementById('agorg-policy-report-select');
 const agorgDuplicatePreviewOut = document.getElementById('agorg-duplicate-preview-out');
+const agorgClassCountsOut = document.getElementById('agorg-class-counts-out');
 const codexOut = document.getElementById('codex-out');
 const codexContractsOut = document.getElementById('codex-contracts-out');
 const codexContractSelect = document.getElementById('codex-contract-select');
@@ -79,6 +80,7 @@ const dashHealChip = document.getElementById('dash-heal-chip');
 const dashAgorgReportSelect = document.getElementById('dash-agorg-report-select');
 const dashAgorgPolicyOut = document.getElementById('dash-agorg-policy-out');
 const dashAgorgDuplicatesOut = document.getElementById('dash-agorg-duplicates-out');
+const dashAgorgClassCountsOut = document.getElementById('dash-agorg-class-counts-out');
 const dashOracleScanBtn = document.getElementById('dash-oracle-scan-btn');
 const dashOracleQueryBtn = document.getElementById('dash-oracle-query-btn');
 const dashHealPlanBtn = document.getElementById('dash-heal-plan-btn');
@@ -1508,6 +1510,8 @@ async function agorgReconcile() {
     appendLive({ source: 'agorg_policy', action: 'report', artifact_path: data.artifact_path || '' });
     if (agorgDuplicatePreviewOut) agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
     if (dashAgorgDuplicatesOut) dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
+    if (agorgClassCountsOut) agorgClassCountsOut.textContent = renderClassCountsText(data.report);
+    if (dashAgorgClassCountsOut) dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
     await agorgLoadPolicyReports();
   }
 }
@@ -1531,6 +1535,12 @@ async function agorgReconcileDryRun() {
   }
   if (dashAgorgDuplicatesOut && data && data.report) {
     dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
+  }
+  if (agorgClassCountsOut && data && data.report) {
+    agorgClassCountsOut.textContent = renderClassCountsText(data.report);
+  }
+  if (dashAgorgClassCountsOut && data && data.report) {
+    dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
   }
   appendLive({
     source: 'agorg_policy',
@@ -1559,6 +1569,12 @@ async function agorgReconcileApply() {
   }
   if (dashAgorgDuplicatesOut && data && data.before) {
     dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.before);
+  }
+  if (agorgClassCountsOut && data && data.before) {
+    agorgClassCountsOut.textContent = renderClassCountsText(data.before);
+  }
+  if (dashAgorgClassCountsOut && data && data.before) {
+    dashAgorgClassCountsOut.textContent = renderClassCountsText(data.before);
   }
   appendLive({ source: 'agorg_policy', action: 'apply', ok: !!data.ok, pruned: data.pruned || 0 });
   if (data && data.ok) {
@@ -1599,6 +1615,16 @@ function renderDuplicateResolutionText(report) {
       const losers = Array.isArray(r.loser_repo_paths) ? r.loser_repo_paths.join(', ') : '';
       return `${i + 1}. [${r.kind}] key=${r.key}\n   winner=${r.winner_repo_path}\n   losers=${losers}`;
     })
+    .join('\n');
+}
+
+function renderClassCountsText(report) {
+  const counts = (report && report.class_counts) || {};
+  const entries = Object.entries(counts);
+  if (!entries.length) return 'No issue classes found.';
+  return entries
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    .map(([k, v]) => `${k}: ${v}`)
     .join('\n');
 }
 
@@ -1885,6 +1911,8 @@ async function dashAgorgPolicyReport() {
     appendLive({ source: 'dashboard', action: 'agorg-policy-report', ok: true, artifact_path: data.artifact_path || '' });
     if (dashAgorgDuplicatesOut) dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
     if (agorgDuplicatePreviewOut) agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
+    if (dashAgorgClassCountsOut) dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
+    if (agorgClassCountsOut) agorgClassCountsOut.textContent = renderClassCountsText(data.report);
     await agorgLoadPolicyReports();
   }
 }
@@ -1904,6 +1932,12 @@ async function dashAgorgReconcileDryRun() {
   }
   if (agorgDuplicatePreviewOut && data && data.report) {
     agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
+  }
+  if (dashAgorgClassCountsOut && data && data.report) {
+    dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
+  }
+  if (agorgClassCountsOut && data && data.report) {
+    agorgClassCountsOut.textContent = renderClassCountsText(data.report);
   }
   appendLive({
     source: 'dashboard',
@@ -1928,6 +1962,12 @@ async function dashAgorgReconcileApply() {
   }
   if (agorgDuplicatePreviewOut && data && data.before) {
     agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.before);
+  }
+  if (dashAgorgClassCountsOut && data && data.before) {
+    dashAgorgClassCountsOut.textContent = renderClassCountsText(data.before);
+  }
+  if (agorgClassCountsOut && data && data.before) {
+    agorgClassCountsOut.textContent = renderClassCountsText(data.before);
   }
   appendLive({ source: 'dashboard', action: 'agorg-reconcile-apply', ok: !!data.ok, pruned: data.pruned || 0 });
   if (data && data.ok) {
