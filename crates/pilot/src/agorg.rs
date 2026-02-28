@@ -1602,9 +1602,12 @@ fn sanitize_instance_id(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        duplicate_merge_heuristics, merge_json_value, sanitize_instance_id, AgoReconcileFacts,
+        duplicate_merge_heuristics, edit_relationship, merge_json_value, sanitize_instance_id,
+        AgoReconcileFacts,
     };
     use serde_json::json;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_merge_json_value_nested_objects() {
@@ -1694,6 +1697,25 @@ mod tests {
             .iter()
             .any(|r| r.kind == "canonical_path" && r.key == "/canonical/ArqonBus"));
     }
+
+    #[test]
+    fn test_edit_relationship_handles_malformed_tool_table() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            r#"[tool]
+arqon = "not-a-table"
+"#,
+        )
+        .unwrap();
+        let err = edit_relationship(dir.path(), Some("Arqon".to_string()), Vec::new()).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("[tool.arqon]") || msg.contains("not a TOML table"),
+            "Unexpected error message: {}",
+            msg
+        );
+    }
 }
 
 pub fn scan_master_directory(master_path: &Path) -> Result<Vec<DiscoverCandidate>> {
@@ -1768,22 +1790,54 @@ pub fn edit_relationship(
         .parse::<toml_edit::DocumentMut>()
         .into_diagnostic()?;
 
-    // Ensure tool.arqon.relationships exists
+    // Ensure tool.arqon.relationships exists without panicking on malformed TOML
     if doc.get("tool").is_none() {
         doc.insert("tool", toml_edit::Item::Table(toml_edit::Table::new()));
     }
-    let tool = doc["tool"].as_table_mut().unwrap();
+    let tool_item = doc
+        .get_mut("tool")
+        .ok_or_else(|| miette::miette!("Missing [tool] section after initialization"))?;
+    let tool = if let Some(table) = tool_item.as_table_mut() {
+        table
+    } else {
+        return Err(miette::miette!(
+            "[tool] exists but is not a TOML table in {:?}",
+            pyproject_path
+        ));
+    };
+
     if tool.get("arqon").is_none() {
         tool.insert("arqon", toml_edit::Item::Table(toml_edit::Table::new()));
     }
-    let arqon = tool["arqon"].as_table_mut().unwrap();
+    let arqon_item = tool
+        .get_mut("arqon")
+        .ok_or_else(|| miette::miette!("Missing [tool.arqon] section after initialization"))?;
+    let arqon = if let Some(table) = arqon_item.as_table_mut() {
+        table
+    } else {
+        return Err(miette::miette!(
+            "[tool.arqon] exists but is not a TOML table in {:?}",
+            pyproject_path
+        ));
+    };
+
     if arqon.get("relationships").is_none() {
         arqon.insert(
             "relationships",
             toml_edit::Item::Table(toml_edit::Table::new()),
         );
     }
-    let rel = arqon["relationships"].as_table_mut().unwrap();
+    let rel_item = arqon.get_mut("relationships").ok_or_else(|| {
+        miette::miette!("Missing [tool.arqon.relationships] section after initialization")
+    })?;
+    let rel = if let Some(table) = rel_item.as_table_mut() {
+        table
+    } else {
+        return Err(miette::miette!(
+            "[tool.arqon.relationships] exists but is not a TOML table in {:?}",
+            pyproject_path
+        ));
+    };
 
     if let Some(p) = parent {
         rel.insert("parent", toml_edit::value(p));

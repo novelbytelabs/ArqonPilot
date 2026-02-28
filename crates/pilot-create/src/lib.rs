@@ -46,7 +46,7 @@ pub fn scaffold_tests(root: &Path, target: &str, dry_run: bool) -> Result<Create
     write_file(
         &path,
         &format!(
-            "#[test]\nfn test_{module}_generated() {{\n    // TODO: replace with real assertions\n    assert!(true);\n}}\n"
+            "#[test]\nfn test_{module}_generated() {{\n    let module_path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))\n        .join(\"src\")\n        .join(\"{module}.rs\");\n    assert!(\n        module_path.exists(),\n        \"Expected generated module source to exist: {{}}\",\n        module_path.display()\n    );\n}}\n"
         ),
         dry_run,
     )

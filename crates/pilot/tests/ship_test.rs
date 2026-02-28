@@ -1,3 +1,4 @@
+use pilot_navigate::SemVer;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -24,20 +25,30 @@ edition = "2021"
     fn test_from_cargo_toml_basic() {
         let dir = TempDir::new().unwrap();
         let cargo_path = create_cargo_toml(&dir, "1.2.3");
-
-        // Note: We can't directly test ship::SemVer here without adding ship as a dev-dependency
-        // For now, this is a placeholder that verifies the file structure works
-        let content = fs::read_to_string(&cargo_path).unwrap();
-        assert!(content.contains("version = \"1.2.3\""));
+        let version = SemVer::from_cargo_toml(&cargo_path).expect("Failed to parse Cargo.toml");
+        assert_eq!(version.major, 1);
+        assert_eq!(version.minor, 2);
+        assert_eq!(version.patch, 3);
     }
 
     #[test]
-    fn test_from_cargo_toml_with_pre_release() {
+    fn test_from_cargo_toml_workspace_version() {
         let dir = TempDir::new().unwrap();
-        let cargo_path = create_cargo_toml(&dir, "2.0.0-alpha.1");
+        let cargo_path = dir.path().join("Cargo.toml");
+        fs::write(
+            &cargo_path,
+            r#"[workspace.package]
+version = "2.3.4"
+edition = "2021"
+"#,
+        )
+        .unwrap();
 
-        let content = fs::read_to_string(&cargo_path).unwrap();
-        assert!(content.contains("version = \"2.0.0-alpha.1\""));
+        let version =
+            SemVer::from_cargo_toml(&cargo_path).expect("Failed to parse workspace version");
+        assert_eq!(version.major, 2);
+        assert_eq!(version.minor, 3);
+        assert_eq!(version.patch, 4);
     }
 }
 

@@ -103,6 +103,20 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
       - `PILOT_UI_SMOKE_INCLUDE_COMMANDS=1 ./scripts/ui_smoke_check.sh`
       - includes `pilot.multi.status`, `pilot.multi.dag` (dry-run), and `pilot.multi.apply` (dry-run) via `/api/command`
 
+7. Wave acceptance matrix (Wave I close path)
+
+    - CLI quick/full:
+      - `./scripts/wave_acceptance_matrix.sh --wave I --profile quick`
+      - `./scripts/wave_acceptance_matrix.sh --wave I --profile full`
+    - UI/API:
+      - Dashboard card: `Wave Acceptance Matrix -> Run Matrix`
+      - API: `POST /api/system/acceptance_matrix/run`
+    - Artifacts:
+      - `~/.pilot/reports/acceptance_matrix_wave_i_<profile>_<ts>.json`
+    - Operator guardrails:
+      - Keep only one active `pilot serve` instance for that UI port.
+      - Do not launch overlapping matrix/gate runs; run one at a time.
+
 5. `Codex` tab (contract-driven operations)
 
     - `Preview Contract` builds a normalized action contract (intent, command, payload, expected effect, rollback strategy) and generates `contract_id`.

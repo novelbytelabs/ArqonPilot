@@ -41,6 +41,7 @@ nav:
   - Home: "index.md"
   - Roadmap & Plan: "roadmap-and-execution-plan.md"
   - AGOrg Plan: "agorg-control-plane-plan.md"
+  - Technical Debt: "tech-debt.md"
   - Developer Guide: "developer-guide.md"
   - Arqon Bus Integration: "bus-integration-guide.md"
   - Troubleshooting: "troubleshooting.md"

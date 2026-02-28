@@ -4,6 +4,7 @@ mod bus;
 mod config;
 mod db_runtime;
 mod serve_ui;
+mod shim_runtime;
 use agorg::AgorgStore;
 use db_runtime::PilotDbManager;
 use pilot_branch as branch;
@@ -23,6 +24,7 @@ use pilot_secure as secure;
 use clap::{Args, Parser, Subcommand};
 use config::Config;
 use miette::{miette, Context, IntoDiagnostic, Result};
+use shim_runtime::bus_shim_command;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -2029,11 +2031,7 @@ async fn maybe_autostart_local_bus_shim(ws_url: &str) {
         );
         return;
     }
-    let cmd = format!(
-        "PILOT_REPORT_DIR=/tmp/pilot-reports {} start && PILOT_REPORT_DIR=/tmp/pilot-reports {} status",
-        script.display(),
-        script.display()
-    );
+    let cmd = bus_shim_command("start");
     match tokio::process::Command::new("bash")
         .arg("-lc")
         .arg(cmd)

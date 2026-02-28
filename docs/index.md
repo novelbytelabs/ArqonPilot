@@ -1,7 +1,7 @@
 <div class="pilot-hero">
   <div class="pilot-hero-title">Arqon Pilot</div>
-  <p class="pilot-hero-subtitle">Monorepo with<br/>Multi-repo power.</p>
-  <p class="pilot-hero-copy">The local control plane for Arqon's ecosystem:<br/>orchestrate branches, enforce policy, self-heal failures, and push safely across the fleet.</p>
+  <p class="pilot-hero-subtitle">Orchestrating Autonomous<br/>Evolution.</p>
+  <p class="pilot-hero-copy">The high-integrity control plane for Arqon's AGOrg ecosystem:<br/>reconcile policy, govern growth, and orchestrate evolution across the fleet.</p>
 
   <div class="pilot-pill-row">
     <span class="pilot-pill">🛡️ Safe by Construction</span>
@@ -17,11 +17,11 @@
   </div>
 </div>
 
-## Why Arqon Pilot Exists in Arqon
+## The Cockpit for Autonomous Evolution
 
-Arqon is a multi-repo system: Rust core, ArqonBus, UI, Python bindings, and docs.
-Git manages repositories, but not cross-repo intent, dependency order, or release flow.
-Arqon Pilot closes that gap and turns the fleet into one governed operating system.
+Autonomous ecosystems (AGOrgs) are dynamic, interconnected, and evolving. While traditional tools manage static code deployment, Arqon Pilot manages **Operational Integrity**.
+
+Arqon Pilot provides the high-integrity orchestration necessary to observe, steer, and reconcile complex software organisms, ensuring they remain conformant to policy as they evolve.
 
 ### Arqon-Specific Value
 
@@ -110,6 +110,7 @@ pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --teleme
 
 - [Roadmap & Execution Plan](roadmap-and-execution-plan.md)
 - [AGOrg Control Plane Plan](agorg-control-plane-plan.md)
+- [Gotcha Registry](gotcha-registry.md)
 - [Developer Guide](developer-guide.md)
 - [Troubleshooting](troubleshooting.md)
 - [Testing Strategy](testing-strategy.md)

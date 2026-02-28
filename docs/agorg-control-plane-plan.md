@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 20:10 EST — Wave I in progress (API parser hardened)
+**Last updated**: 2026-02-28 20:40 EST — Wave I in progress + TD hardening iteration
 
 ---
 
@@ -928,16 +928,17 @@ Completed in this iteration:
    - Added script `scripts/wave_acceptance_matrix.sh` with quick/full profiles.
    - Added API endpoint `POST /api/system/acceptance_matrix/run`.
    - Added Dashboard card + artifact open flow.
-2. **Traceability**
+2. **Branding & Hardening**
+   - Updated Pilot tagline to "Orchestrating Autonomous Evolution".
+   - Hardened matrix parsing to tolerate mixed stdout.
+   - Fixed `ui-smoke` check regression.
+3. **Traceability**
    - Matrix runs emit timeline events with `artifact_path`.
 
 Verification completed:
 
-1. `./scripts/wave_acceptance_matrix.sh --wave I --profile quick` ✅
-2. `node -c crates/pilot/src/pilot_ui.js` ✅
-3. `cargo check -p pilot --locked` ✅
-4. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
-5. `./scripts/prepush_gate.sh` ✅
+1. ArqonPilot CI (Run 22527214142) 🟢 GREEN
+2. `./scripts/wave_acceptance_matrix.sh --wave I --profile full` ✅
 
 ### Iteration Update (2026-02-28 20:10 EST)
 
@@ -958,9 +959,29 @@ Verification completed:
 2. `cargo check -p pilot --locked` ✅
 3. `./scripts/wave_acceptance_matrix.sh --wave I --profile full` ✅
 
+### Iteration Update (2026-02-28 20:40 EST)
+
+Completed in this iteration:
+
+1. **TD Wave 1 hardening (placeholder removal)**
+   - Replaced placeholder `ship_test` assertions with real `SemVer::from_cargo_toml` checks.
+   - Replaced placeholder `vector_test` flow with real vector insert + search assertions.
+   - Replaced generated scaffold test body in `pilot-create` (removed TODO + `assert!(true)` template).
+2. **TD Wave 2 hardening (panic safety)**
+   - Hardened `agorg::edit_relationship` to avoid production `unwrap()` panics on malformed TOML table shapes.
+   - Added regression test for malformed `[tool.arqon]` table handling.
+3. **TD Wave 3 start (shim consolidation)**
+   - Centralized ArqonBus shim shell command generation in UI backend (`bus_shim_command`) to remove duplicated hard-coded command strings.
+
+Verification completed:
+
+1. `cargo test -p pilot --locked --test ship_test --test vector_test` ✅
+2. `cargo test -p pilot --locked test_edit_relationship_handles_malformed_tool_table` ✅
+3. `cargo check -p pilot --locked` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave I hard-close (runtime evidence)** — execute full-profile matrix from live UI/API path on the operator host and attach artifact path in timeline evidence.
-2. **Wave I runtime stability** — keep only one `pilot serve` instance active and avoid concurrent matrix/gate runs to prevent lock/process contention.
-3. **Wave I native bus path** — continue reducing shim dependency where frozen fleet permits.
-4. **Wave J planning** — define next roadmap once Wave I hard-close runtime evidence is captured.
+1. **Wave I hard-close (runtime evidence)** — execute full-profile matrix from live UI/API path on operator host and attach artifact path in timeline evidence.
+2. **TD Wave 3 hard-close** — complete shim lifecycle consolidation in both `main.rs` and `serve_ui.rs` using shared runtime contract.
+3. **TD Wave 4** — replace temporary-component checklist string probes with semantic checks.
+4. **Wave J planning** — define next roadmap once Wave I runtime evidence is captured and TD Wave 3/4 are closed.

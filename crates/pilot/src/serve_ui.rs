@@ -1,5 +1,6 @@
 use crate::agorg::{self, AgorgStore};
 use crate::bus::{send_command_once, BusBridgeConfig};
+use crate::shim_runtime::bus_shim_command;
 use axum::extract::{Query, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -1805,10 +1806,7 @@ async fn run_dependency_action(
         };
     }
     if action == "services-status" {
-        let bus = run_local_script(
-            "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
-        )
-        .await;
+        let bus = run_local_script(&bus_shim_command("status")).await;
         let db = state.agorg_store.managed_db_status().await;
         return match (bus, db) {
             (Ok((bus_code, bus_out, bus_err)), Ok(db_status_opt)) => {
@@ -1852,11 +1850,11 @@ async fn run_dependency_action(
         "services-start" | "services-stop" | "services-restart"
     ) {
         let bus_cmd = match action {
-            "services-start" => "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh start && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
-            "services-stop" => "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh stop && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
-            _ => "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh stop || true; PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh start && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
+            "services-start" => bus_shim_command("start"),
+            "services-stop" => bus_shim_command("stop"),
+            _ => bus_shim_command("restart"),
         };
-        let bus_result = run_local_script(bus_cmd).await;
+        let bus_result = run_local_script(&bus_cmd).await;
         let db_result = match action {
             "services-start" => state.agorg_store.ensure_managed_db().await,
             "services-stop" => state.agorg_store.stop_managed_db().await,
@@ -1917,18 +1915,10 @@ async fn run_dependency_action(
         ("drift", false) => run_local_script("./scripts/drift_report.sh").await,
         ("gate", _) => run_local_script("./scripts/prepush_gate.sh").await,
         ("repair", _) => run_local_script("./scripts/repair_lock_182.sh --no-gate").await,
-        ("bus-start", _) => {
-            run_local_script("PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh start && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status").await
-        }
-        ("bus-stop", _) => {
-            run_local_script("PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh stop && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status").await
-        }
-        ("bus-restart", _) => {
-            run_local_script("PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh stop || true; PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh start && PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status").await
-        }
-        ("bus-status", _) => {
-            run_local_script("PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status").await
-        }
+        ("bus-start", _) => run_local_script(&bus_shim_command("start")).await,
+        ("bus-stop", _) => run_local_script(&bus_shim_command("stop")).await,
+        ("bus-restart", _) => run_local_script(&bus_shim_command("restart")).await,
+        ("bus-status", _) => run_local_script(&bus_shim_command("status")).await,
         ("push", _) => {
             let branch = req.branch.as_deref().unwrap_or("main");
             let remote = req.remote.as_deref().unwrap_or("origin");
@@ -2933,18 +2923,41 @@ async fn get_temporary_components_checklist() -> Response {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let shim_status = components
+    let shim_component = components
         .iter()
-        .find(|c| c.get("id").and_then(Value::as_str) == Some("arqonbus_compat_shim"))
-        .and_then(|c| c.get("status").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_string();
-    let hierarchy_status = components
+        .find(|c| c.get("id").and_then(Value::as_str) == Some("arqonbus_compat_shim"));
+    let hierarchy_component = components
         .iter()
-        .find(|c| c.get("id").and_then(Value::as_str) == Some("hierarchy_drag_link_editor"))
+        .find(|c| c.get("id").and_then(Value::as_str) == Some("hierarchy_drag_link_editor"));
+    let shim_status = shim_component
         .and_then(|c| c.get("status").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_string();
+        .unwrap_or("unknown");
+    let hierarchy_status = hierarchy_component
+        .and_then(|c| c.get("status").and_then(Value::as_str))
+        .unwrap_or("unknown");
+    let shim_exit_code_present = shim_component
+        .and_then(|c| c.get("details"))
+        .and_then(|d| d.get("exit_code"))
+        .and_then(Value::as_i64)
+        .is_some();
+    let hierarchy_api_present = hierarchy_component
+        .and_then(|c| c.get("details"))
+        .and_then(|d| d.get("api"))
+        .and_then(Value::as_str)
+        .map(|v| v == "/api/agorg/edit_relationship")
+        .unwrap_or(false);
+    let exit_criteria_present = components.iter().all(|c| {
+        c.get("exit_criteria")
+            .and_then(Value::as_str)
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    });
+    let component_ids_present = components
+        .iter()
+        .any(|c| c.get("id").and_then(Value::as_str) == Some("arqonbus_compat_shim"))
+        && components
+            .iter()
+            .any(|c| c.get("id").and_then(Value::as_str) == Some("hierarchy_drag_link_editor"));
 
     let checks = vec![
         json!({
@@ -2962,32 +2975,35 @@ async fn get_temporary_components_checklist() -> Response {
             "details": format!("shim_status={}", shim_status)
         }),
         json!({
-            "id": "hierarchy_gap_explicit",
-            "label": "Hierarchy drag/link gap is explicit (no TODO wording)",
+            "id": "shim_detail_contract",
+            "label": "ArqonBus shim detail contract is complete",
             "required": true,
-            "pass": !INDEX_HTML.contains("TODO"),
-            "details": "Master Hierarchy helper text is explicit about governed relationship editor actions."
+            "pass": shim_exit_code_present,
+            "details": "shim details include exit_code for deterministic triage."
         }),
         json!({
-            "id": "runbook_inventory_documented",
-            "label": "Runbook documents temporary component inventory workflow",
+            "id": "hierarchy_editor_contract",
+            "label": "Hierarchy editor fallback contract is explicit",
             "required": true,
-            "pass": file_contains_text("docs/operator-runbook.md", "Temporary Components Inventory"),
-            "details": "docs/operator-runbook.md contains inventory guidance."
+            "pass": hierarchy_status == "manual-editor-active" && hierarchy_api_present,
+            "details": format!(
+                "hierarchy_status={}, api_present={}",
+                hierarchy_status, hierarchy_api_present
+            )
         }),
         json!({
-            "id": "gotcha_inventory_documented",
-            "label": "Gotcha registry documents temporary inventory triage",
+            "id": "component_exit_criteria_present",
+            "label": "Temporary components define exit criteria",
             "required": true,
-            "pass": file_contains_text("docs/gotcha-registry.md", "G-021"),
-            "details": "docs/gotcha-registry.md contains G-021."
+            "pass": exit_criteria_present,
+            "details": format!("all_components_have_exit_criteria={}", exit_criteria_present)
         }),
         json!({
-            "id": "hierarchy_editor_path_visible",
-            "label": "Hierarchy editor fallback path is visible",
+            "id": "required_component_ids_present",
+            "label": "Required temporary component IDs are present",
             "required": true,
-            "pass": hierarchy_status != "unknown",
-            "details": format!("hierarchy_status={}", hierarchy_status)
+            "pass": component_ids_present,
+            "details": "arqonbus_compat_shim + hierarchy_drag_link_editor found."
         }),
     ];
     let overall_pass = checks.iter().all(|c| {
@@ -3097,14 +3113,11 @@ async fn export_temporary_components_inventory(State(state): State<Arc<UiState>>
 }
 
 async fn build_temporary_components_payload() -> std::io::Result<Value> {
-    let (shim_code, shim_stdout, shim_stderr) = match run_local_script(
-        "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(err) => (-1, String::new(), err.to_string()),
-    };
+    let (shim_code, shim_stdout, shim_stderr) =
+        match run_local_script(&bus_shim_command("status")).await {
+            Ok(v) => v,
+            Err(err) => (-1, String::new(), err.to_string()),
+        };
     let shim_running = shim_code == 0 && bus_shim_running(&shim_stdout, &shim_stderr);
     let components = vec![
         json!({
@@ -3113,7 +3126,7 @@ async fn build_temporary_components_payload() -> std::io::Result<Value> {
             "type": "shim",
             "required": true,
             "status": if shim_running { "running" } else { "stopped" },
-            "detection_command": "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
+            "detection_command": bus_shim_command("status"),
             "details": {
                 "exit_code": shim_code,
                 "stdout": shim_stdout,
@@ -3212,12 +3225,6 @@ fn acceptance_matrix_report_path(ts: &str, wave: &str, profile: &str) -> PathBuf
         profile.to_lowercase(),
         ts
     ))
-}
-
-fn file_contains_text(path: &str, needle: &str) -> bool {
-    fs::read_to_string(path)
-        .map(|content| content.contains(needle))
-        .unwrap_or(false)
 }
 
 fn now_stamp() -> String {

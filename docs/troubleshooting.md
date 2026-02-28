@@ -79,6 +79,48 @@ Safety note:
 - Pilot enforces DB identity (`arqon_pilot`) before migrations. If you point
   `PILOT_AGORG_DATABASE_URL` at a non-Pilot DB, initialization will fail by design.
 
+## 0.1) Acceptance Matrix API returns 500 ("output was not valid JSON")
+
+Symptom:
+
+```json
+{"error":"acceptance matrix output was not valid JSON ...","ok":false}
+```
+
+Cause:
+1. Non-JSON prefix lines appear in script stdout before JSON payload.
+2. Older parser path attempted strict full-stdout JSON decode.
+
+Fix:
+1. Use latest `main` (mixed-output JSON parser is implemented in `serve_ui.rs`).
+2. Re-run:
+
+```bash
+./scripts/wave_acceptance_matrix.sh --wave I --profile full
+```
+
+3. Expect:
+   - `ok=true`
+   - `failed_checks=[]`
+
+## 0.2) Matrix/Gate run appears hung
+
+Symptoms:
+1. Dashboard matrix action never returns.
+2. Multiple stale `prepush_gate.sh` or matrix processes are still running.
+
+Cause:
+1. Overlapping matrix/gate executions contend on shared resources and lock state.
+
+Recovery:
+1. Keep one active `pilot serve` instance per UI port.
+2. Run one matrix/gate command at a time.
+3. Re-run a single clean matrix execution:
+
+```bash
+./scripts/wave_acceptance_matrix.sh --wave I --profile full
+```
+
 ## 1) Linux/Conda: `libssl-*.so.10` or `libcrypto-*.so.10` not found
 
 Symptom:

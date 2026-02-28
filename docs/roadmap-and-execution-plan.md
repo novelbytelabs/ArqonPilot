@@ -1,5 +1,7 @@
 # ArqonPilot Unified Master Plan
 
+**Last updated**: 2026-02-28 20:20 EST
+
 This is the canonical execution plan for ArqonPilot. It merges product delivery, guardrails, testing, and documentation into one system plan so work does not fragment across sessions.
 
 ## Frozen Policy (Non-Negotiable)
@@ -30,7 +32,13 @@ ArqonPilot becomes a centralized control system:
      - `scripts/push_main.sh`
 4. Gotcha tracking exists:
      - `docs/gotcha-registry.md`
-5. Active risk: lockfile drift families (now including ICU `2.1.x`) and transient DNS failures.
+5. Active risk: lockfile drift families (including ICU `2.1.x`) and transient DNS failures.
+6. Wave H (Temporary Component Burn-Down) is complete in AGOrg control-plane plan.
+7. Wave I (Acceptance Matrix Execution) is in progress with:
+   - script runner (`scripts/wave_acceptance_matrix.sh`)
+   - API runner (`POST /api/system/acceptance_matrix/run`)
+   - Dashboard matrix card + artifact linkage
+8. Mixed-stdout JSON parsing is hardened for matrix API path (to tolerate non-JSON prefix lines).
 
 ## Program Tracks (Run In Parallel)
 
@@ -339,6 +347,35 @@ Exit criteria:
 2. System flags duplicates and non-conformant AGO candidates with explicit reasons.
 3. Operator can apply selected reconciliation actions without destructive defaults.
 4. Reconciliation output is persisted and auditable.
+
+## Wave 18 (Technical Debt Burn-Down) - In Progress
+
+Goal:
+1. Remove placeholder behavior, reduce shim fragility, and harden failure paths that can silently regress quality.
+
+Planned deliverables:
+1. Replace fake test scaffolds and placeholder tests with real assertions.
+2. Remove panic-prone mutation paths in AGOrg editing APIs.
+3. Consolidate bus shim lifecycle controls behind one runtime path.
+4. Replace brittle checklist string matching with semantic checks.
+5. Reduce broad lint suppressions (`allow(dead_code)`, legacy deprecated allowances) where practical.
+
+Current progress (this iteration):
+1. Replaced generated scaffold test body in `pilot-create`:
+   - removed `assert!(true)`/TODO template
+   - now asserts expected generated source file exists.
+2. Replaced placeholder vector integration test with real vector insert + search assertions.
+3. Replaced placeholder ship version file test with real `SemVer::from_cargo_toml` assertions.
+4. Hardened `edit_relationship` against malformed TOML table shapes:
+   - removed production `unwrap()` panic risk
+   - returns explicit miette errors instead.
+5. Added regression test:
+   - `test_edit_relationship_handles_malformed_tool_table`.
+
+Exit criteria:
+1. No fake/pass-through assertions remain in active non-fixture test paths.
+2. No known panic-on-user-input path remains in AGOrg mutation APIs.
+3. Temporary components and shims are either removed or centralized with explicit inventory contracts.
 
 ## Operational Rules
 
