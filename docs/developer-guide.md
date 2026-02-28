@@ -161,6 +161,8 @@ Scope enforcement (Wave C in progress):
   - `pilot.branch.*`, `pilot.multi.*`, `pilot.oracle.*`, `pilot.heal.*`, `pilot.navigate.*`
 - Repo-local command families (`branch`, `oracle`, `heal`, `navigate`) are blocked if current working directory is outside active AGOrg root.
 - `pilot.multi.*` calls require explicit `group` or `tags` selector (unfiltered fleet calls are rejected).
+- Dashboard dependency actions (`policy`, `hook-policy`, `drift`, `gate`, `repair`, `push`) are now AGOrg-scoped and require CWD within active AGOrg root.
+- Service controls (`db-*`, `bus-*`, `services-*`) intentionally remain global so operators can recover infra before scope is set.
 
 ## Critical Linux/Conda Runtime Step
 

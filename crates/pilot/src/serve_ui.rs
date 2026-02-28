@@ -1106,6 +1106,40 @@ async fn run_dependency_action(
     {
         return error_response(StatusCode::FORBIDDEN, "action blocked in read-only UI mode");
     }
+    if dependency_action_scope_required(action) {
+        let active_scope = match state.agorg_store.get_active_agorg().await {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        };
+        let Some(scope) = active_scope else {
+            return error_response(
+                StatusCode::PRECONDITION_FAILED,
+                "No active AGOrg scope selected. Set AGOrg scope before running this action.",
+            );
+        };
+        if dependency_action_requires_cwd_scope(action) {
+            let cwd = match std::env::current_dir() {
+                Ok(v) => canonicalize_path_lossy(&v),
+                Err(err) => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        &format!("Cannot resolve current working directory: {err}"),
+                    )
+                }
+            };
+            let scope_root = canonicalize_path_lossy(Path::new(&scope.root_path));
+            if !path_is_within(&cwd, &scope_root) {
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    &format!(
+                        "Current repo path '{}' is outside active AGOrg scope '{}'",
+                        cwd.display(),
+                        scope_root.display()
+                    ),
+                );
+            }
+        }
+    }
     if action == "db-status" {
         return match state.agorg_store.managed_db_status().await {
             Ok(Some(status)) => {
@@ -2073,7 +2107,8 @@ fn is_safe_cli_token(s: &str) -> bool {
 mod tests {
     use super::{
         append_agorg_review_record, append_codex_contract_record, command_requires_cwd_scope,
-        command_requires_multi_selector, command_scope_required, is_safe_cli_token,
+        command_requires_multi_selector, command_scope_required,
+        dependency_action_requires_cwd_scope, dependency_action_scope_required, is_safe_cli_token,
         load_persisted_agorg_reviews, load_persisted_codex_contracts, payload_has_multi_selector,
         AgorgReviewRecord, CodexContractRecord,
     };
@@ -2107,6 +2142,18 @@ mod tests {
 
         assert!(command_requires_multi_selector("pilot.multi.apply"));
         assert!(!command_requires_multi_selector("pilot.branch.create"));
+    }
+
+    #[test]
+    fn test_scope_dependency_action_classification() {
+        assert!(dependency_action_scope_required("policy"));
+        assert!(dependency_action_scope_required("gate"));
+        assert!(dependency_action_scope_required("push"));
+        assert!(!dependency_action_scope_required("db-status"));
+        assert!(!dependency_action_scope_required("services-start"));
+
+        assert!(dependency_action_requires_cwd_scope("repair"));
+        assert!(!dependency_action_requires_cwd_scope("db-start"));
     }
 
     #[test]
@@ -2542,6 +2589,20 @@ fn command_requires_cwd_scope(command: &str) -> bool {
         || command.starts_with("pilot.oracle.")
         || command.starts_with("pilot.heal.")
         || command.starts_with("pilot.navigate.")
+}
+
+fn dependency_action_scope_required(action: &str) -> bool {
+    matches!(
+        action,
+        "policy" | "hook-policy" | "drift" | "gate" | "repair" | "push"
+    )
+}
+
+fn dependency_action_requires_cwd_scope(action: &str) -> bool {
+    matches!(
+        action,
+        "policy" | "hook-policy" | "drift" | "gate" | "repair" | "push"
+    )
 }
 
 fn command_requires_multi_selector(command: &str) -> bool {

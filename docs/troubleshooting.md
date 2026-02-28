@@ -527,4 +527,6 @@ Fix:
 - `group`
 - or `tags`
 
-3. If running repo-local actions (`oracle/heal/branch/navigate`), ensure current directory is within AGOrg root.
+3. If running repo-local actions (`oracle/heal/branch/navigate`) or scoped Dashboard dependency actions (`policy/hook-policy/drift/gate/repair/push`), ensure current directory is within AGOrg root.
+
+4. Infra service controls (`db-*`, `bus-*`, `services-*`) are intentionally global and can run even before scope is set.

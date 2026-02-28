@@ -261,13 +261,15 @@ Keep this file current whenever a new failure class appears.
   - `No active AGOrg scope selected`
   - `Current repo path ... is outside active AGOrg scope`
   - `Scope guard: multi-repo command requires explicit selector (group or tags)`
+  - Same scope failures may appear from Dashboard dependency actions (`policy`, `hook-policy`, `drift`, `gate`, `repair`, `push`).
 - Cause:
   - command family now enforces AGOrg scope and selector requirements.
 - Recovery:
   1. Set active AGOrg:
      - `./scripts/pilot_local.sh agorg use <id-or-name>`
   2. Ensure current repo path is under AGOrg root for repo-local commands.
-  3. For `pilot.multi.*`, set `group` and/or `tags` in UI/CLI payload.
+3. For `pilot.multi.*`, set `group` and/or `tags` in UI/CLI payload.
+4. For Dashboard dependency actions above, run Pilot from a repo path inside the active AGOrg root.
 
 ## Frozen Policy (Do Not Change)
 

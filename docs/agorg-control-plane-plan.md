@@ -346,7 +346,7 @@ Until this wave is complete, "setting an AGOrg scope" is cosmetic — it changes
 | Dashboard operations scoped to active AGOrg repos | 🔶 |
 | Oracle scans only within AGOrg boundary | 🔶 |
 | Heal targets only AGOrg repos | 🔶 |
-| Dependencies checks scoped to AGOrg | ⬜ |
+| Dependencies checks scoped to AGOrg | ✅ |
 | Branch operations scoped to AGOrg repos | 🔶 |
 | Multi-repo actions scoped to AGOrg | 🔶 |
 | Telemetry stream tagged with AGOrg context | ⬜ |
@@ -357,6 +357,8 @@ Current enforcement now active in UI command bridge:
 1. Active AGOrg scope required for `pilot.branch.*`, `pilot.multi.*`, `pilot.oracle.*`, `pilot.heal.*`, `pilot.navigate.*`.
 2. CWD boundary guard for repo-local command families (`branch/oracle/heal/navigate`): rejects execution when current repo path is outside active AGOrg root.
 3. Multi command selector guard: rejects unfiltered `pilot.multi.*` calls unless `group` or `tags` are explicitly set.
+4. Dashboard dependency actions (`policy`, `hook-policy`, `drift`, `gate`, `repair`, `push`) now require active AGOrg scope and CWD-in-scope checks.
+5. Global service controls (`db-*`, `bus-*`, `services-*`) remain available outside AGOrg scope by design.
 
 ---
 
