@@ -652,6 +652,10 @@ struct ServeArgs {
     #[arg(long)]
     ui_port: Option<u16>,
 
+    /// UI instance identifier for per-instance AGOrg scope/session isolation
+    #[arg(long)]
+    ui_instance_id: Option<String>,
+
     /// Allow mutating operations from UI/API (disabled by default for safety)
     #[arg(long)]
     ui_allow_mutations: bool,
@@ -1912,6 +1916,10 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                 let ui_cfg = serve_ui::UiConfig {
                     host: args.ui_host.clone(),
                     port,
+                    instance_id: args
+                        .ui_instance_id
+                        .clone()
+                        .unwrap_or_else(|| format!("ui-{}", port)),
                     bus: cfg.clone(),
                     allow_mutations: args.ui_allow_mutations,
                     allowed_commands,

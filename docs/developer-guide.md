@@ -165,6 +165,21 @@ Scope enforcement (Wave C in progress):
 - Service controls (`db-*`, `bus-*`, `services-*`) intentionally remain global so operators can recover infra before scope is set.
 - Live Event Stream now emits `agorg_scope` context on each SSE event (or `null` if no scope is active) for consistent dashboard telemetry correlation.
 
+Wave D (profiles + multi-instance + restore):
+- Per-AGOrg profile/preferences are persisted in AGOrg settings and editable from AGOrg panel:
+  - profile name
+  - default branch
+  - release branch
+  - auto-prune preference
+- Scope snapshot endpoint provides fast startup/switch:
+  - `GET /api/agorg/scope_snapshot`
+- UI session state is persisted per UI instance:
+  - `GET /api/ui/session`
+  - `POST /api/ui/session`
+- Multi-instance isolation:
+  - `pilot serve --ui-port 7788 --ui-instance-id pilot-main`
+  - each instance keeps independent active scope + session state.
+
 ## Critical Linux/Conda Runtime Step
 
 If `pilot` fails with a shared-library error like `libssl-*.so.10` not found, add the

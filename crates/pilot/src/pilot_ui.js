@@ -100,8 +100,13 @@ let currentTab = 'dashboard';
 let agorgDiscoveryCache = null;
 let agorgApprovedPaths = new Set();
 let currentAgorgReviewId = '';
+let restoringUiSession = false;
+let uiSessionSaveTimer = null;
+let agorgCache = { at: 0, items: [], active: null, recent: [], instanceId: 'unknown' };
+const AGORG_CACHE_TTL_MS = 8000;
 
-function activatePanel(tabName) {
+function activatePanel(tabName, opts = {}) {
+  const persist = opts.persist !== false;
   currentTab = tabName;
   for (const t of document.querySelectorAll('.tab')) t.classList.remove('active');
   for (const p of document.querySelectorAll('.panel')) p.classList.remove('active');
@@ -109,10 +114,120 @@ function activatePanel(tabName) {
   if (panel) panel.classList.add('active');
   const tabBtn = document.querySelector('.tab[data-tab="' + tabName + '"]');
   if (tabBtn) tabBtn.classList.add('active');
+  if (persist && !restoringUiSession) queueUiSessionSave();
 }
 
 for (const btn of document.querySelectorAll('.tab')) {
   btn.addEventListener('click', () => activatePanel(btn.dataset.tab));
+}
+
+function readInputValue(id) {
+  const el = document.getElementById(id);
+  return el ? String(el.value || '') : '';
+}
+
+function readInputChecked(id) {
+  const el = document.getElementById(id);
+  return !!(el && el.checked);
+}
+
+function collectUiSessionState() {
+  const subTabs = {};
+  document.querySelectorAll('.card .sub-tabs').forEach((container, idx) => {
+    const activeBtn = container.querySelector('.sub-tab.active');
+    const panelId = activeBtn ? (activeBtn.getAttribute('onclick') || '') : '';
+    subTabs['group_' + idx] = panelId;
+  });
+  return {
+    active_tab: currentTab,
+    agorg_use_id: readInputValue('agorg-use-id'),
+    agorg_master: readInputValue('agorg-master'),
+    agorg_root: readInputValue('agorg-root'),
+    agorg_name: readInputValue('agorg-name'),
+    agorg_depth: readInputValue('agorg-depth'),
+    agorg_default: readInputChecked('agorg-default'),
+    agorg_prune: readInputChecked('agorg-prune'),
+    agorg_profile_name: readInputValue('agorg-profile-name'),
+    agorg_pref_default_branch: readInputValue('agorg-pref-default-branch'),
+    agorg_pref_release_branch: readInputValue('agorg-pref-release-branch'),
+    agorg_pref_auto_prune: readInputChecked('agorg-pref-auto-prune'),
+    multi_group: readInputValue('multi-group'),
+    multi_tags: readInputValue('multi-tags'),
+    multi_branch: readInputValue('multi-apply-branch'),
+    multi_stage_size: readInputValue('multi-apply-stage-size'),
+    codex_contract_id: readInputValue('codex-contract-id'),
+    sub_tabs: subTabs
+  };
+}
+
+function applyUiSessionState(session) {
+  if (!session || typeof session !== 'object') return;
+  const setVal = (id, value) => {
+    if (value === undefined || value === null) return;
+    const el = document.getElementById(id);
+    if (el) el.value = String(value);
+  };
+  const setCheck = (id, value) => {
+    if (value === undefined || value === null) return;
+    const el = document.getElementById(id);
+    if (el) el.checked = !!value;
+  };
+  if (session.active_tab) {
+    activatePanel(session.active_tab, { persist: false });
+  }
+  setVal('agorg-use-id', session.agorg_use_id);
+  setVal('agorg-master', session.agorg_master);
+  setVal('agorg-root', session.agorg_root);
+  setVal('agorg-name', session.agorg_name);
+  setVal('agorg-depth', session.agorg_depth);
+  setCheck('agorg-default', session.agorg_default);
+  setCheck('agorg-prune', session.agorg_prune);
+  setVal('agorg-profile-name', session.agorg_profile_name);
+  setVal('agorg-pref-default-branch', session.agorg_pref_default_branch);
+  setVal('agorg-pref-release-branch', session.agorg_pref_release_branch);
+  setCheck('agorg-pref-auto-prune', session.agorg_pref_auto_prune);
+  setVal('multi-group', session.multi_group);
+  setVal('multi-tags', session.multi_tags);
+  setVal('multi-apply-branch', session.multi_branch);
+  setVal('multi-apply-stage-size', session.multi_stage_size);
+  setVal('codex-contract-id', session.codex_contract_id);
+}
+
+function queueUiSessionSave() {
+  if (restoringUiSession) return;
+  if (uiSessionSaveTimer) clearTimeout(uiSessionSaveTimer);
+  uiSessionSaveTimer = setTimeout(() => {
+    uiSessionSaveTimer = null;
+    persistUiSession().catch(() => {});
+  }, 300);
+}
+
+async function persistUiSession() {
+  const session = collectUiSessionState();
+  await fetch('/api/ui/session', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ session })
+  });
+}
+
+async function hydrateScopeSnapshot(force = false) {
+  const age = Date.now() - agorgCache.at;
+  if (!force && age < AGORG_CACHE_TTL_MS && agorgCache.items.length > 0) {
+    return agorgCache;
+  }
+  const data = await fetchJsonSafe('/api/agorg/scope_snapshot');
+  if (data && data.ok) {
+    agorgCache = {
+      at: Date.now(),
+      items: Array.isArray(data.agorgs) ? data.agorgs : [],
+      active: data.active || null,
+      recent: Array.isArray(data.recent_scopes) ? data.recent_scopes : [],
+      instanceId: data.instance_id || 'unknown',
+      uiSession: data.ui_session || {}
+    };
+  }
+  return agorgCache;
 }
 
 // Hero AGOrg Dropdown Logic
@@ -135,25 +250,31 @@ async function loadAgorgQuickNav() {
   dropdown.innerHTML = '<div class="agorg-drop-header">Loading registered repositories...</div>';
   
   try {
-    const agRes = await fetch('/api/agorg/list');
-    const agData = agRes.ok ? await agRes.json() : [];
+    const snapshot = await hydrateScopeSnapshot();
+    const agData = snapshot.items || [];
+    const activeId = snapshot.active && snapshot.active.id ? snapshot.active.id : '';
+    const recentIds = new Set((snapshot.recent || []).map((r) => r.id));
     
     let html = '<div class="agorg-drop-item" style="font-weight:700;color:#6a7dff;" onclick="activatePanel(\'agorg\'); agorgShowActive();">⚙ Manage AGOrgs / Panel</div>';
     
     if (agData && agData.length > 0) {
       html += '<div class="agorg-drop-header">AGOrgs</div>';
       agData.forEach(ag => {
+        const badge = ag.id === activeId ? 'ACTIVE' : (recentIds.has(ag.id) ? 'RECENT' : 'ORG');
         html += `<div class="agorg-drop-item" onclick="switchAgorgScope('${ag.id}')">
           <span>${ag.name}</span>
-          <span class="type">ORG</span>
+          <span class="type">${badge}</span>
         </div>`;
       });
     }
 
     // Attempt to list AGOs if available in the database
     const treeRes = await fetch('/api/agorg/tree');
-    const treeData = treeRes.ok ? await treeRes.json() : [];
-    if (treeData && treeData.length > 0) {
+    const treeDataRaw = treeRes.ok ? await treeRes.json() : { ok: false, tree: [] };
+    const treeData = treeDataRaw && treeDataRaw.ok && Array.isArray(treeDataRaw.tree)
+      ? treeDataRaw.tree
+      : [];
+    if (treeData.length > 0) {
       html += '<div class="agorg-drop-header">Sibling AGOs (Active Tree)</div>';
       const agos = [];
       const walk = (node) => {
@@ -191,11 +312,13 @@ async function switchAgorgScope(id) {
     body: JSON.stringify(req)
   });
   const data = await res.json();
+  await hydrateScopeSnapshot(true);
   refreshAgorgHeader();
   if (currentTab === 'agorg') {
     agorgTree();
     agorgShowActive();
   }
+  queueUiSessionSave();
   document.getElementById('agorg-hero-dropdown').classList.remove('active');
 }
 
@@ -344,12 +467,14 @@ function setAgorgStatus(label, active) {
 
 async function refreshAgorgHeader() {
   try {
-    const data = await fetchJsonSafe('/api/agorg/active');
-    const active = data && data.ok && data.active ? data.active : null;
+    const snapshot = await hydrateScopeSnapshot();
+    const active = snapshot && snapshot.active ? snapshot.active : null;
     if (active && active.name) {
-      setAgorgStatus(active.name, true);
+      const label = active.name + (snapshot.instanceId ? ` (${snapshot.instanceId})` : '');
+      setAgorgStatus(label, true);
     } else {
-      setAgorgStatus('NO ACTIVE', false);
+      const label = 'NO ACTIVE' + (snapshot.instanceId ? ` (${snapshot.instanceId})` : '');
+      setAgorgStatus(label, false);
     }
   } catch (_) {
     setAgorgStatus('UNAVAILABLE', false);
@@ -1043,7 +1168,8 @@ async function agorgList() {
   if (agorgRegistryList) {
     agorgRegistryList.innerHTML = '<div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">Loading backend properties...</div>';
   }
-  const data = await fetchJsonSafe('/api/agorg/list');
+  const snapshot = await hydrateScopeSnapshot(true);
+  const data = { ok: true, agorgs: snapshot.items || [] };
   const text = JSON.stringify(data, null, 2);
   if (agorgOut) agorgOut.textContent = text;
   if (data.ok) {
@@ -1093,7 +1219,8 @@ async function agorgShowActive() {
   if (agorgActiveDetails) {
     agorgActiveDetails.innerHTML = '<em>Loading active scope...</em>';
   }
-  const data = await fetchJsonSafe('/api/agorg/active');
+  const snapshot = await hydrateScopeSnapshot(true);
+  const data = { ok: true, active: snapshot.active };
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
   
@@ -1114,6 +1241,7 @@ async function agorgShowActive() {
     }
   }
   refreshAgorgHeader();
+  await agorgLoadPreferences();
 }
 
 async function agorgUse() {
@@ -1126,12 +1254,57 @@ async function agorgUse() {
   });
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
+  await hydrateScopeSnapshot(true);
   refreshAgorgHeader();
   if (data.ok) {
     agorgList();
     agorgShowActive();
     agorgTree();
+    queueUiSessionSave();
   }
+}
+
+async function agorgLoadPreferences() {
+  const data = await fetchJsonSafe('/api/agorg/preferences');
+  if (!data.ok) {
+    return;
+  }
+  const settings = data.settings || {};
+  const profile = settings.profile || {};
+  const prefs = settings.preferences || {};
+  const profileNameEl = document.getElementById('agorg-profile-name');
+  const defaultBranchEl = document.getElementById('agorg-pref-default-branch');
+  const releaseBranchEl = document.getElementById('agorg-pref-release-branch');
+  const autoPruneEl = document.getElementById('agorg-pref-auto-prune');
+  if (profileNameEl) profileNameEl.value = profile.name || '';
+  if (defaultBranchEl) defaultBranchEl.value = prefs.default_branch || '';
+  if (releaseBranchEl) releaseBranchEl.value = prefs.release_branch || '';
+  if (autoPruneEl) autoPruneEl.checked = !!prefs.auto_prune;
+}
+
+async function agorgSavePreferences() {
+  const req = {
+    merge: true,
+    preferences: {
+      profile: {
+        name: readInputValue('agorg-profile-name').trim()
+      },
+      preferences: {
+        default_branch: readInputValue('agorg-pref-default-branch').trim(),
+        release_branch: readInputValue('agorg-pref-release-branch').trim(),
+        auto_prune: !!readInputChecked('agorg-pref-auto-prune')
+      }
+    }
+  };
+  const data = await fetchJsonSafe('/api/agorg/preferences', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+  if (data.ok) queueUiSessionSave();
 }
 
 async function agorgLink() {
@@ -1374,6 +1547,7 @@ function activateSubPanel(panelId, btn) {
   const card = parent.parentElement;
   Array.from(card.querySelectorAll('.sub-panel')).forEach(p => p.classList.remove('active'));
   document.getElementById(panelId).classList.add('active');
+  if (!restoringUiSession) queueUiSessionSave();
 }
 
 async function pickDirectory(startDir) {
@@ -1728,15 +1902,35 @@ function toggleStream() {
   appendLive({ source: 'ui', info: streamPaused ? 'stream paused' : 'stream resumed' });
 }
 
-attachStream();
-restoreBusStatus();
-loadHistory();
-oracleLoadReports();
-depLoadLogs();
-depRun('policy');
-depRun('hook-policy');
-depRun('drift');
-depRun('services-status');
-refreshAgorgHeader();
-codexLoadContracts();
-setInterval(loadHistory, 30000);
+async function restoreUiSession() {
+  restoringUiSession = true;
+  try {
+    const snapshot = await hydrateScopeSnapshot(true);
+    if (snapshot.uiSession && typeof snapshot.uiSession === 'object') {
+      applyUiSessionState(snapshot.uiSession);
+    }
+  } finally {
+    restoringUiSession = false;
+  }
+}
+
+async function bootUi() {
+  attachStream();
+  restoreBusStatus();
+  await restoreUiSession();
+  await loadHistory();
+  await oracleLoadReports();
+  await depLoadLogs();
+  await depRun('policy');
+  await depRun('hook-policy');
+  await depRun('drift');
+  await depRun('services-status');
+  await refreshAgorgHeader();
+  await codexLoadContracts();
+  setInterval(loadHistory, 30000);
+  document.querySelectorAll('input, textarea, select').forEach((el) => {
+    el.addEventListener('change', () => queueUiSessionSave());
+  });
+}
+
+bootUi();

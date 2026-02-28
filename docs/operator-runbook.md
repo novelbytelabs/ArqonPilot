@@ -121,7 +121,14 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
     - Use `Discover + Import + Prune` for deterministic reconciliation of AGO rows.
     - Use `Tree` to inspect AGOrg/AGO graph structure.
     - Use `Link` for modular AGOrg composition (cycle-safe enforcement).
+    - Use `Scope Profile Preferences` in Active Scope to persist branch/release defaults per AGOrg.
+    - Use `Load Prefs` / `Save Prefs` after switching scope.
     - Use System Status `DB Status`, `DB Start`, `DB Stop` to control managed AGOrg datastore.
+
+Wave D multi-instance operation:
+- Start separate UI instances with isolated scope/session state:
+  - `pilot serve --ui-port 7788 --ui-instance-id pilot-main ...`
+  - `pilot serve --ui-port 7789 --ui-instance-id pilot-lab ...`
 
 7. Managed DB operations (CLI)
 

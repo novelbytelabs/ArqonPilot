@@ -361,14 +361,29 @@ Current enforcement now active in UI command bridge:
 
 ---
 
-### Wave D — Profiles and Multi-Instance Readiness ⬜ NOT STARTED
+### Wave D — Profiles and Multi-Instance Readiness ✅ COMPLETE
 
 | Feature | Status |
 |---------|--------|
-| Per-AGOrg preferences/profile settings | ⬜ |
-| Fast scope switching (cached state) | ⬜ |
-| Concurrent Pilot instances with isolated AGOrg contexts | ⬜ |
-| Last active tab/context restoration | ⬜ |
+| Per-AGOrg preferences/profile settings | ✅ |
+| Fast scope switching (cached state) | ✅ |
+| Concurrent Pilot instances with isolated AGOrg contexts | ✅ |
+| Last active tab/context restoration | ✅ |
+
+Wave D close-out details:
+
+1. AGOrg settings/profile persistence added through `/api/agorg/preferences` (GET/POST), backed by `agorgs.settings` JSON.
+2. Fast scope switching now uses `/api/agorg/scope_snapshot` (active + full list + recent scopes + UI session) with client-side cache TTL.
+3. Multi-instance isolation implemented with namespaced app-state keys:
+   - `instance:<ui_instance_id>:active_agorg_id`
+   - `instance:<ui_instance_id>:recent_scope_ids`
+   - `instance:<ui_instance_id>:ui_session_state`
+4. UI session restore/save implemented via `/api/ui/session`:
+   - restores last active tab and key AGOrg/Multi context fields on boot
+   - persists context after tab/scope/input changes
+5. `pilot serve` supports explicit instance selection:
+   - `--ui-instance-id <name>`
+   - default instance id is `ui-<ui_port>`
 
 ---
 

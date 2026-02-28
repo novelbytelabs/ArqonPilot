@@ -278,10 +278,21 @@ Keep this file current whenever a new failure class appears.
 - Cause:
   - No active AGOrg is selected, or event source emitted outside scoped command flows.
 - Recovery:
-  1. Set active AGOrg:
+ 1. Set active AGOrg:
      - `./scripts/pilot_local.sh agorg use <id-or-name>`
-  2. Confirm:
+ 2. Confirm:
      - `./scripts/pilot_local.sh agorg show`
+
+## G-020: Two UI windows show different active AGOrg/tab state
+
+- Signature:
+  - Separate UI windows disagree on active scope or restored tab/context.
+- Cause:
+  - State is isolated per `ui_instance_id` by design (Wave D).
+- Recovery:
+  1. Start with explicit instance id:
+     - `pilot serve --ui-port 7788 --ui-instance-id pilot-main ...`
+  2. Use same id to share state across windows, different ids to isolate intentionally.
 
 ## Frozen Policy (Do Not Change)
 

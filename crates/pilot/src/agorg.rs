@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use tokio_postgres::{Client, NoTls};
 use uuid::Uuid;
 
-const ACTIVE_AGORG_KEY: &str = "active_agorg_id";
+const LEGACY_ACTIVE_AGORG_KEY: &str = "active_agorg_id";
+const ACTIVE_AGORG_KEY_BASE: &str = "active_agorg_id";
+const RECENT_SCOPES_KEY_BASE: &str = "recent_scope_ids";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agorg {
@@ -92,14 +94,29 @@ pub struct RepoRelationships {
 pub struct AgorgStore {
     dsn_override: Option<String>,
     db: PilotDbManager,
+    instance_id: String,
 }
 
 impl AgorgStore {
     pub fn from_env() -> Self {
+        let instance_id = std::env::var("PILOT_INSTANCE_ID")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "default".to_string());
+        Self::from_instance(instance_id)
+    }
+
+    pub fn from_instance(instance_id: String) -> Self {
         Self {
             dsn_override: std::env::var("PILOT_AGORG_DATABASE_URL").ok(),
             db: PilotDbManager::from_env(),
+            instance_id,
         }
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 
     pub fn dsn(&self) -> String {
@@ -261,32 +278,32 @@ impl AgorgStore {
     pub async fn set_active_agorg(&self, agorg_id: Uuid) -> Result<()> {
         self.initialize().await?;
         let client = self.connect().await?;
+        let key = self.app_state_key(ACTIVE_AGORG_KEY_BASE);
         client
             .execute(
                 "INSERT INTO app_state (key, value)
                  VALUES ($1, jsonb_build_object('agorg_id', $2::text))
                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                &[&ACTIVE_AGORG_KEY, &agorg_id.to_string()],
+                &[&key, &agorg_id.to_string()],
             )
             .await
             .into_diagnostic()?;
+        self.record_recent_scope(agorg_id).await?;
         Ok(())
     }
 
     pub async fn get_active_agorg(&self) -> Result<Option<Agorg>> {
         self.initialize().await?;
-        let client = self.connect().await?;
-        let row = client
-            .query_opt(
-                "SELECT value FROM app_state WHERE key = $1",
-                &[&ACTIVE_AGORG_KEY],
-            )
-            .await
-            .into_diagnostic()?;
-        let Some(row) = row else {
+        let namespaced_key = self.app_state_key(ACTIVE_AGORG_KEY_BASE);
+        let value = if let Some(v) = self.get_app_state_value_raw(&namespaced_key).await? {
+            Some(v)
+        } else {
+            self.get_app_state_value_raw(LEGACY_ACTIVE_AGORG_KEY)
+                .await?
+        };
+        let Some(value) = value else {
             return Ok(None);
         };
-        let value: serde_json::Value = row.get(0);
         let Some(id_text) = value.get("agorg_id").and_then(|v| v.as_str()) else {
             return Ok(None);
         };
@@ -307,6 +324,88 @@ impl AgorgStore {
             .await
             .into_diagnostic()?;
         Ok(row.as_ref().map(row_to_agorg))
+    }
+
+    pub async fn get_agorg_settings(&self, id: Uuid) -> Result<Option<serde_json::Value>> {
+        self.initialize().await?;
+        let client = self.connect().await?;
+        let row = client
+            .query_opt("SELECT settings FROM agorgs WHERE id = $1", &[&id])
+            .await
+            .into_diagnostic()?;
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    pub async fn update_agorg_settings(
+        &self,
+        id: Uuid,
+        patch: serde_json::Value,
+        merge: bool,
+    ) -> Result<serde_json::Value> {
+        self.initialize().await?;
+        let current = self
+            .get_agorg_settings(id)
+            .await?
+            .ok_or_else(|| miette!("AGOrg {} not found", id))?;
+        let next = if merge {
+            merge_json_value(current, patch)
+        } else {
+            patch
+        };
+        let client = self.connect().await?;
+        let row = client
+            .query_one(
+                "UPDATE agorgs SET settings = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING settings",
+                &[&id, &next],
+            )
+            .await
+            .into_diagnostic()?;
+        let saved: serde_json::Value = row.get(0);
+        Ok(saved)
+    }
+
+    pub async fn get_app_state_value(&self, key_base: &str) -> Result<Option<serde_json::Value>> {
+        self.initialize().await?;
+        self.get_app_state_value_raw(&self.app_state_key(key_base))
+            .await
+    }
+
+    pub async fn set_app_state_value(
+        &self,
+        key_base: &str,
+        value: &serde_json::Value,
+    ) -> Result<()> {
+        self.initialize().await?;
+        let client = self.connect().await?;
+        let key = self.app_state_key(key_base);
+        client
+            .execute(
+                "INSERT INTO app_state (key, value)
+                 VALUES ($1, $2::jsonb)
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                &[&key, value],
+            )
+            .await
+            .into_diagnostic()?;
+        Ok(())
+    }
+
+    pub async fn get_recent_scope_ids(&self) -> Result<Vec<Uuid>> {
+        let value = self
+            .get_app_state_value(RECENT_SCOPES_KEY_BASE)
+            .await?
+            .unwrap_or_else(|| serde_json::json!([]));
+        let mut out = Vec::new();
+        if let Some(arr) = value.as_array() {
+            for item in arr {
+                if let Some(id_text) = item.as_str() {
+                    if let Ok(id) = Uuid::parse_str(id_text) {
+                        out.push(id);
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     pub async fn link_agorgs(&self, parent: Uuid, child: Uuid) -> Result<()> {
@@ -870,6 +969,20 @@ impl AgorgStore {
                     ) THEN
                         ALTER TABLE agorgs ADD COLUMN master_path TEXT NULL;
                     END IF;
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name='agorgs' AND column_name='discovery_method'
+                    ) THEN
+                        ALTER TABLE agorgs ADD COLUMN discovery_method TEXT NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name='agorgs' AND column_name='settings'
+                    ) THEN
+                        ALTER TABLE agorgs ADD COLUMN settings JSONB NOT NULL DEFAULT '{}'::jsonb;
+                    END IF;
                 END
                 $$;
                 ",
@@ -878,6 +991,37 @@ impl AgorgStore {
             .into_diagnostic()?;
 
         Ok(())
+    }
+
+    fn app_state_key(&self, key_base: &str) -> String {
+        format!(
+            "instance:{}:{}",
+            sanitize_instance_id(&self.instance_id),
+            key_base
+        )
+    }
+
+    async fn get_app_state_value_raw(&self, key: &str) -> Result<Option<serde_json::Value>> {
+        let client = self.connect().await?;
+        let row = client
+            .query_opt("SELECT value FROM app_state WHERE key = $1", &[&key])
+            .await
+            .into_diagnostic()?;
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    async fn record_recent_scope(&self, agorg_id: Uuid) -> Result<()> {
+        let mut ids = self.get_recent_scope_ids().await?;
+        ids.retain(|v| v != &agorg_id);
+        ids.insert(0, agorg_id);
+        ids.truncate(12);
+        let payload = serde_json::Value::Array(
+            ids.into_iter()
+                .map(|id| serde_json::Value::String(id.to_string()))
+                .collect(),
+        );
+        self.set_app_state_value(RECENT_SCOPES_KEY_BASE, &payload)
+            .await
     }
 }
 
@@ -1090,6 +1234,68 @@ fn validate_db_identifier(name: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn merge_json_value(base: serde_json::Value, patch: serde_json::Value) -> serde_json::Value {
+    match (base, patch) {
+        (serde_json::Value::Object(mut b), serde_json::Value::Object(p)) => {
+            for (k, v) in p {
+                let next = if let Some(existing) = b.remove(&k) {
+                    merge_json_value(existing, v)
+                } else {
+                    v
+                };
+                b.insert(k, next);
+            }
+            serde_json::Value::Object(b)
+        }
+        (_, replacement) => replacement,
+    }
+}
+
+fn sanitize_instance_id(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().max(8));
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "default".to_string()
+    } else {
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{merge_json_value, sanitize_instance_id};
+    use serde_json::json;
+
+    #[test]
+    fn test_merge_json_value_nested_objects() {
+        let base = json!({
+            "profile": {"name": "primary"},
+            "preferences": {"default_branch": "dev", "auto_prune": false}
+        });
+        let patch = json!({
+            "preferences": {"auto_prune": true, "release_branch": "main"}
+        });
+        let merged = merge_json_value(base, patch);
+        assert_eq!(merged["profile"]["name"], "primary");
+        assert_eq!(merged["preferences"]["default_branch"], "dev");
+        assert_eq!(merged["preferences"]["auto_prune"], true);
+        assert_eq!(merged["preferences"]["release_branch"], "main");
+    }
+
+    #[test]
+    fn test_sanitize_instance_id() {
+        assert_eq!(sanitize_instance_id("ui-7788"), "ui-7788");
+        assert_eq!(sanitize_instance_id("main ui"), "main_ui");
+        assert_eq!(sanitize_instance_id(""), "default");
+    }
 }
 
 pub fn scan_master_directory(master_path: &Path) -> Result<Vec<DiscoverCandidate>> {

@@ -32,6 +32,7 @@ const PILOT_UI_JS: &str = include_str!("pilot_ui.js");
 pub struct UiConfig {
     pub host: String,
     pub port: u16,
+    pub instance_id: String,
     pub bus: BusBridgeConfig,
     pub allow_mutations: bool,
     pub allowed_commands: Option<HashSet<String>>,
@@ -39,6 +40,7 @@ pub struct UiConfig {
 
 #[derive(Clone)]
 struct UiState {
+    instance_id: String,
     bus: BusBridgeConfig,
     events: broadcast::Sender<Value>,
     allow_mutations: bool,
@@ -174,6 +176,25 @@ struct AgorgReviewQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct AgorgPreferencesQuery {
+    agorg: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgPreferencesRequest {
+    agorg: Option<String>,
+    #[serde(default)]
+    preferences: Value,
+    merge: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UiSessionUpdateRequest {
+    #[serde(default)]
+    session: Value,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AgorgBatchCreateRequest {
     pub destination: String,
     pub name: String,
@@ -276,7 +297,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
     let contract_seed = load_persisted_codex_contracts(&codex_contracts_log).unwrap_or_default();
     let agorg_reviews_log = agorg_reviews_log_path();
     let agorg_review_seed = load_persisted_agorg_reviews(&agorg_reviews_log).unwrap_or_default();
-    let agorg_store = AgorgStore::from_env();
+    let agorg_store = AgorgStore::from_instance(cfg.instance_id.clone());
     if let Err(e) = agorg_store.initialize().await {
         eprintln!(
             "Warning: AGOrg store initialization failed ({}). AGOrg API may be unavailable until fixed.",
@@ -284,6 +305,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         );
     }
     let state = Arc::new(UiState {
+        instance_id: cfg.instance_id.clone(),
         bus: cfg.bus,
         events: event_tx,
         allow_mutations: cfg.allow_mutations,
@@ -313,6 +335,9 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/codex/contract", get(get_codex_contract))
         .route("/api/agorg/list", get(api_agorg_list))
         .route("/api/agorg/active", get(api_agorg_active))
+        .route("/api/agorg/scope_snapshot", get(api_agorg_scope_snapshot))
+        .route("/api/agorg/preferences", get(api_agorg_preferences))
+        .route("/api/agorg/preferences", post(api_agorg_set_preferences))
         .route("/api/agorg/batch-create", post(api_agorg_batch_create))
         .route("/api/agorg/create", post(api_agorg_create))
         .route("/api/agorg/create_project", post(api_agorg_create_project))
@@ -340,6 +365,8 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/dependencies/logs", get(get_dependency_logs))
         .route("/api/evidence/export", post(export_evidence_bundle))
         .route("/api/codex/action", post(run_codex_action))
+        .route("/api/ui/session", get(api_ui_session_get))
+        .route("/api/ui/session", post(api_ui_session_set))
         .route("/api/stream", get(stream_events))
         .route("/favicon.ico", get(favicon))
         .with_state(state);
@@ -596,6 +623,150 @@ async fn api_agorg_list(State(state): State<Arc<UiState>>) -> Response {
 async fn api_agorg_active(State(state): State<Arc<UiState>>) -> Response {
     match state.agorg_store.get_active_agorg().await {
         Ok(active) => Json(json!({"ok": true, "active": active})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn api_agorg_scope_snapshot(State(state): State<Arc<UiState>>) -> Response {
+    let all = match state.agorg_store.list_agorgs().await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    };
+    let active = match state.agorg_store.get_active_agorg().await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    };
+    let recent_ids = match state.agorg_store.get_recent_scope_ids().await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    };
+    let all_map: HashMap<uuid::Uuid, agorg::Agorg> =
+        all.iter().cloned().map(|ag| (ag.id, ag)).collect();
+    let recent_scopes: Vec<agorg::Agorg> = recent_ids
+        .iter()
+        .filter_map(|id| all_map.get(id).cloned())
+        .collect();
+    let ui_session = match state
+        .agorg_store
+        .get_app_state_value("ui_session_state")
+        .await
+    {
+        Ok(v) => v.unwrap_or_else(|| json!({})),
+        Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    };
+    Json(json!({
+        "ok": true,
+        "instance_id": state.instance_id,
+        "active": active,
+        "agorgs": all,
+        "recent_scopes": recent_scopes,
+        "ui_session": ui_session
+    }))
+    .into_response()
+}
+
+async fn api_agorg_preferences(
+    State(state): State<Arc<UiState>>,
+    Query(q): Query<AgorgPreferencesQuery>,
+) -> Response {
+    let id = if let Some(value) = q.agorg.as_deref() {
+        match resolve_agorg_ref(&state.agorg_store, value.trim()).await {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        }
+    } else {
+        match state.agorg_store.get_active_agorg().await {
+            Ok(Some(ag)) => ag.id,
+            Ok(None) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "No active AGOrg; set scope first or pass agorg",
+                )
+            }
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        }
+    };
+    let agorg_record = match state.agorg_store.get_agorg(id).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "AGOrg not found"),
+        Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    };
+    match state.agorg_store.get_agorg_settings(id).await {
+        Ok(settings) => Json(json!({
+            "ok": true,
+            "agorg": agorg_record,
+            "settings": settings.unwrap_or_else(|| json!({}))
+        }))
+        .into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn api_agorg_set_preferences(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgPreferencesRequest>,
+) -> Response {
+    let id = if let Some(value) = req.agorg.as_deref() {
+        match resolve_agorg_ref(&state.agorg_store, value.trim()).await {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        }
+    } else {
+        match state.agorg_store.get_active_agorg().await {
+            Ok(Some(ag)) => ag.id,
+            Ok(None) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "No active AGOrg; set scope first or pass agorg",
+                )
+            }
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        }
+    };
+    if !req.preferences.is_object() {
+        return error_response(StatusCode::BAD_REQUEST, "preferences must be a JSON object");
+    }
+    match state
+        .agorg_store
+        .update_agorg_settings(id, req.preferences, req.merge.unwrap_or(true))
+        .await
+    {
+        Ok(settings) => {
+            Json(json!({"ok": true, "agorg_id": id, "settings": settings})).into_response()
+        }
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_ui_session_get(State(state): State<Arc<UiState>>) -> Response {
+    match state
+        .agorg_store
+        .get_app_state_value("ui_session_state")
+        .await
+    {
+        Ok(session) => Json(json!({
+            "ok": true,
+            "instance_id": state.instance_id,
+            "session": session.unwrap_or_else(|| json!({}))
+        }))
+        .into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn api_ui_session_set(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<UiSessionUpdateRequest>,
+) -> Response {
+    if !req.session.is_object() {
+        return error_response(StatusCode::BAD_REQUEST, "session must be a JSON object");
+    }
+    match state
+        .agorg_store
+        .set_app_state_value("ui_session_state", &req.session)
+        .await
+    {
+        Ok(()) => Json(json!({"ok": true, "instance_id": state.instance_id})).into_response(),
         Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     }
 }
@@ -3561,6 +3732,21 @@ Recommended flow:
             <div class="row" style="margin-top:8px;">
               <button class="btn secondary" onclick="agorgUpdate()">Update</button>
               <button class="btn secondary" style="color:#ff6b6b; border-color:#ff6b6b;" onclick="agorgDelete()">Delete</button>
+            </div>
+            <h4 style="margin:14px 0 6px;">Scope Profile Preferences</h4>
+            <label class="field-label" for="agorg-profile-name">Profile Name</label>
+            <input id="agorg-profile-name" placeholder="primary" />
+            <label class="field-label" for="agorg-pref-default-branch">Default Branch</label>
+            <input id="agorg-pref-default-branch" placeholder="dev" />
+            <label class="field-label" for="agorg-pref-release-branch">Release Branch</label>
+            <input id="agorg-pref-release-branch" placeholder="main" />
+            <label style="font-size:0.82rem;color:#a8b9e3; display:block; margin-top:6px;">
+              <input id="agorg-pref-auto-prune" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
+              Auto-prune stale AGO rows by default
+            </label>
+            <div class="row" style="margin-top:8px;">
+              <button class="btn secondary" onclick="agorgLoadPreferences()">Load Prefs</button>
+              <button class="btn secondary" onclick="agorgSavePreferences()">Save Prefs</button>
             </div>
           </div>
         </div>

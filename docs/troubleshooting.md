@@ -530,3 +530,17 @@ Fix:
 3. If running repo-local actions (`oracle/heal/branch/navigate`) or scoped Dashboard dependency actions (`policy/hook-policy/drift/gate/repair/push`), ensure current directory is within AGOrg root.
 
 4. Infra service controls (`db-*`, `bus-*`, `services-*`) are intentionally global and can run even before scope is set.
+
+## 2.5) Active scope seems to "change" between UI windows
+
+Symptoms:
+- Two Pilot UI windows show different active AGOrg or tab/context state.
+
+Cause:
+- UI instances are now intentionally isolated by `ui_instance_id`.
+- Each instance persists active scope/session independently.
+
+Fix:
+1. Confirm instance id in AGOrg header chip suffix (e.g. `(ui-7788)`).
+2. If you want shared state, start both windows with the same `--ui-instance-id`.
+3. If you want isolation, use distinct ids explicitly.
