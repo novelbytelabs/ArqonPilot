@@ -106,12 +106,17 @@ Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
     - Use `Contracts (Resume / Replay)` to reload prior contracts, inspect status, and retry failed contracts.
     - Contract history persists at `~/.pilot/reports/codex_contracts.jsonl` and is restored when UI restarts.
 
-6. `AGOrg` tab (Wave 16 foundation)
+6. AGOrg scope controls (Wave 16 foundation)
 
+    - Click the header chip (`AGOrg: ...`) to open AGOrg controls.
     - Use `Create AGOrg Project` to define scope + autoscan hierarchy.
+    - Use `Discover Preview` to load candidates into the review panel before mutation.
+    - Use `Approve All` / `Reject All` and per-row checkboxes in Discovery Review.
+    - Use `Import Approved` to import only selected AGO candidates.
     - Use `List AGOrgs` and `Show Active` to verify current scope.
     - Use `Use Scope` to switch Control Panel context.
     - Use `Discover` to scan a root path with configurable depth.
+    - Use `Discover + Import + Prune` for deterministic reconciliation of AGO rows.
     - Use `Tree` to inspect AGOrg/AGO graph structure.
     - Use `Link` for modular AGOrg composition (cycle-safe enforcement).
     - Use System Status `DB Status`, `DB Start`, `DB Stop` to control managed AGOrg datastore.

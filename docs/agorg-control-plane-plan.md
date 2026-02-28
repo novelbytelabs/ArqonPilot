@@ -284,6 +284,7 @@ Add new commands/endpoints:
 | `list` — list all registered AGOrgs | ✅ | `agorg.rs:218-231`, route at `serve_ui.rs:263` |
 | `use` — set active scope | ✅ | `agorg.rs:233-246`, route at `serve_ui.rs:270` |
 | `discover` — scan directory tree | ✅ | `agorg.rs:686-742`, route at `serve_ui.rs:271` |
+| `discover` import reconciliation (`--prune-missing`) | ✅ | `import_discovery_with_options` in `agorg.rs`; CLI flags on `agorg discover/create-project`; API supports `prune_missing` |
 | `tree` — render hierarchy | ✅ | `agorg.rs:355-440`, route at `serve_ui.rs:272` |
 | `link` — link parent/child AGOrgs | ✅ | `agorg.rs:284-322` with cycle detection, route at `serve_ui.rs:273` |
 | `update` — update AGOrg metadata | ✅ | `agorg.rs:162-206`, route at `serve_ui.rs:268` |
@@ -299,8 +300,8 @@ Add new commands/endpoints:
 | Active Scope panel with details | ✅ | `agorgShowActive()` at `serve_ui.rs:4302-4327` |
 | Update button in Active Scope panel | ✅ | HTML button at `serve_ui.rs:2978`, JS at `serve_ui.rs:4166-4190` |
 | Directory browser (zenity integration) | ✅ | `browseAgorgMaster`, `browseAgorgRoot`, etc. → `pick_directory` at `serve_ui.rs:682-700` |
-| **Delete button in Active Scope panel** | ⚠️ **BUG** | Button EXISTS at `serve_ui.rs:2979` (`onclick="agorgDelete()"`), but **JS function `agorgDelete` does NOT EXIST**. Clicking it throws `ReferenceError`. |
-| **`switchAgorgScope` request body** | ⚠️ **BUG** | Function sends `{ id }` but `/api/agorg/use` expects `{ agorg }`. Scope switching from Hero Dropdown/Registry **silently fails** with 400 Bad Request. See G-D below. |
+| Delete button in Active Scope panel | ✅ | `agorgDelete()` is implemented and wired end-to-end; delete flow works from UI and CLI. |
+| `switchAgorgScope` request body | ✅ | UI sends `{ agorg }` payload expected by `/api/agorg/use`; scope switching now succeeds from Hero Dropdown and Registry panel. |
 
 #### B.2 — Batch Create (SECONDARY PATH)
 
@@ -313,24 +314,25 @@ Add new commands/endpoints:
 | Progress feedback (SSE/WS pipe) | ⬜ | No real-time progress events. Fire-and-forget only. |
 | Configurable default destination | ⬜ | Currently hardcoded/browser-picked. No per-AGOrg config. |
 
-#### B.3 — Registration Review/Approval Step ⬜
+#### B.3 — Registration Review/Approval Step 🔶 PARTIAL
 
 | Feature | Status |
 |---------|--------|
-| After Discovery, show preview panel with classification per item | ⬜ |
-| Let operator approve/reject before import | ⬜ |
-| Precursor to full Reconciliation (B.4) | ⬜ |
+| After Discovery, show preview panel with classification per item | ✅ |
+| Let operator approve/reject before import | ✅ |
+| Persist review decisions/history as artifact | ⬜ |
+| Precursor to full Reconciliation (B.4) | 🔶 |
 
-#### B.4 — Reconciliation ⬜
+#### B.4 — Reconciliation 🔶 PARTIAL
 
 | Feature | Status |
 |---------|--------|
 | Duplicate detection | ⬜ |
-| Candidate quality checks | ⬜ |
-| Policy conformance checks | ⬜ |
+| Candidate quality checks | 🔶 |
+| Policy conformance checks | 🔶 |
 | Reconciliation report artifact | ⬜ |
 
-**Not started.** Requires B.1 to be rock-solid first.
+**Progress note:** discovery now enforces flat-fleet defaults (skips nested repos and `archive/` by default), but this is forward-looking only and does not auto-prune already imported AGO rows.
 
 ---
 
@@ -349,7 +351,7 @@ Until this wave is complete, "setting an AGOrg scope" is cosmetic — it changes
 | Telemetry stream tagged with AGOrg context | ⬜ |
 | AGOrg link validation blocks circular loops | ✅ (Already done — `link_agorgs` has cycle detection at `agorg.rs:290-311`) |
 
-**Prerequisite**: Wave B.1 bugs (G-D, missing `agorgDelete`) must be fixed first.
+**Prerequisite**: finish Wave B reconciliation controls so scope enforcement operates on clean AGO sets.
 
 ---
 
@@ -517,12 +519,32 @@ Note:
 
 1. In restricted sandbox mode, `--import-to` DB mutation may fail with OS permission constraints unrelated to AGOrg logic. Core discovery guardrail behavior was verified via non-mutating discover output.
 
+### Reconciliation Evidence Snapshot (2026-02-28)
+
+Command executed:
+
+1. `./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4 --import-to c31d9200-30f6-4418-b33c-8ea5269c4461 --prune-missing`
+
+Observed result:
+
+1. `upserted=19, pruned=4, final=19`
+2. Follow-up `agorg tree --root c31d9200-30f6-4418-b33c-8ea5269c4461` no longer contained:
+   - `archive/ArqonSAS`
+   - `ArqonHPO/bindings/python`
+   - `ArqonBus/sdks/python`
+   - `ArqonCore/python/arqon_narrative`
+
+Conclusion:
+
+1. Reconciliation via import+prune is now operational and deterministic.
+2. Stale AGO rows can be corrected without manual DB edits.
+
 ---
 
 ## Recommended Next Session Priority
 
-1. **Fix G-D** — change `switchAgorgScope` to send `{ agorg: id }` instead of `{ id }`. One-line fix. Unlocks scope switching.
-2. **Fix G-E** — add `agorgDelete()` function. ~15 lines. Completes CRUD surface.
-3. **Extract JS from `serve_ui.rs`** — eliminates the entire class of silent UI-killing bugs.
-4. **Dogfood the Import Path** — register `~/Projects/arqon/` as the canonical AGOrg, discover all 17 siblings, verify the registry renders correctly.
-5. **Begin Wave C** — scope-aware Dashboard and Oracle.
+1. **Wave B.4** — add duplicate detection + policy quality checks report (artifact-backed).
+2. **B.3 close-out** — persist explicit review decisions/history as artifact for replay/audit.
+3. **Begin Wave C** — scope-aware Dashboard/Oracle/Heal/Dependencies/Branch/Multi filtering by active AGOrg.
+4. **Add AGOrg policy report artifact** — persist reconciliation summary JSON for audit/history playback.
+5. **Wave D kickoff** — per-AGOrg profile/preferences for multi-instance readiness.

@@ -131,9 +131,23 @@ Core AGOrg commands:
 ./scripts/pilot_local.sh agorg show
 ./scripts/pilot_local.sh agorg use Arqon
 ./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4
+./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4 --import-to Arqon --prune-missing
 ./scripts/pilot_local.sh agorg tree
-./scripts/pilot_local.sh agorg create-project --name Arqon --root /home/irbsurfer/Projects/arqon/Arqon --autoscan --import --default-scope
+./scripts/pilot_local.sh agorg create-project --name Arqon --root /home/irbsurfer/Projects/arqon/Arqon --autoscan --import --prune-missing --default-scope
 ```
+
+Discovery policy notes:
+- Default discovery is flat-fleet: nested repos and `archive/` are skipped.
+- To include nested repositories explicitly, set:
+  - `PILOT_AGORG_ALLOW_NESTED_REPOS=1`
+- Use `--prune-missing` during import to reconcile and remove stale AGO rows not present in the current discovery set.
+
+UI review/import flow:
+- In AGOrg panel (`Import Existing`):
+  1. `Discover Preview` to fetch candidates.
+  2. Approve/reject candidates in `Discovery Review`.
+  3. `Import Approved` to apply selected AGO candidates only.
+  4. Keep `prune stale AGO rows` enabled for deterministic reconciliation.
 
 ## Critical Linux/Conda Runtime Step
 

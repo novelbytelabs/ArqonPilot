@@ -460,3 +460,27 @@ Recovery:
 3. Ensure payload is valid JSON object.
 4. For mutation execution, run `pilot serve ... --ui-allow-mutations`.
 5. If allowlist is configured, ensure command is in `--ui-allow-command`.
+
+## 2.2) AGOrg tree shows old nested/archive AGOs after discovery policy update
+
+Symptom:
+- `agorg discover` output looks correct (top-level only),
+- but `agorg tree` still includes stale entries such as `archive/...` or nested `bindings/python`.
+
+Cause:
+- Discovery guardrails affect new scans/imports but do not retroactively remove already imported AGO rows.
+
+Fix:
+
+```bash
+./scripts/pilot_local.sh agorg discover \
+  --root /home/irbsurfer/Projects/arqon \
+  --depth 4 \
+  --import-to Arqon \
+  --prune-missing
+```
+
+Notes:
+- `--prune-missing` keeps AGO rows aligned with the current discovery result.
+- To intentionally include nested repos in discovery, set:
+  - `PILOT_AGORG_ALLOW_NESTED_REPOS=1`

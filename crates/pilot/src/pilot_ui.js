@@ -58,6 +58,7 @@ const agorgRegistryList = document.getElementById('agorg-registry-list');
 const agorgActiveDetails = document.getElementById('agorg-active-details');
 const agorgOut = document.getElementById('agorg-out');
 const agorgDiscoveryOut = document.getElementById('agorg-discovery-out');
+const agorgDiscoveryReview = document.getElementById('agorg-discovery-review');
 const codexOut = document.getElementById('codex-out');
 const codexContractsOut = document.getElementById('codex-contracts-out');
 const codexContractSelect = document.getElementById('codex-contract-select');
@@ -95,6 +96,8 @@ let streamPaused = false;
 let streamHandle = null;
 let latestCodexContractId = '';
 let currentTab = 'dashboard';
+let agorgDiscoveryCache = null;
+let agorgApprovedPaths = new Set();
 
 function activatePanel(tabName) {
   currentTab = tabName;
@@ -179,7 +182,7 @@ async function loadAgorgQuickNav() {
 }
 
 async function switchAgorgScope(id) {
-  const req = { id };
+  const req = { agorg: id };
   const res = await fetch('/api/agorg/use', {
     method: 'POST',
     headers: {'content-type':'application/json'},
@@ -826,6 +829,7 @@ async function depLoadLogs() {
 }
 
 async function agorgCreateProject() {
+  const pruneEl = document.getElementById('agorg-prune');
   const req = {
     name: document.getElementById('agorg-name').value.trim(),
     root: document.getElementById('agorg-root').value.trim(),
@@ -834,6 +838,7 @@ async function agorgCreateProject() {
     scan_depth: parseInt(document.getElementById('agorg-depth').value || '4', 10),
     autoscan: true, // Always scan for fleet model
     import: true,   // Default to import for fleet model
+    prune_missing: !!(pruneEl && pruneEl.checked),
     default_scope: !!document.getElementById('agorg-default').checked
   };
   const data = await fetchJsonSafe('/api/agorg/create_project', {
@@ -842,6 +847,9 @@ async function agorgCreateProject() {
     body: JSON.stringify(req)
   });
   agorgOut.textContent = JSON.stringify(data, null, 2);
+  if (data.discovery) {
+    setDiscoveryCache(data.discovery);
+  }
   if (data.ok && data.agorg && data.agorg.master_path) {
     agorgScanMaster(data.agorg.master_path);
   }
@@ -1133,10 +1141,12 @@ async function agorgLink() {
 }
 
 async function agorgDiscover() {
+  const discoverPrune = document.getElementById('agorg-discover-prune');
   const req = {
     root: document.getElementById('agorg-discover-root').value.trim(),
     depth: parseInt(document.getElementById('agorg-discover-depth').value || '4', 10),
-    import_to: document.getElementById('agorg-discover-import-to').value.trim() || null
+    import_to: document.getElementById('agorg-discover-import-to').value.trim() || null,
+    prune_missing: !!(discoverPrune && discoverPrune.checked)
   };
   const res = await fetch('/api/agorg/discover', {
     method: 'POST',
@@ -1146,6 +1156,131 @@ async function agorgDiscover() {
   const data = await res.json();
   const text = JSON.stringify(data, null, 2);
   agorgDiscoveryOut.textContent = text;
+  out.textContent = text;
+  if (data.ok && data.discovery) {
+    setDiscoveryCache(data.discovery);
+  }
+}
+
+function setDiscoveryCache(discovery) {
+  agorgDiscoveryCache = discovery;
+  const candidates = Array.isArray(discovery?.candidates) ? discovery.candidates : [];
+  agorgApprovedPaths = new Set(
+    candidates.filter(c => c.kind === 'ago').map(c => c.path)
+  );
+  renderAgorgDiscoveryReview();
+}
+
+function renderAgorgDiscoveryReview() {
+  if (!agorgDiscoveryReview) return;
+  const candidates = Array.isArray(agorgDiscoveryCache?.candidates) ? agorgDiscoveryCache.candidates : [];
+  if (!candidates.length) {
+    agorgDiscoveryReview.innerHTML = '<div class="tl-empty">Run Discover Preview to populate candidates.</div>';
+    return;
+  }
+  const agoCount = candidates.filter(c => c.kind === 'ago').length;
+  const approvedCount = candidates.filter(c => c.kind === 'ago' && agorgApprovedPaths.has(c.path)).length;
+  const rows = candidates.map((c) => {
+    const disabled = c.kind !== 'ago' ? 'disabled' : '';
+    const checked = c.kind === 'ago' && agorgApprovedPaths.has(c.path) ? 'checked' : '';
+    const kindTag = c.kind === 'agorg' ? 'ORG' : (c.kind === 'ago' ? 'AGO' : 'OTHER');
+    return `<div style="display:grid;grid-template-columns:24px 64px 1fr;gap:8px;align-items:center;padding:6px 4px;border-bottom:1px solid rgba(75,102,166,0.25);">
+      <input type="checkbox" ${checked} ${disabled} onchange="agorgToggleCandidate('${encodeURIComponent(c.path)}', this.checked)" />
+      <span class="chip ${c.kind === 'ago' ? 'ok' : 'neutral'}">${kindTag}</span>
+      <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.path}">${c.name} <span style="color:#8ca0cf;">(${c.path})</span></div>
+    </div>`;
+  }).join('');
+  agorgDiscoveryReview.innerHTML = `
+    <div style="padding:6px 4px;color:#a8b9e3;font-size:0.82rem;">Approved ${approvedCount}/${agoCount} AGO candidates</div>
+    ${rows}
+  `;
+}
+
+function agorgToggleCandidate(encodedPath, approved) {
+  const path = decodeURIComponent(encodedPath);
+  if (approved) agorgApprovedPaths.add(path);
+  else agorgApprovedPaths.delete(path);
+  renderAgorgDiscoveryReview();
+}
+
+function agorgSelectAllReview(approve) {
+  const candidates = Array.isArray(agorgDiscoveryCache?.candidates) ? agorgDiscoveryCache.candidates : [];
+  if (!candidates.length) return;
+  agorgApprovedPaths = new Set(
+    approve ? candidates.filter(c => c.kind === 'ago').map(c => c.path) : []
+  );
+  renderAgorgDiscoveryReview();
+}
+
+async function getActiveAgorgId() {
+  const active = await fetchJsonSafe('/api/agorg/active');
+  if (!active?.ok || !active.agorg?.id) return null;
+  return active.agorg.id;
+}
+
+async function agorgDiscoverPreview() {
+  const root = document.getElementById('agorg-master').value.trim();
+  const depth = parseInt(document.getElementById('agorg-depth').value || '4', 10);
+  const data = await fetchJsonSafe('/api/agorg/discover', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ root, depth })
+  });
+  agorgDiscoveryOut.textContent = JSON.stringify(data, null, 2);
+  out.textContent = JSON.stringify(data, null, 2);
+  if (data.ok && data.discovery) {
+    setDiscoveryCache(data.discovery);
+  }
+}
+
+async function agorgImportApproved() {
+  const activeId = await getActiveAgorgId();
+  if (!activeId) {
+    agorgOut.textContent = JSON.stringify({ ok: false, error: 'No active AGOrg scope selected' }, null, 2);
+    return;
+  }
+  const candidates = Array.isArray(agorgDiscoveryCache?.candidates) ? agorgDiscoveryCache.candidates : [];
+  if (!candidates.length) {
+    agorgOut.textContent = JSON.stringify({ ok: false, error: 'No discovery cache. Run Discover Preview first.' }, null, 2);
+    return;
+  }
+  const approved = candidates.filter(c => c.kind !== 'ago' || agorgApprovedPaths.has(c.path));
+  const pruneEl = document.getElementById('agorg-prune');
+  const req = {
+    agorg: activeId,
+    root: agorgDiscoveryCache.root || document.getElementById('agorg-master').value.trim(),
+    depth: agorgDiscoveryCache.depth || parseInt(document.getElementById('agorg-depth').value || '4', 10),
+    candidates: approved,
+    prune_missing: !!(pruneEl && pruneEl.checked)
+  };
+  const data = await fetchJsonSafe('/api/agorg/import_selected', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
+  out.textContent = text;
+  if (data.ok) {
+    await agorgTree();
+    await agorgList();
+    await agorgShowActive();
+  }
+}
+
+async function agorgReconcile() {
+  const activeId = await getActiveAgorgId();
+  if (!activeId) {
+    agorgOut.textContent = JSON.stringify({ ok: false, error: 'No active AGOrg scope selected' }, null, 2);
+    return;
+  }
+  const data = await fetchJsonSafe('/api/agorg/reconcile', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ agorg: activeId })
+  });
+  const text = JSON.stringify(data, null, 2);
+  agorgOut.textContent = text;
   out.textContent = text;
 }
 

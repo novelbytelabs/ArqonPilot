@@ -100,6 +100,7 @@ struct AgorgCreateProjectRequest {
     scan_depth: Option<usize>,
     autoscan: Option<bool>,
     import: Option<bool>,
+    prune_missing: Option<bool>,
     default_scope: Option<bool>,
 }
 
@@ -141,6 +142,21 @@ struct AgorgDiscoverRequest {
     root: String,
     depth: Option<usize>,
     import_to: Option<String>,
+    prune_missing: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgImportSelectedRequest {
+    agorg: String,
+    root: String,
+    depth: Option<usize>,
+    candidates: Vec<agorg::DiscoverCandidate>,
+    prune_missing: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgReconcileRequest {
+    agorg: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,6 +287,11 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/agorg/delete", post(api_agorg_delete))
         .route("/api/agorg/use", post(api_agorg_use))
         .route("/api/agorg/discover", post(api_agorg_discover))
+        .route(
+            "/api/agorg/import_selected",
+            post(api_agorg_import_selected),
+        )
+        .route("/api/agorg/reconcile", post(api_agorg_reconcile))
         .route("/api/agorg/tree", get(api_agorg_tree))
         .route("/api/agorg/link", post(api_agorg_link))
         .route("/api/agorg/scan_master", post(api_agorg_scan_master))
@@ -525,14 +546,24 @@ async fn api_agorg_create_project(
         .await
     {
         Ok((agorg, scan)) => {
+            let mut import_summary: Option<agorg::ImportDiscoverySummary> = None;
             if req.import.unwrap_or(false) {
                 if let Some(ref s) = scan {
-                    if let Err(err) = state.agorg_store.import_discovery(agorg.id, s).await {
-                        return error_response(StatusCode::BAD_REQUEST, &err.to_string());
+                    let prune_missing = req.prune_missing.unwrap_or(false);
+                    match state
+                        .agorg_store
+                        .import_discovery_with_options(agorg.id, s, prune_missing)
+                        .await
+                    {
+                        Ok(summary) => import_summary = Some(summary),
+                        Err(err) => {
+                            return error_response(StatusCode::BAD_REQUEST, &err.to_string());
+                        }
                     }
                 }
             }
-            Json(json!({"ok": true, "agorg": agorg, "discovery": scan})).into_response()
+            Json(json!({"ok": true, "agorg": agorg, "discovery": scan, "import_summary": import_summary}))
+                .into_response()
         }
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
     }
@@ -566,11 +597,74 @@ async fn api_agorg_discover(
             Ok(v) => v,
             Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
         };
-        if let Err(err) = state.agorg_store.import_discovery(id, &scan).await {
-            return error_response(StatusCode::BAD_REQUEST, &err.to_string());
-        }
+        let prune_missing = req.prune_missing.unwrap_or(false);
+        match state
+            .agorg_store
+            .import_discovery_with_options(id, &scan, prune_missing)
+            .await
+        {
+            Ok(summary) => {
+                return Json(json!({"ok": true, "discovery": scan, "import_summary": summary}))
+                    .into_response();
+            }
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        };
     }
     Json(json!({"ok": true, "discovery": scan})).into_response()
+}
+
+async fn api_agorg_import_selected(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgImportSelectedRequest>,
+) -> Response {
+    let id = match resolve_agorg_ref(&state.agorg_store, req.agorg.trim()).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    let discovery = agorg::DiscoverResult {
+        root: req.root.trim().to_string(),
+        depth: req.depth.unwrap_or(4),
+        candidates: req.candidates,
+    };
+    let prune_missing = req.prune_missing.unwrap_or(false);
+    match state
+        .agorg_store
+        .import_discovery_with_options(id, &discovery, prune_missing)
+        .await
+    {
+        Ok(summary) => {
+            Json(json!({"ok": true, "agorg_id": id, "import_summary": summary})).into_response()
+        }
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_agorg_reconcile(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgReconcileRequest>,
+) -> Response {
+    let id = if let Some(value) = req.agorg.as_deref() {
+        match resolve_agorg_ref(&state.agorg_store, value.trim()).await {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        }
+    } else {
+        match state.agorg_store.get_active_agorg().await {
+            Ok(Some(ag)) => ag.id,
+            Ok(None) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "No active AGOrg; set scope first or pass agorg",
+                )
+            }
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        }
+    };
+
+    match state.agorg_store.reconcile_agorg(id).await {
+        Ok(report) => Json(json!({"ok": true, "report": report})).into_response(),
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
 }
 
 async fn api_agorg_tree(
@@ -3037,14 +3131,22 @@ Recommended flow:
                 import discovery
               </label>
               <label style="font-size:0.82rem;color:#a8b9e3;">
+                <input id="agorg-prune" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+                prune stale AGO rows
+              </label>
+              <label style="font-size:0.82rem;color:#a8b9e3;">
                 <input id="agorg-default" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
                 set default scope
               </label>
             </div>
             </div>
             <div class="row">
+              <button class="btn secondary" onclick="agorgDiscoverPreview()">Discover Preview</button>
+              <button class="btn secondary" onclick="agorgImportApproved()">Import Approved</button>
+              <button class="btn secondary" onclick="agorgReconcile()">Reconcile Report</button>
               <button class="btn" onclick="agorgCreateProject()">Import</button>
             </div>
+            <div class="helper" style="margin-top:8px;">`Discover Preview` lets you approve/reject before import. `Import` is one-shot create + autoscan + import.</div>
           </div>
 
           <!-- Sub-Panel: Create -->
@@ -3110,6 +3212,17 @@ Recommended flow:
               <button class="action-btn" onclick="clearElement('agorg-discovery-out')">CLEAR</button>
             </div>
             <pre id="agorg-discovery-out">[]</pre>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Discovery Review (Approve / Reject)</h3>
+          <div class="row">
+            <button class="btn secondary" onclick="agorgSelectAllReview(true)">Approve All</button>
+            <button class="btn secondary" onclick="agorgSelectAllReview(false)">Reject All</button>
+          </div>
+          <div class="helper">Only approved AGO candidates are imported by `Import Approved`.</div>
+          <div id="agorg-discovery-review" class="timeline" style="max-height: 320px; overflow-y: auto; padding: 8px; border: 1px solid #2d426c; border-radius: 10px; background: rgba(0,0,0,0.2);">
+            <div class="tl-empty">Run Discover Preview to populate candidates.</div>
           </div>
         </div>
       </div>

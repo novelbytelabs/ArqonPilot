@@ -742,6 +742,8 @@ struct AgorgCreateProjectArgs {
     #[arg(long)]
     import: bool,
     #[arg(long)]
+    prune_missing: bool,
+    #[arg(long)]
     default_scope: bool,
 }
 
@@ -781,6 +783,8 @@ struct AgorgDiscoverArgs {
     depth: usize,
     #[arg(long)]
     import_to: Option<String>,
+    #[arg(long)]
+    prune_missing: bool,
 }
 
 #[derive(Args, Clone)]
@@ -2364,12 +2368,22 @@ async fn run_agorg(args: &AgorgArgs) -> Result<CommandReport> {
             );
             if args.import {
                 if let Some(scan) = discovered.as_ref() {
-                    store.import_discovery(ag.id, scan).await?;
-                    println!("Imported {} discovered candidates", scan.candidates.len());
+                    let summary = store
+                        .import_discovery_with_options(ag.id, scan, args.prune_missing)
+                        .await?;
+                    println!(
+                        "Imported discovery into {} (upserted={}, pruned={}, final={})",
+                        ag.id, summary.upserted, summary.pruned, summary.final_count
+                    );
                 } else {
                     let scan = agorg::discover_hierarchy(&args.root, args.scan_depth)?;
-                    store.import_discovery(ag.id, &scan).await?;
-                    println!("Imported {} discovered candidates", scan.candidates.len());
+                    let summary = store
+                        .import_discovery_with_options(ag.id, &scan, args.prune_missing)
+                        .await?;
+                    println!(
+                        "Imported discovery into {} (upserted={}, pruned={}, final={})",
+                        ag.id, summary.upserted, summary.pruned, summary.final_count
+                    );
                 }
             }
             Ok(CommandReport::ok(
@@ -2453,11 +2467,12 @@ async fn run_agorg(args: &AgorgArgs) -> Result<CommandReport> {
             let scan = agorg::discover_hierarchy(&args.root, args.depth)?;
             if let Some(target) = &args.import_to {
                 let id = resolve_agorg_ref(&store, target).await?;
-                store.import_discovery(id, &scan).await?;
+                let summary = store
+                    .import_discovery_with_options(id, &scan, args.prune_missing)
+                    .await?;
                 println!(
-                    "Imported discovery into {} ({} candidates)",
-                    id,
-                    scan.candidates.len()
+                    "Imported discovery into {} (upserted={}, pruned={}, final={})",
+                    id, summary.upserted, summary.pruned, summary.final_count
                 );
             }
             println!("{}", serde_json::to_string_pretty(&scan).into_diagnostic()?);

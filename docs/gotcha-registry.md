@@ -228,6 +228,22 @@ Keep this file current whenever a new failure class appears.
   2. **Before declaring done**, open the browser DevTools Console and verify zero errors on page load.
   3. `cargo check` passing does NOT mean the UI works. The JS is an opaque string to Rust.
 
+## G-016: Discovery output is clean but AGOrg tree still contains stale AGO rows
+
+- Signature:
+  - `agorg discover --root ...` returns top-level candidates only
+  - `agorg tree` still shows historical nested/archive rows (for example `archive/...`, `bindings/python`)
+- Cause:
+  - discovery guardrails affect new scans but do not retroactively delete already imported AGO rows.
+- Recovery:
+  1. Reconcile import with prune:
+     - `./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4 --import-to Arqon --prune-missing`
+  2. Verify:
+     - `./scripts/pilot_local.sh agorg tree --root Arqon`
+- Notes:
+  - default discovery is flat-fleet (nested repos skipped, `archive/` skipped).
+  - set `PILOT_AGORG_ALLOW_NESTED_REPOS=1` only when nested-repo discovery is intentionally required.
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`

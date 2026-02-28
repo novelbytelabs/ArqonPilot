@@ -48,10 +48,38 @@ pub struct DiscoverResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportDiscoverySummary {
+    pub upserted: usize,
+    pub pruned: usize,
+    pub final_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgorgTreeNode {
     pub agorg: Agorg,
     pub child_agorgs: Vec<AgorgTreeNode>,
     pub agos: Vec<AgoRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgorgReconcileIssue {
+    pub repo_name: String,
+    pub repo_path: String,
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgorgReconcileReport {
+    pub agorg_id: Uuid,
+    pub agorg_name: String,
+    pub root_path: String,
+    pub total_agos: usize,
+    pub issue_count: usize,
+    pub off_policy_count: usize,
+    pub prune_candidate_paths: Vec<String>,
+    pub issues: Vec<AgorgReconcileIssue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -439,6 +467,121 @@ impl AgorgStore {
         Ok(out)
     }
 
+    pub async fn reconcile_agorg(&self, agorg_id: Uuid) -> Result<AgorgReconcileReport> {
+        self.initialize().await?;
+        let agorg = self
+            .get_agorg(agorg_id)
+            .await?
+            .ok_or_else(|| miette!("AGOrg {} not found", agorg_id))?;
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT id, agorg_id, name, repo_path, relationship_parent, relationship_children
+                 FROM agos
+                 WHERE agorg_id = $1
+                 ORDER BY name ASC",
+                &[&agorg_id],
+            )
+            .await
+            .into_diagnostic()?;
+        let agos: Vec<AgoRecord> = rows.iter().map(row_to_ago).collect();
+
+        let root = PathBuf::from(&agorg.root_path);
+        let mut issues: Vec<AgorgReconcileIssue> = Vec::new();
+        let mut prune_candidates: HashSet<String> = HashSet::new();
+        let mut name_counts: HashMap<String, usize> = HashMap::new();
+
+        for ago in &agos {
+            *name_counts.entry(ago.name.clone()).or_insert(0) += 1;
+
+            let path = PathBuf::from(&ago.repo_path);
+            if !path.exists() {
+                issues.push(AgorgReconcileIssue {
+                    repo_name: ago.name.clone(),
+                    repo_path: ago.repo_path.clone(),
+                    severity: "error".to_string(),
+                    code: "repo_missing".to_string(),
+                    message: "Repository path does not exist on disk".to_string(),
+                });
+                continue;
+            }
+
+            let rel_depth = path
+                .strip_prefix(&root)
+                .ok()
+                .map(|p| p.components().count())
+                .unwrap_or(0);
+
+            let in_archive = path
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy() == "archive");
+            if in_archive {
+                issues.push(AgorgReconcileIssue {
+                    repo_name: ago.name.clone(),
+                    repo_path: ago.repo_path.clone(),
+                    severity: "warn".to_string(),
+                    code: "archive_path".to_string(),
+                    message: "Repository is under archive/; off-policy for active AGOrg fleet"
+                        .to_string(),
+                });
+                prune_candidates.insert(ago.repo_path.clone());
+            }
+
+            if rel_depth > 1 {
+                issues.push(AgorgReconcileIssue {
+                    repo_name: ago.name.clone(),
+                    repo_path: ago.repo_path.clone(),
+                    severity: "warn".to_string(),
+                    code: "nested_repo".to_string(),
+                    message: format!(
+                        "Repository is nested depth={} under AGOrg root; flat-fleet policy expects top-level",
+                        rel_depth
+                    ),
+                });
+                prune_candidates.insert(ago.repo_path.clone());
+            }
+
+            if !path.join("pyproject.toml").exists() {
+                issues.push(AgorgReconcileIssue {
+                    repo_name: ago.name.clone(),
+                    repo_path: ago.repo_path.clone(),
+                    severity: "warn".to_string(),
+                    code: "missing_pyproject".to_string(),
+                    message: "pyproject.toml not found".to_string(),
+                });
+            }
+        }
+
+        for (name, count) in name_counts {
+            if count > 1 {
+                issues.push(AgorgReconcileIssue {
+                    repo_name: name.clone(),
+                    repo_path: "".to_string(),
+                    severity: "warn".to_string(),
+                    code: "duplicate_name".to_string(),
+                    message: format!("AGO name '{}' appears {} times in this AGOrg", name, count),
+                });
+            }
+        }
+
+        let prune_candidate_paths: Vec<String> = {
+            let mut v: Vec<String> = prune_candidates.into_iter().collect();
+            v.sort();
+            v
+        };
+
+        Ok(AgorgReconcileReport {
+            agorg_id: agorg.id,
+            agorg_name: agorg.name,
+            root_path: agorg.root_path,
+            total_agos: agos.len(),
+            issue_count: issues.len(),
+            off_policy_count: prune_candidate_paths.len(),
+            prune_candidate_paths,
+            issues,
+        })
+    }
+
     pub async fn create_project(
         &self,
         name: &str,
@@ -462,11 +605,30 @@ impl AgorgStore {
         Ok((agorg, discovered))
     }
 
-    pub async fn import_discovery(&self, agorg_id: Uuid, discovery: &DiscoverResult) -> Result<()> {
+    pub async fn import_discovery(
+        &self,
+        agorg_id: Uuid,
+        discovery: &DiscoverResult,
+    ) -> Result<ImportDiscoverySummary> {
+        self.import_discovery_with_options(agorg_id, discovery, false)
+            .await
+    }
+
+    pub async fn import_discovery_with_options(
+        &self,
+        agorg_id: Uuid,
+        discovery: &DiscoverResult,
+        prune_missing: bool,
+    ) -> Result<ImportDiscoverySummary> {
         self.initialize().await?;
+        let client = self.connect().await?;
+        let mut upserted = 0usize;
+        let mut keep_paths: Vec<String> = Vec::new();
+
         for c in &discovery.candidates {
-            let path = PathBuf::from(&c.path);
             if c.kind == "ago" {
+                let path = PathBuf::from(&c.path);
+                keep_paths.push(canonicalize_or_input(&path));
                 self.upsert_ago(
                     agorg_id,
                     &c.name,
@@ -475,9 +637,45 @@ impl AgorgStore {
                     &c.children_hints,
                 )
                 .await?;
+                upserted += 1;
             }
         }
-        Ok(())
+
+        let pruned = if prune_missing {
+            if keep_paths.is_empty() {
+                client
+                    .execute("DELETE FROM agos WHERE agorg_id = $1", &[&agorg_id])
+                    .await
+                    .into_diagnostic()? as usize
+            } else {
+                client
+                    .execute(
+                        "DELETE FROM agos
+                         WHERE agorg_id = $1
+                           AND NOT (repo_path = ANY($2::text[]))",
+                        &[&agorg_id, &keep_paths],
+                    )
+                    .await
+                    .into_diagnostic()? as usize
+            }
+        } else {
+            0
+        };
+
+        let final_count: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM agos WHERE agorg_id = $1",
+                &[&agorg_id],
+            )
+            .await
+            .into_diagnostic()?
+            .get(0);
+
+        Ok(ImportDiscoverySummary {
+            upserted,
+            pruned,
+            final_count: final_count as usize,
+        })
     }
 
     pub async fn init_agorg_batch(
