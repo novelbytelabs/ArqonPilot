@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 18:05 EST — Wave G in progress
+**Last updated**: 2026-02-28 18:15 EST — Wave G in progress
 
 ---
 
@@ -487,6 +487,8 @@ Delivered so far:
    - `api.agorg.policy_report`
    - `api.agorg.reconcile_apply`
 4. Mutation guard now correctly treats `api.agorg.reconcile_apply` as non-mutating when `dry_run=true`.
+5. Policy/reconcile actions now emit event payloads with artifact linkage:
+   - `artifact_path` included for policy reports and reconcile dry-run/apply outputs.
 
 Acceptance:
 1. Core AGOrg operations can be executed from Dashboard without tab hopping.
@@ -769,6 +771,21 @@ Verification completed:
 3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
 4. `cargo test -p pilot --locked test_command_requires_mutation` ✅
 5. `cargo test -p pilot --locked test_filter_prune_paths_by_class` ✅
+
+### Iteration Update (2026-02-28 18:15 EST)
+
+Completed in this iteration:
+
+1. **Wave G event/artifact linkage**
+   - AGOrg policy report now emits timeline event with `artifact_path`.
+   - AGOrg reconcile dry-run/apply now persist action artifacts and return `artifact_path` in responses.
+   - AGOrg reconcile events now include `artifact_path` for direct timeline-to-artifact traceability.
+
+Verification completed:
+
+1. `cargo check -p pilot --locked` ✅
+2. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+3. `./scripts/prepush_gate.sh` ✅
 
 ## Recommended Next Session Priority
 

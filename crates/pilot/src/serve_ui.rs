@@ -1148,6 +1148,13 @@ async fn agorg_policy_report_core(
         .await
         .map_err(|e| e.to_string())?;
     let path = persist_agorg_policy_report(&report).map_err(|e| e.to_string())?;
+    let _ = state.events.send(json!({
+        "source": "agorg_policy_report",
+        "agorg_id": report.agorg_id.to_string(),
+        "artifact_path": path,
+        "issue_count": report.issue_count,
+        "off_policy_count": report.off_policy_count
+    }));
     Ok(agorg_policy_report_response(&report, &path))
 }
 
@@ -1194,14 +1201,28 @@ async fn agorg_reconcile_apply_core(
 
     if dry_run {
         let planned_paths = filter_prune_paths_by_class(&report, issue_class.as_deref());
-        return Ok(json!({
+        let out = json!({
             "ok": true,
             "dry_run": true,
             "issue_class": issue_class,
             "planned_prune_count": planned_paths.len(),
             "planned_prune_paths": planned_paths,
             "report": report
+        });
+        let artifact_path =
+            persist_agorg_reconcile_action_report("dryrun", &out).map_err(|e| e.to_string())?;
+        let _ = state.events.send(json!({
+            "source": "agorg_reconcile_apply",
+            "agorg_id": report.agorg_id.to_string(),
+            "dry_run": true,
+            "issue_class": issue_class,
+            "artifact_path": artifact_path
         }));
+        let mut out_with_artifact = out;
+        if let Some(map) = out_with_artifact.as_object_mut() {
+            map.insert("artifact_path".to_string(), json!(artifact_path));
+        }
+        return Ok(out_with_artifact);
     }
 
     if let Some(class_name) = issue_class.as_deref() {
@@ -1225,16 +1246,22 @@ async fn agorg_reconcile_apply_core(
         .await
         .map_err(|e| e.to_string())?;
 
+    let mut out = agorg_reconcile_apply_success_response(pruned, &report, &after);
+    let artifact_path =
+        persist_agorg_reconcile_action_report("apply", &out).map_err(|e| e.to_string())?;
     let _ = state.events.send(json!({
         "source": "agorg_reconcile_apply",
         "agorg_id": report.agorg_id.to_string(),
+        "dry_run": false,
         "issue_class": issue_class,
         "pruned": pruned,
-        "remaining_off_policy": after.off_policy_count
+        "remaining_off_policy": after.off_policy_count,
+        "artifact_path": artifact_path
     }));
-    Ok(agorg_reconcile_apply_success_response(
-        pruned, &report, &after,
-    ))
+    if let Some(map) = out.as_object_mut() {
+        map.insert("artifact_path".to_string(), json!(artifact_path));
+    }
+    Ok(out)
 }
 
 async fn api_agorg_reconcile_apply(
@@ -2896,6 +2923,10 @@ fn agorg_policy_report_path(ts: &str) -> PathBuf {
     reports_root().join(format!("agorg_policy_report_{}.json", ts))
 }
 
+fn agorg_reconcile_action_report_path(ts: &str, mode: &str) -> PathBuf {
+    reports_root().join(format!("agorg_reconcile_{}_{}.json", mode, ts))
+}
+
 fn now_stamp() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2912,6 +2943,17 @@ fn persist_agorg_policy_report(report: &agorg::AgorgReconcileReport) -> std::io:
     let payload = serde_json::to_string_pretty(report)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     fs::write(&path, payload)?;
+    Ok(path.display().to_string())
+}
+
+fn persist_agorg_reconcile_action_report(mode: &str, payload: &Value) -> std::io::Result<String> {
+    let path = agorg_reconcile_action_report_path(&now_stamp(), mode);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let body = serde_json::to_string_pretty(payload)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    fs::write(&path, body)?;
     Ok(path.display().to_string())
 }
 
