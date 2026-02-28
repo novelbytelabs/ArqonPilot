@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 17:20 EST — Wave F hard-close
+**Last updated**: 2026-02-28 18:05 EST — Wave G in progress
 
 ---
 
@@ -459,7 +459,7 @@ Acceptance:
 
 ---
 
-### Wave G — Unified Dashboard Control Plane ⬜ PLANNED
+### Wave G — Unified Dashboard Control Plane 🔶 IN PROGRESS
 
 Goal:
 1. Make Dashboard the primary command center; tabs become specialized drill-down views.
@@ -473,6 +473,20 @@ Planned scope:
    - timeline entries linked to report artifacts and specific reconcile actions.
 4. State continuity:
    - preserve filters, selected AGOrg, and pending action context across reload/restart.
+
+Delivered so far:
+1. Dashboard AGOrg overview endpoint and card are wired:
+   - `POST /api/agorg/dashboard_overview`
+   - returns score, unresolved issues, off-policy count, class counts, and full reconcile report.
+2. Dashboard AGOrg action-contract flow is wired through Codex lifecycle:
+   - preview
+   - approve
+   - execute
+   - reconcile
+3. Local AGOrg contract command path added:
+   - `api.agorg.policy_report`
+   - `api.agorg.reconcile_apply`
+4. Mutation guard now correctly treats `api.agorg.reconcile_apply` as non-mutating when `dry_run=true`.
 
 Acceptance:
 1. Core AGOrg operations can be executed from Dashboard without tab hopping.
@@ -733,9 +747,32 @@ Verification completed:
 4. `cargo test -p pilot --locked test_duplicate_` ✅
 5. `./scripts/prepush_gate.sh` ✅
 
+### Iteration Update (2026-02-28 18:05 EST)
+
+Completed in this iteration:
+
+1. **Wave G backend + dashboard wiring**
+   - Added `POST /api/agorg/dashboard_overview` and dashboard AGOrg overview bindings.
+   - Added dashboard AGOrg action-contract flow using existing Codex contract lifecycle.
+2. **AGOrg local contract dispatch**
+   - Added local dispatch path for `api.agorg.policy_report` and `api.agorg.reconcile_apply`.
+   - Preserved read-only safety: mutation guard applies only when `dry_run=false`.
+3. **Wave G hardening tests**
+   - Added unit tests for mutation classification.
+   - Added unit tests for reconcile class-filtered prune planning.
+   - Added unit tests for conformance score bounds.
+
+Verification completed:
+
+1. `node -c crates/pilot/src/pilot_ui.js` ✅
+2. `cargo check -p pilot --locked` ✅
+3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+4. `cargo test -p pilot --locked test_command_requires_mutation` ✅
+5. `cargo test -p pilot --locked test_filter_prune_paths_by_class` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave G kickoff** — promote Dashboard to primary AGOrg control center for full AGOrg workflow execution.
-2. **Wave G guided reconcile actions** — add explicit per-class fix action contracts (preview + apply) from policy panel.
+1. **Wave G hard-close** — complete dashboard-first AGOrg flow so report/reconcile actions are fully operable without tab hopping.
+2. **Wave G timeline linkage** — ensure AGOrg mutations include direct artifact linkage in live event stream.
 3. **Wave H planning** — explicit burn-down plan for temporary components (shim + linkage TODO) with exit criteria.
 4. **Wave H execution** — surface temporary component inventory in UI runbook/help so no hidden shims remain.

@@ -80,10 +80,15 @@ const dashGateChip = document.getElementById('dash-gate-chip');
 const dashPushChip = document.getElementById('dash-push-chip');
 const dashOracleChip = document.getElementById('dash-oracle-chip');
 const dashHealChip = document.getElementById('dash-heal-chip');
+const dashAgorgScoreChip = document.getElementById('dash-agorg-score-chip');
+const dashAgorgIssuesChip = document.getElementById('dash-agorg-issues-chip');
+const dashAgorgOffpolicyChip = document.getElementById('dash-agorg-offpolicy-chip');
+const dashAgorgOverviewOut = document.getElementById('dash-agorg-overview-out');
 const dashAgorgReportSelect = document.getElementById('dash-agorg-report-select');
 const dashAgorgPolicyOut = document.getElementById('dash-agorg-policy-out');
 const dashAgorgDuplicatesOut = document.getElementById('dash-agorg-duplicates-out');
 const dashAgorgClassCountsOut = document.getElementById('dash-agorg-class-counts-out');
+const dashAgorgContractOut = document.getElementById('dash-agorg-contract-out');
 const dashAgorgIssueClassFilter = document.getElementById('dash-agorg-issue-class-filter');
 const dashAgorgFilteredIssuesOut = document.getElementById('dash-agorg-filtered-issues-out');
 const dashAgorgIssueDetailOut = document.getElementById('dash-agorg-issue-detail-out');
@@ -2019,6 +2024,117 @@ function dashServicesStart() { depRun('services-start'); }
 function dashServicesStop() { depRun('services-stop'); }
 function dashServicesRestart() { depRun('services-restart'); }
 function dashRunPush() { depRun('push'); }
+
+function dashAgorgContractPayload() {
+  const cls = readInputValue('dash-agorg-contract-class');
+  const dryRun = !!(document.getElementById('dash-agorg-contract-dry-run') && document.getElementById('dash-agorg-contract-dry-run').checked);
+  const payload = { schema_version: 1, dry_run: dryRun };
+  if (cls) payload.issue_class = cls;
+  return payload;
+}
+
+function dashAgorgContractCommand() {
+  return readInputValue('dash-agorg-contract-command') || 'api.agorg.reconcile_apply';
+}
+
+async function dashAgorgContractPreview() {
+  const req = {
+    mode: 'preview',
+    intent: readInputValue('dash-agorg-contract-intent') || 'AGOrg policy action',
+    command: dashAgorgContractCommand(),
+    payload: dashAgorgContractPayload(),
+    expected_effect: 'Resolve selected AGOrg policy drift class with governed execution',
+    rollback_strategy: 'Use AGOrg reconcile dry-run before apply; restore from report artifact if needed',
+    verify_command: 'api.agorg.policy_report'
+  };
+  const data = await fetchJsonSafe('/api/codex/action', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const text = JSON.stringify(data, null, 2);
+  if (dashAgorgContractOut) dashAgorgContractOut.textContent = text;
+  out.textContent = text;
+  if (data && data.contract && data.contract.contract_id) {
+    setVal('dash-agorg-contract-id', data.contract.contract_id);
+  }
+}
+
+async function dashAgorgContractApprove() {
+  const req = {
+    mode: 'approve',
+    contract_id: readInputValue('dash-agorg-contract-id'),
+    expected_effect: 'Approved AGOrg policy action contract',
+    verify_command: 'api.agorg.policy_report'
+  };
+  const data = await fetchJsonSafe('/api/codex/action', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const text = JSON.stringify(data, null, 2);
+  if (dashAgorgContractOut) dashAgorgContractOut.textContent = text;
+  out.textContent = text;
+}
+
+async function dashAgorgContractExecute() {
+  const req = {
+    mode: 'execute',
+    contract_id: readInputValue('dash-agorg-contract-id')
+  };
+  const data = await fetchJsonSafe('/api/codex/action', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const text = JSON.stringify(data, null, 2);
+  if (dashAgorgContractOut) dashAgorgContractOut.textContent = text;
+  out.textContent = text;
+  if (data && data.response && data.response.report) {
+    setDashAgorgIssueStateFromReport(data.response.report);
+    setAgorgIssueStateFromReport(data.response.report);
+    if (dashAgorgClassCountsOut) dashAgorgClassCountsOut.textContent = renderClassCountsText(data.response.report);
+  }
+}
+
+async function dashAgorgContractReconcile() {
+  const req = {
+    mode: 'reconcile',
+    contract_id: readInputValue('dash-agorg-contract-id'),
+    reconcile_notes: 'Dashboard AGOrg contract reconcile completed'
+  };
+  const data = await fetchJsonSafe('/api/codex/action', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+  const text = JSON.stringify(data, null, 2);
+  if (dashAgorgContractOut) dashAgorgContractOut.textContent = text;
+  out.textContent = text;
+  await dashAgorgOverviewRefresh();
+}
+
+async function dashAgorgOverviewRefresh() {
+  const data = await fetchJsonSafe('/api/agorg/dashboard_overview', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({})
+  });
+  const text = JSON.stringify(data, null, 2);
+  if (dashAgorgOverviewOut) dashAgorgOverviewOut.textContent = text;
+  if (data && data.ok) {
+    const score = Number(data.score || 0);
+    setChip(dashAgorgScoreChip, `Score: ${score}`, score >= 80 ? 'ok' : (score >= 50 ? 'warn' : 'fail'));
+    setChip(dashAgorgIssuesChip, `Issues: ${Number(data.unresolved_issues || 0)}`, Number(data.unresolved_issues || 0) === 0 ? 'ok' : 'warn');
+    setChip(dashAgorgOffpolicyChip, `Off-policy: ${Number(data.off_policy || 0)}`, Number(data.off_policy || 0) === 0 ? 'ok' : 'fail');
+    if (data.report) {
+      setDashAgorgIssueStateFromReport(data.report, true);
+      setAgorgIssueStateFromReport(data.report, true);
+      if (dashAgorgClassCountsOut) dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
+      if (agorgClassCountsOut) agorgClassCountsOut.textContent = renderClassCountsText(data.report);
+    }
+  }
+}
 
 async function dashAgorgPolicyReport() {
   const data = await fetchJsonSafe('/api/agorg/policy_report', {

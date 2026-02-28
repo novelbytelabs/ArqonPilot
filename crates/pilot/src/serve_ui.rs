@@ -189,6 +189,12 @@ struct AgorgPolicyReportRequest {
 struct AgorgReconcileApplyRequest {
     agorg: Option<String>,
     dry_run: Option<bool>,
+    issue_class: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgorgDashboardOverviewRequest {
+    agorg: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -369,6 +375,10 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/agorg/review", get(get_agorg_review))
         .route("/api/agorg/policy_reports", get(get_agorg_policy_reports))
         .route("/api/agorg/policy_report", post(api_agorg_policy_report))
+        .route(
+            "/api/agorg/dashboard_overview",
+            post(api_agorg_dashboard_overview),
+        )
         .route("/api/agorg/reconcile", post(api_agorg_reconcile))
         .route(
             "/api/agorg/reconcile_apply",
@@ -1044,24 +1054,10 @@ async fn api_agorg_reconcile(
     State(state): State<Arc<UiState>>,
     Json(req): Json<AgorgReconcileRequest>,
 ) -> Response {
-    let id = if let Some(value) = req.agorg.as_deref() {
-        match resolve_agorg_ref(&state.agorg_store, value.trim()).await {
-            Ok(v) => v,
-            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
-        }
-    } else {
-        match state.agorg_store.get_active_agorg().await {
-            Ok(Some(ag)) => ag.id,
-            Ok(None) => {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "No active AGOrg; set scope first or pass agorg",
-                )
-            }
-            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
-        }
+    let id = match resolve_target_agorg_id(&state, req.agorg.as_deref()).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
     };
-
     match state.agorg_store.reconcile_agorg(id).await {
         Ok(report) => Json(json!({"ok": true, "report": report})).into_response(),
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
@@ -1072,89 +1068,182 @@ async fn api_agorg_policy_report(
     State(state): State<Arc<UiState>>,
     Json(req): Json<AgorgPolicyReportRequest>,
 ) -> Response {
-    let id = if let Some(value) = req.agorg.as_deref() {
-        match resolve_agorg_ref(&state.agorg_store, value.trim()).await {
-            Ok(v) => v,
-            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
-        }
-    } else {
-        match state.agorg_store.get_active_agorg().await {
-            Ok(Some(ag)) => ag.id,
-            Ok(None) => {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "No active AGOrg; set scope first or pass agorg",
-                )
-            }
-            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
-        }
-    };
-    match state.agorg_store.reconcile_agorg(id).await {
-        Ok(report) => match persist_agorg_policy_report(&report) {
-            Ok(path) => Json(agorg_policy_report_response(&report, &path)).into_response(),
-            Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-        },
-        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    match agorg_policy_report_core(&state, req.agorg.as_deref()).await {
+        Ok(v) => Json(v).into_response(),
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err),
     }
+}
+
+async fn api_agorg_dashboard_overview(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<AgorgDashboardOverviewRequest>,
+) -> Response {
+    let id = match resolve_target_agorg_id(&state, req.agorg.as_deref()).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
+    };
+    let report = match state.agorg_store.reconcile_agorg(id).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    let score = agorg_conformance_score(
+        report.total_agos,
+        report.issue_count,
+        report.off_policy_count,
+    );
+    Json(json!({
+        "ok": true,
+        "agorg_id": report.agorg_id,
+        "agorg_name": report.agorg_name,
+        "score": score,
+        "unresolved_issues": report.issue_count,
+        "off_policy": report.off_policy_count,
+        "class_counts": report.class_counts,
+        "report": report
+    }))
+    .into_response()
+}
+
+fn agorg_conformance_score(
+    total_agos: usize,
+    issue_count: usize,
+    off_policy_count: usize,
+) -> usize {
+    let max_penalty = (total_agos as i64 * 20).max(1);
+    let penalty = (issue_count as i64 * 5) + (off_policy_count as i64 * 10);
+    ((max_penalty - penalty).max(0) * 100 / max_penalty) as usize
+}
+
+fn filter_prune_paths_by_class(
+    report: &agorg::AgorgReconcileReport,
+    issue_class: Option<&str>,
+) -> Vec<String> {
+    let Some(issue_class) = issue_class else {
+        return report.prune_candidate_paths.clone();
+    };
+    let mut from_issues: HashSet<String> = report
+        .issues
+        .iter()
+        .filter(|i| i.issue_class == issue_class)
+        .map(|i| i.repo_path.clone())
+        .collect();
+    let mut paths: Vec<String> = report
+        .prune_candidate_paths
+        .iter()
+        .filter(|p| from_issues.remove(*p))
+        .cloned()
+        .collect();
+    paths.sort();
+    paths
+}
+
+async fn agorg_policy_report_core(
+    state: &Arc<UiState>,
+    agorg: Option<&str>,
+) -> std::result::Result<Value, String> {
+    let id = resolve_target_agorg_id(state, agorg).await?;
+    let report = state
+        .agorg_store
+        .reconcile_agorg(id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let path = persist_agorg_policy_report(&report).map_err(|e| e.to_string())?;
+    Ok(agorg_policy_report_response(&report, &path))
+}
+
+async fn resolve_target_agorg_id(
+    state: &Arc<UiState>,
+    agorg: Option<&str>,
+) -> std::result::Result<uuid::Uuid, String> {
+    if let Some(value) = agorg {
+        resolve_agorg_ref(&state.agorg_store, value.trim())
+            .await
+            .map_err(|e| e.to_string())
+    } else {
+        state
+            .agorg_store
+            .get_active_agorg()
+            .await
+            .map_err(|e| e.to_string())?
+            .map(|ag| ag.id)
+            .ok_or_else(|| "No active AGOrg; set scope first or pass agorg".to_string())
+    }
+}
+
+async fn agorg_reconcile_apply_core(
+    state: &Arc<UiState>,
+    req: AgorgReconcileApplyRequest,
+    enforce_mutation_guard: bool,
+) -> std::result::Result<Value, String> {
+    if enforce_mutation_guard && !state.allow_mutations && !req.dry_run.unwrap_or(true) {
+        return Err("reconcile apply blocked in read-only UI mode".to_string());
+    }
+    let id = resolve_target_agorg_id(state, req.agorg.as_deref()).await?;
+    let dry_run = req.dry_run.unwrap_or(true);
+    let issue_class = req
+        .issue_class
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let report = state
+        .agorg_store
+        .reconcile_agorg(id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if dry_run {
+        let planned_paths = filter_prune_paths_by_class(&report, issue_class.as_deref());
+        return Ok(json!({
+            "ok": true,
+            "dry_run": true,
+            "issue_class": issue_class,
+            "planned_prune_count": planned_paths.len(),
+            "planned_prune_paths": planned_paths,
+            "report": report
+        }));
+    }
+
+    if let Some(class_name) = issue_class.as_deref() {
+        if class_name != "topology" {
+            return Err(format!(
+                "issue_class '{}' is not currently auto-fixable (supported: topology)",
+                class_name
+            ));
+        }
+    }
+
+    let selected_paths = filter_prune_paths_by_class(&report, issue_class.as_deref());
+    let pruned = state
+        .agorg_store
+        .prune_ago_paths(report.agorg_id, &selected_paths)
+        .await
+        .map_err(|e| e.to_string())?;
+    let after = state
+        .agorg_store
+        .reconcile_agorg(report.agorg_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let _ = state.events.send(json!({
+        "source": "agorg_reconcile_apply",
+        "agorg_id": report.agorg_id.to_string(),
+        "issue_class": issue_class,
+        "pruned": pruned,
+        "remaining_off_policy": after.off_policy_count
+    }));
+    Ok(agorg_reconcile_apply_success_response(
+        pruned, &report, &after,
+    ))
 }
 
 async fn api_agorg_reconcile_apply(
     State(state): State<Arc<UiState>>,
     Json(req): Json<AgorgReconcileApplyRequest>,
 ) -> Response {
-    if !state.allow_mutations {
-        return error_response(
-            StatusCode::FORBIDDEN,
-            "reconcile apply blocked in read-only UI mode",
-        );
-    }
-    let id = if let Some(value) = req.agorg.as_deref() {
-        match resolve_agorg_ref(&state.agorg_store, value.trim()).await {
-            Ok(v) => v,
-            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
-        }
-    } else {
-        match state.agorg_store.get_active_agorg().await {
-            Ok(Some(ag)) => ag.id,
-            Ok(None) => {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "No active AGOrg; set scope first or pass agorg",
-                )
-            }
-            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
-        }
-    };
-    let dry_run = req.dry_run.unwrap_or(true);
-    let report = match state.agorg_store.reconcile_agorg(id).await {
-        Ok(v) => v,
-        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
-    };
-    if dry_run {
-        return Json(agorg_reconcile_apply_dry_run_response(&report)).into_response();
-    }
-    match state
-        .agorg_store
-        .prune_ago_paths(report.agorg_id, &report.prune_candidate_paths)
-        .await
-    {
-        Ok(pruned) => {
-            let after = match state.agorg_store.reconcile_agorg(report.agorg_id).await {
-                Ok(v) => v,
-                Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
-            };
-            let _ = state.events.send(json!({
-                "source": "agorg_reconcile_apply",
-                "agorg_id": report.agorg_id.to_string(),
-                "pruned": pruned,
-                "remaining_off_policy": after.off_policy_count
-            }));
-            Json(agorg_reconcile_apply_success_response(
-                pruned, &report, &after,
-            ))
-            .into_response()
-        }
-        Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    match agorg_reconcile_apply_core(&state, req, true).await {
+        Ok(v) => Json(v).into_response(),
+        Err(err) => error_response(StatusCode::BAD_REQUEST, &err),
     }
 }
 
@@ -1950,10 +2039,12 @@ async fn run_codex_action(
             return error_response(StatusCode::BAD_REQUEST, "intent is required");
         }
         let command = req.command.as_deref().unwrap_or("").trim().to_string();
-        if command.is_empty() || !command.starts_with("pilot.") {
+        if command.is_empty()
+            || !(command.starts_with("pilot.") || command.starts_with("api.agorg."))
+        {
             return error_response(
                 StatusCode::BAD_REQUEST,
-                "command must be namespaced as pilot.*",
+                "command must be namespaced as pilot.* or api.agorg.*",
             );
         }
         if let Some(allowlist) = &state.allowed_commands {
@@ -2122,14 +2213,23 @@ async fn run_codex_action(
             "intent": execute_contract.intent
         }));
 
-        match send_command_once_with_retry(
-            &state.bus,
-            &execute_contract.command,
-            execute_contract.payload_normalized.clone(),
-            3,
-        )
-        .await
-        {
+        let exec_result = if execute_contract.command.starts_with("api.agorg.") {
+            run_local_agorg_contract_command(
+                &state,
+                &execute_contract.command,
+                execute_contract.payload_normalized.clone(),
+            )
+            .await
+        } else {
+            send_command_once_with_retry(
+                &state.bus,
+                &execute_contract.command,
+                execute_contract.payload_normalized.clone(),
+                3,
+            )
+            .await
+        };
+        match exec_result {
             Ok(response) => {
                 let updated = {
                     let mut contracts = state.codex_contracts.lock().await;
@@ -2217,7 +2317,7 @@ async fn run_codex_action(
 
     let mut verify_response: Option<Value> = None;
     if let Some(verify_cmd) = reconcile_contract.verify_command.as_ref() {
-        if verify_cmd.starts_with("pilot.") {
+        if verify_cmd.starts_with("pilot.") || verify_cmd.starts_with("api.agorg.") {
             if let Some(allowlist) = &state.allowed_commands {
                 if !allowlist.contains(verify_cmd) {
                     return error_response(
@@ -2226,14 +2326,23 @@ async fn run_codex_action(
                     );
                 }
             }
-            match send_command_once_with_retry(
-                &state.bus,
-                verify_cmd,
-                reconcile_contract.verify_payload.clone(),
-                3,
-            )
-            .await
-            {
+            let verify_result = if verify_cmd.starts_with("api.agorg.") {
+                run_local_agorg_contract_command(
+                    &state,
+                    verify_cmd,
+                    reconcile_contract.verify_payload.clone(),
+                )
+                .await
+            } else {
+                send_command_once_with_retry(
+                    &state.bus,
+                    verify_cmd,
+                    reconcile_contract.verify_payload.clone(),
+                    3,
+                )
+                .await
+            };
+            match verify_result {
                 Ok(v) => verify_response = Some(v),
                 Err(err) => {
                     let _ = state.events.send(json!({
@@ -2286,6 +2395,35 @@ async fn run_codex_action(
         "verify_response": verify_response
     }))
     .into_response()
+}
+
+async fn run_local_agorg_contract_command(
+    state: &Arc<UiState>,
+    command: &str,
+    payload: Value,
+) -> Result<Value> {
+    match command {
+        "api.agorg.policy_report" => {
+            let agorg = payload
+                .get("agorg")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            agorg_policy_report_core(state, agorg.as_deref())
+                .await
+                .map_err(|e| miette::miette!("{e}"))
+        }
+        "api.agorg.reconcile_apply" => {
+            let req: AgorgReconcileApplyRequest = serde_json::from_value(payload)
+                .map_err(|e| miette::miette!("invalid reconcile_apply payload: {e}"))?;
+            agorg_reconcile_apply_core(state, req, true)
+                .await
+                .map_err(|e| miette::miette!("{e}"))
+        }
+        _ => Err(miette::miette!(
+            "unsupported local AGOrg contract command '{}'",
+            command
+        )),
+    }
 }
 
 fn now_unix() -> u64 {
@@ -2432,11 +2570,12 @@ fn is_safe_cli_token(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        agorg_policy_report_response, agorg_reconcile_apply_dry_run_response,
-        agorg_reconcile_apply_success_response, append_agorg_review_record,
-        append_codex_contract_record, command_requires_cwd_scope, command_requires_multi_selector,
-        command_scope_required, dependency_action_requires_cwd_scope,
-        dependency_action_scope_required, is_safe_cli_token, load_persisted_agorg_reviews,
+        agorg_conformance_score, agorg_policy_report_response,
+        agorg_reconcile_apply_dry_run_response, agorg_reconcile_apply_success_response,
+        append_agorg_review_record, append_codex_contract_record, command_requires_cwd_scope,
+        command_requires_multi_selector, command_requires_mutation, command_scope_required,
+        dependency_action_requires_cwd_scope, dependency_action_scope_required,
+        filter_prune_paths_by_class, is_safe_cli_token, load_persisted_agorg_reviews,
         load_persisted_codex_contracts, payload_has_multi_selector, with_event_agorg_scope,
         AgorgReviewRecord, CodexContractRecord,
     };
@@ -2494,6 +2633,30 @@ mod tests {
         assert!(payload_has_multi_selector(&json!({"group": "core"})));
         assert!(payload_has_multi_selector(
             &json!({"tags": ["apply-pilot"]})
+        ));
+    }
+
+    #[test]
+    fn test_command_requires_mutation() {
+        assert!(!command_requires_mutation(
+            "api.agorg.reconcile_apply",
+            &json!({"dry_run": true})
+        ));
+        assert!(command_requires_mutation(
+            "api.agorg.reconcile_apply",
+            &json!({"dry_run": false})
+        ));
+        assert!(!command_requires_mutation(
+            "pilot.multi.apply",
+            &json!({"apply": false})
+        ));
+        assert!(command_requires_mutation(
+            "pilot.multi.apply",
+            &json!({"apply": true})
+        ));
+        assert!(!command_requires_mutation(
+            "pilot.heal.run",
+            &json!({"plan_only": true})
         ));
     }
 
@@ -2612,6 +2775,25 @@ mod tests {
                 message: "off-policy".to_string(),
             }],
         }
+    }
+
+    #[test]
+    fn test_filter_prune_paths_by_class() {
+        let report = sample_reconcile_report();
+        let all = filter_prune_paths_by_class(&report, None);
+        assert_eq!(all, vec!["/tmp/arqon/archive/old"]);
+        let topo = filter_prune_paths_by_class(&report, Some("topology"));
+        assert_eq!(topo, vec!["/tmp/arqon/archive/old"]);
+        let dep = filter_prune_paths_by_class(&report, Some("policy_dependency"));
+        assert!(dep.is_empty());
+    }
+
+    #[test]
+    fn test_agorg_conformance_score_bounds() {
+        assert_eq!(agorg_conformance_score(3, 0, 0), 100);
+        assert_eq!(agorg_conformance_score(3, 1, 1), 75);
+        assert_eq!(agorg_conformance_score(3, 100, 100), 0);
+        assert_eq!(agorg_conformance_score(0, 0, 0), 100);
     }
 
     #[test]
@@ -3034,6 +3216,7 @@ fn command_requires_mutation(command: &str, payload: &Value) -> bool {
     match command {
         "pilot.multi.apply" => payload_truthy_bool(payload, "apply"),
         "pilot.heal.run" => !payload_truthy_bool(payload, "plan_only"),
+        "api.agorg.reconcile_apply" => !payload_truthy_bool(payload, "dry_run"),
         "pilot.branch.create"
         | "pilot.branch.sync"
         | "pilot.branch.prune"
@@ -3690,6 +3873,26 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <pre id="dash-status-out">ready</pre>
       </div>
+
+      <div class="card">
+        <h3>AGOrg Overview</h3>
+        <div class="helper">Dashboard control summary for active AGOrg scope: score, unresolved issues, and class distribution.</div>
+        <div class="chip-row">
+          <span id="dash-agorg-score-chip" class="chip neutral">Score: unknown</span>
+          <span id="dash-agorg-issues-chip" class="chip neutral">Issues: unknown</span>
+          <span id="dash-agorg-offpolicy-chip" class="chip neutral">Off-policy: unknown</span>
+        </div>
+        <div class="row">
+          <button class="btn secondary" onclick="dashAgorgOverviewRefresh()">Refresh Overview</button>
+        </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-agorg-overview-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-agorg-overview-out')">CLEAR</button>
+        </div>
+        <pre id="dash-agorg-overview-out">No AGOrg overview yet.</pre>
+      </div>
+      </div>
       </div>
 
       <div class="card">
@@ -3756,6 +3959,43 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button class="action-btn" onclick="clearElement('dash-agorg-policy-out')">CLEAR</button>
         </div>
         <pre id="dash-agorg-policy-out">No AGOrg policy action run yet.</pre>
+      </div>
+
+      <div class="card">
+        <h3>AGOrg Action Contract</h3>
+        <div class="helper">Guided preview -> approve -> execute -> reconcile flow from Dashboard for AGOrg policy actions.</div>
+        <input id="dash-agorg-contract-intent" placeholder="Reconcile topology drift in active AGOrg" />
+        <div class="row">
+          <select id="dash-agorg-contract-command">
+            <option value="api.agorg.reconcile_apply">api.agorg.reconcile_apply</option>
+            <option value="api.agorg.policy_report">api.agorg.policy_report</option>
+          </select>
+          <select id="dash-agorg-contract-class">
+            <option value="">all classes</option>
+            <option value="topology">topology</option>
+            <option value="policy_dependency">policy_dependency</option>
+            <option value="policy_branch">policy_branch</option>
+            <option value="metadata">metadata</option>
+          </select>
+          <label style="font-size:0.82rem;color:#a8b9e3;">
+            <input id="dash-agorg-contract-dry-run" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+            dry-run
+          </label>
+        </div>
+        <div class="row">
+          <input id="dash-agorg-contract-id" placeholder="auto-filled after preview" />
+          <button class="btn secondary" onclick="dashAgorgContractPreview()">Preview</button>
+          <button class="btn secondary" onclick="dashAgorgContractApprove()">Approve</button>
+          <button class="btn" onclick="dashAgorgContractExecute()">Execute</button>
+          <button class="btn secondary" onclick="dashAgorgContractReconcile()">Reconcile</button>
+        </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-agorg-contract-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-agorg-contract-out')">CLEAR</button>
+        </div>
+        <pre id="dash-agorg-contract-out">No AGOrg action contract run yet.</pre>
+      </div>
       </div>
       <div class="pre-wrap">
         <div class="pre-actions">
