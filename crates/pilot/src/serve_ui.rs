@@ -395,6 +395,10 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/fs/pick-directory", post(api_fs_pick_directory))
         .route("/api/dependencies/run", post(run_dependency_action))
         .route("/api/dependencies/logs", get(get_dependency_logs))
+        .route(
+            "/api/system/temporary_components",
+            get(get_temporary_components),
+        )
         .route("/api/evidence/export", post(export_evidence_bundle))
         .route("/api/codex/action", post(run_codex_action))
         .route("/api/ui/session", get(api_ui_session_get))
@@ -2868,6 +2872,53 @@ async fn get_dependency_logs() -> Response {
     }
 }
 
+async fn get_temporary_components() -> Response {
+    let (shim_code, shim_stdout, shim_stderr) = match run_local_script(
+        "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(err) => (-1, String::new(), err.to_string()),
+    };
+    let shim_running = shim_code == 0 && bus_shim_running(&shim_stdout, &shim_stderr);
+    let components = vec![
+        json!({
+            "id": "arqonbus_compat_shim",
+            "name": "ArqonBus compatibility shim",
+            "type": "shim",
+            "required": true,
+            "status": if shim_running { "running" } else { "stopped" },
+            "detection_command": "PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status",
+            "details": {
+                "exit_code": shim_code,
+                "stdout": shim_stdout,
+                "stderr": shim_stderr,
+            },
+            "exit_criteria": "Native ArqonBus runtime integration available in frozen fleet checkout."
+        }),
+        json!({
+            "id": "hierarchy_drag_link_editor",
+            "name": "Hierarchy drag/link editor",
+            "type": "ux_gap",
+            "required": false,
+            "status": "manual-editor-active",
+            "detection_command": "UI AGOrg panel + /api/agorg/edit_relationship",
+            "details": {
+                "current_path": "Use explicit parent + relationship editor actions; drag-and-drop linking is intentionally disabled.",
+                "api": "/api/agorg/edit_relationship"
+            },
+            "exit_criteria": "Audited drag-link UX lands with deterministic mutation preview + apply."
+        }),
+    ];
+    Json(json!({
+        "ok": true,
+        "count": components.len(),
+        "components": components,
+    }))
+    .into_response()
+}
+
 async fn stream_events(
     State(state): State<Arc<UiState>>,
 ) -> Sse<impl tokio_stream::Stream<Item = std::result::Result<Event, Infallible>>> {
@@ -3917,6 +3968,21 @@ const INDEX_HTML: &str = r#"<!doctype html>
       </div>
 
       <div class="card">
+        <h3>Temporary Components Inventory</h3>
+        <div class="helper">Wave H transparency surface. Lists unavoidable shims/bridges and their runtime state.</div>
+        <div class="row">
+          <button class="btn secondary" onclick="dashRefreshTemporaryComponents()">Refresh Inventory</button>
+        </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-temp-components-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-temp-components-out')">CLEAR</button>
+        </div>
+        <pre id="dash-temp-components-out">No temporary component inventory loaded yet.</pre>
+      </div>
+      </div>
+
+      <div class="card">
         <h3>AGOrg Overview</h3>
         <div class="helper">Dashboard control summary for active AGOrg scope: score, unresolved issues, and class distribution.</div>
         <div class="chip-row">
@@ -4521,7 +4587,7 @@ Recommended flow:
             <h3 style="margin:0">Master Hierarchy</h3>
             <button class="btn secondary" onclick="agorgScanMaster()">Scan Master</button>
           </div>
-          <div class="helper">Interactive view of all siblings in the Master Directory. Click to select; drag to link (TODO).</div>
+          <div class="helper">Interactive view of all siblings in the Master Directory. Click to select; relationship edits are governed via explicit AGOrg editor actions.</div>
           <div id="agorg-hierarchy-tree" class="timeline" style="max-height: 800px; padding: 10px; border: 1px solid #2d426c; border-radius: 10px; background: rgba(0,0,0,0.2);">
             <div class="tl-empty">No hierarchy loaded. Click "Scan Master" or "Import".</div>
           </div>

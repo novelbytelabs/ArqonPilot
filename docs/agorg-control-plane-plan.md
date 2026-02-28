@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 18:25 EST — Wave G in progress
+**Last updated**: 2026-02-28 18:40 EST — Wave G closed, Wave H in progress
 
 ---
 
@@ -459,7 +459,7 @@ Acceptance:
 
 ---
 
-### Wave G — Unified Dashboard Control Plane 🔶 IN PROGRESS
+### Wave G — Unified Dashboard Control Plane ✅ COMPLETE
 
 Goal:
 1. Make Dashboard the primary command center; tabs become specialized drill-down views.
@@ -494,16 +494,17 @@ Delivered so far:
 6. Dashboard now provides one-click artifact open actions:
    - `OPEN ARTIFACT` in AGOrg Action Contract output panel.
    - `OPEN ARTIFACT` in Operation Detail timeline panel.
+7. Timeline cards now show at-a-glance `ARTIFACT` badge when artifact linkage is detected.
 
 Acceptance:
 
-1. Core AGOrg operations can be executed from Dashboard without tab hopping.
-2. Every mutation is visible in timeline with artifact linkage.
-3. Session restore brings operator back to in-progress workflow state.
+1. Core AGOrg operations can be executed from Dashboard without tab hopping. ✅
+2. Every mutation is visible in timeline with artifact linkage. ✅
+3. Session restore brings operator back to in-progress workflow state. ✅
 
 ---
 
-### Wave H — Temporary Component Burn-Down ⬜ PLANNED
+### Wave H — Temporary Component Burn-Down 🔶 IN PROGRESS
 
 Goal:
 
@@ -512,13 +513,23 @@ Goal:
 Current known temporary components:
 
 1. ArqonBus compatibility shim (`scripts/arqonbus_shim.sh`) — required when frozen Bus checkout is not directly runnable.
-2. Master Hierarchy linkage UX note (`TODO`) — partial drag/link interaction, not yet hardened.
+2. Hierarchy drag/link editor gap — explicit relationship editor path is active; drag UX is intentionally deferred until audited.
 
 Planned scope:
 
 1. Replace shim path with native bus integration path where feasible.
-2. Convert hierarchy linkage TODO into explicit audited relationship editor.
+2. Keep hierarchy edits explicit and audited (`/api/agorg/edit_relationship`) until drag-link is hardened.
 3. Add periodic inventory check in docs + runbook so no hidden placeholders/stubs accumulate.
+
+Delivered so far:
+
+1. Added Dashboard **Temporary Components Inventory** card with one-click refresh.
+2. Added backend inventory endpoint:
+   - `GET /api/system/temporary_components`
+3. Inventory now surfaces:
+   - ArqonBus shim runtime state (`running`/`stopped`) with status command output.
+   - Hierarchy editor gap with current safe path + explicit exit criteria.
+4. Removed ambiguous `TODO` wording from AGOrg hierarchy helper text.
 
 Acceptance:
 
@@ -699,7 +710,7 @@ Verification completed:
 Known temporary/bridge components (explicit inventory):
 
 1. **ArqonBus compatibility shim** (`scripts/arqonbus_shim.sh`) — currently required when frozen ArqonBus checkout is not directly runnable in this workspace.
-2. **UI drag-link interaction note** (`Master Hierarchy` helper text contains `TODO`) — interactive linkage UX is partially implemented and not yet a fully hardened relationship editor.
+2. **UI hierarchy drag-link gap** — interactive drag-link workflow is intentionally deferred; use explicit audited relationship editor APIs/UI actions.
 
 ### Iteration Update (2026-02-28 17:06 EST)
 
@@ -815,9 +826,27 @@ Verification completed:
 3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
 4. `./scripts/prepush_gate.sh` ✅
 
+### Iteration Update (2026-02-28 18:40 EST)
+
+Completed in this iteration:
+
+1. **Wave G hard-close**
+   - Added timeline card `ARTIFACT` badge for artifact-backed operations.
+   - Confirmed dashboard-first AGOrg report/reconcile flow is fully operable without tab hopping.
+2. **Wave H execution started**
+   - Added temporary component inventory API and dashboard surface.
+   - Removed `TODO` phrasing from hierarchy helper; replaced with explicit governed relationship-editor guidance.
+
+Verification completed:
+
+1. `node -c crates/pilot/src/pilot_ui.js` ✅
+2. `cargo check -p pilot --locked` ✅
+3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+4. `./scripts/prepush_gate.sh` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave G hard-close** — complete dashboard-first AGOrg flow so report/reconcile actions are fully operable without tab hopping.
-2. **Wave G timeline linkage** — ensure AGOrg mutations include direct artifact linkage in live event stream.
-3. **Wave H planning** — explicit burn-down plan for temporary components (shim + linkage TODO) with exit criteria.
-4. **Wave H execution** — surface temporary component inventory in UI runbook/help so no hidden shims remain.
+1. **Wave H hard-close** — complete burn-down inventory workflow (UI + docs + gotchas) and lock operator checklist.
+2. **Wave H native bus path** — continue reducing shim dependency where frozen fleet permits.
+3. **Wave H hierarchy editor hardening** — add deterministic preview/apply relationship editing UX before drag-link work.
+4. **Wave I planning** — define post-burn-down roadmap once temporary inventory is fully closed.

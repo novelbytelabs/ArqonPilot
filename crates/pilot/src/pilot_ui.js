@@ -84,6 +84,7 @@ const dashAgorgScoreChip = document.getElementById('dash-agorg-score-chip');
 const dashAgorgIssuesChip = document.getElementById('dash-agorg-issues-chip');
 const dashAgorgOffpolicyChip = document.getElementById('dash-agorg-offpolicy-chip');
 const dashAgorgOverviewOut = document.getElementById('dash-agorg-overview-out');
+const dashTempComponentsOut = document.getElementById('dash-temp-components-out');
 const dashAgorgReportSelect = document.getElementById('dash-agorg-report-select');
 const dashAgorgPolicyOut = document.getElementById('dash-agorg-policy-out');
 const dashAgorgDuplicatesOut = document.getElementById('dash-agorg-duplicates-out');
@@ -649,6 +650,14 @@ function renderTimeline() {
 
     head.appendChild(title);
     head.appendChild(badge);
+    const artifactPath = inferArtifactPath(item);
+    if (artifactPath) {
+      const artifactBadge = document.createElement('span');
+      artifactBadge.className = 'tl-badge progress';
+      artifactBadge.style.marginLeft = '8px';
+      artifactBadge.textContent = 'ARTIFACT';
+      head.appendChild(artifactBadge);
+    }
     card.appendChild(head);
 
     const steps = document.createElement('ul');
@@ -2189,6 +2198,20 @@ async function dashAgorgOverviewRefresh() {
   }
 }
 
+async function dashRefreshTemporaryComponents() {
+  const data = await fetchJsonSafe('/api/system/temporary_components');
+  const text = JSON.stringify(data, null, 2);
+  if (dashTempComponentsOut) dashTempComponentsOut.textContent = text;
+  if (data && data.ok) {
+    appendLive({
+      source: 'dashboard',
+      action: 'temporary-components-refresh',
+      ok: true,
+      count: Number(data.count || 0)
+    });
+  }
+}
+
 async function dashAgorgPolicyReport() {
   const data = await fetchJsonSafe('/api/agorg/policy_report', {
     method: 'POST',
@@ -2481,6 +2504,7 @@ async function bootUi() {
   await depRun('drift');
   await depRun('services-status');
   await refreshAgorgHeader();
+  await dashRefreshTemporaryComponents();
   await agorgLoadPolicyReports();
   await codexLoadContracts();
   setInterval(loadHistory, 30000);

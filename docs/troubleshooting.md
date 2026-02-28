@@ -228,6 +228,14 @@ PILOT_REPORT_DIR=/tmp/pilot-reports ./scripts/arqonbus_shim.sh status
 ss -ltnp | rg ':9100'
 ```
 
+4. Check temporary-component inventory from UI/API:
+
+```bash
+curl -sS http://127.0.0.1:7788/api/system/temporary_components | jq
+```
+
+Use Dashboard -> `Temporary Components Inventory` -> `Refresh Inventory` to confirm shim/editor status and exit criteria.
+
 ## 4) Command rejected by Bus bridge
 
 The bridge currently only accepts namespaced `pilot.*` commands and strict contract payloads with:

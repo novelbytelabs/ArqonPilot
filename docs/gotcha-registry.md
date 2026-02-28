@@ -308,6 +308,21 @@ Keep this file current whenever a new failure class appears.
      - `pilot serve --ui-port 7788 --ui-instance-id pilot-main ...`
   2. Use same id to share state across windows, different ids to isolate intentionally.
 
+## G-021: Temporary component state is unclear during incident triage
+
+- Signature:
+  - Operator cannot quickly tell whether bus shim/editor-gap components are active.
+  - Debugging starts with guesswork across multiple files or shell commands.
+- Recovery:
+  1. Use Dashboard:
+     - `Temporary Components Inventory` -> `Refresh Inventory`
+  2. Or query API directly:
+     - `curl -sS http://127.0.0.1:7788/api/system/temporary_components | jq`
+  3. Confirm component status and exit criteria from returned `components[]`.
+- Notes:
+  - Inventory includes ArqonBus shim live status and current hierarchy-editor path.
+  - Use this before attempting manual workaround scripts.
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`
