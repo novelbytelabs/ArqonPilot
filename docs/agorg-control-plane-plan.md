@@ -583,10 +583,38 @@ Validation:
 
 ---
 
+### Iteration Update (2026-02-28)
+
+Completed in this iteration:
+
+1. **B.4 duplicate merge heuristics implemented**
+   - `reconcile_agorg` now computes deterministic merge candidates for:
+   - duplicate canonical-path AGOs (`duplicate_path_merge_candidate`)
+   - duplicate-name AGOs (`duplicate_name_merge_candidate`)
+   - winner selection is score-based (top-level, non-archive, has `pyproject.toml`, exists).
+2. **Reconcile API contract tests added**
+   - Policy report contract response shape test.
+   - Reconcile dry-run response shape test.
+   - Reconcile apply response shape test.
+3. **Plan/document status refreshed** to keep roadmap continuity.
+
+Verification completed:
+
+1. `cargo check -p pilot --locked` ✅
+2. `cargo test -p pilot --locked test_duplicate_` ✅
+3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+4. `./scripts/prepush_gate.sh` ✅
+
+Known temporary/bridge components (explicit inventory):
+
+1. **ArqonBus compatibility shim** (`scripts/arqonbus_shim.sh`) — currently required when frozen ArqonBus checkout is not directly runnable in this workspace.
+2. **UI drag-link interaction note** (`Master Hierarchy` helper text contains `TODO`) — interactive linkage UX is partially implemented and not yet a fully hardened relationship editor.
+
 ## Recommended Next Session Priority
 
-1. **Wave B.4** — add duplicate detection + policy quality checks report (artifact-backed).
-2. **B.3 close-out** — persist explicit review decisions/history as artifact for replay/audit.
-3. **Begin Wave C** — scope-aware Dashboard/Oracle/Heal/Dependencies/Branch/Multi filtering by active AGOrg.
-4. **Add AGOrg policy report artifact** — persist reconciliation summary JSON for audit/history playback.
-5. **Wave D kickoff** — per-AGOrg profile/preferences for multi-instance readiness.
+1. **Wave B.4 final close** — add explicit duplicate resolution actions in UI (show preferred winner + prune candidates inline before apply).
+2. **Wave E hardening** — add artifact open/view action from Dashboard + AGOrg panel policy artifact selectors.
+3. **Temporary-component burn-down** — remove/replace the remaining bridge pieces where feasible:
+   - eliminate dependency on ArqonBus compatibility shim when native Bus integration is stable
+   - close `Master Hierarchy` linkage TODO into a first-class, audited relationship flow
+4. **Wave F start** — AGOrg policy reconciliation surface for branch/dependency conformance (beyond path/metadata checks).

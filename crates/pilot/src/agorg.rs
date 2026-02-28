@@ -84,6 +84,17 @@ pub struct AgorgReconcileReport {
     pub issues: Vec<AgorgReconcileIssue>,
 }
 
+#[derive(Debug, Clone)]
+struct AgoReconcileFacts {
+    name: String,
+    repo_path: String,
+    canonical_path: String,
+    exists: bool,
+    rel_depth: usize,
+    in_archive: bool,
+    has_pyproject: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoRelationships {
     pub parent: Option<String>,
@@ -588,12 +599,11 @@ impl AgorgStore {
         let root = PathBuf::from(&agorg.root_path);
         let mut issues: Vec<AgorgReconcileIssue> = Vec::new();
         let mut prune_candidates: HashSet<String> = HashSet::new();
-        let mut name_counts: HashMap<String, usize> = HashMap::new();
+        let mut facts: Vec<AgoReconcileFacts> = Vec::new();
 
         for ago in &agos {
-            *name_counts.entry(ago.name.clone()).or_insert(0) += 1;
-
             let path = PathBuf::from(&ago.repo_path);
+            let canonical_path = canonicalize_or_input(&path);
             if !path.exists() {
                 issues.push(AgorgReconcileIssue {
                     repo_name: ago.name.clone(),
@@ -601,6 +611,15 @@ impl AgorgStore {
                     severity: "error".to_string(),
                     code: "repo_missing".to_string(),
                     message: "Repository path does not exist on disk".to_string(),
+                });
+                facts.push(AgoReconcileFacts {
+                    name: ago.name.clone(),
+                    repo_path: ago.repo_path.clone(),
+                    canonical_path,
+                    exists: false,
+                    rel_depth: 0,
+                    in_archive: false,
+                    has_pyproject: false,
                 });
                 continue;
             }
@@ -649,19 +668,20 @@ impl AgorgStore {
                     message: "pyproject.toml not found".to_string(),
                 });
             }
+            facts.push(AgoReconcileFacts {
+                name: ago.name.clone(),
+                repo_path: ago.repo_path.clone(),
+                canonical_path,
+                exists: true,
+                rel_depth,
+                in_archive,
+                has_pyproject: path.join("pyproject.toml").exists(),
+            });
         }
 
-        for (name, count) in name_counts {
-            if count > 1 {
-                issues.push(AgorgReconcileIssue {
-                    repo_name: name.clone(),
-                    repo_path: "".to_string(),
-                    severity: "warn".to_string(),
-                    code: "duplicate_name".to_string(),
-                    message: format!("AGO name '{}' appears {} times in this AGOrg", name, count),
-                });
-            }
-        }
+        let (dup_issues, dup_prunes) = duplicate_merge_heuristics(&facts);
+        issues.extend(dup_issues);
+        prune_candidates.extend(dup_prunes);
 
         let prune_candidate_paths: Vec<String> = {
             let mut v: Vec<String> = prune_candidates.into_iter().collect();
@@ -1047,6 +1067,128 @@ impl AgorgStore {
     }
 }
 
+fn reconcile_rank(f: &AgoReconcileFacts) -> i32 {
+    let mut score = 0i32;
+    if f.exists {
+        score += 100;
+    } else {
+        score -= 100;
+    }
+    if f.rel_depth == 1 {
+        score += 40;
+    } else if f.rel_depth > 1 {
+        score -= (f.rel_depth as i32) * 10;
+    }
+    if f.in_archive {
+        score -= 50;
+    } else {
+        score += 25;
+    }
+    if f.has_pyproject {
+        score += 20;
+    } else {
+        score -= 20;
+    }
+    score
+}
+
+fn choose_primary(indices: &[usize], facts: &[AgoReconcileFacts]) -> usize {
+    let mut best = indices[0];
+    for idx in indices.iter().skip(1) {
+        let lhs = &facts[*idx];
+        let rhs = &facts[best];
+        let lhs_key = (
+            reconcile_rank(lhs),
+            -(lhs.repo_path.len() as i32),
+            lhs.repo_path.as_str(),
+        );
+        let rhs_key = (
+            reconcile_rank(rhs),
+            -(rhs.repo_path.len() as i32),
+            rhs.repo_path.as_str(),
+        );
+        if lhs_key > rhs_key {
+            best = *idx;
+        }
+    }
+    best
+}
+
+fn duplicate_merge_heuristics(
+    facts: &[AgoReconcileFacts],
+) -> (Vec<AgorgReconcileIssue>, HashSet<String>) {
+    let mut issues: Vec<AgorgReconcileIssue> = Vec::new();
+    let mut prune_candidates: HashSet<String> = HashSet::new();
+
+    let mut canonical_groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, f) in facts.iter().enumerate() {
+        if f.exists {
+            canonical_groups
+                .entry(f.canonical_path.clone())
+                .or_default()
+                .push(idx);
+        }
+    }
+    for (_canonical, idxs) in canonical_groups {
+        if idxs.len() <= 1 {
+            continue;
+        }
+        let primary = choose_primary(&idxs, facts);
+        let primary_path = facts[primary].repo_path.clone();
+        for idx in idxs {
+            if idx == primary {
+                continue;
+            }
+            let loser = &facts[idx];
+            prune_candidates.insert(loser.repo_path.clone());
+            issues.push(AgorgReconcileIssue {
+                repo_name: loser.name.clone(),
+                repo_path: loser.repo_path.clone(),
+                severity: "warn".to_string(),
+                code: "duplicate_path_merge_candidate".to_string(),
+                message: format!(
+                    "Repo canonical path overlaps another AGO; prefer '{}' and prune this entry",
+                    primary_path
+                ),
+            });
+        }
+    }
+
+    let mut name_groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, f) in facts.iter().enumerate() {
+        name_groups
+            .entry(f.name.to_lowercase())
+            .or_default()
+            .push(idx);
+    }
+    for (_name, idxs) in name_groups {
+        if idxs.len() <= 1 {
+            continue;
+        }
+        let primary = choose_primary(&idxs, facts);
+        let primary_path = facts[primary].repo_path.clone();
+        for idx in idxs {
+            if idx == primary {
+                continue;
+            }
+            let loser = &facts[idx];
+            prune_candidates.insert(loser.repo_path.clone());
+            issues.push(AgorgReconcileIssue {
+                repo_name: loser.name.clone(),
+                repo_path: loser.repo_path.clone(),
+                severity: "warn".to_string(),
+                code: "duplicate_name_merge_candidate".to_string(),
+                message: format!(
+                    "Repo name duplicates another AGO; prefer '{}' and prune this entry",
+                    primary_path
+                ),
+            });
+        }
+    }
+
+    (issues, prune_candidates)
+}
+
 pub fn discover_hierarchy(root: &Path, depth: usize) -> Result<DiscoverResult> {
     let root = canonicalize_or_input(root);
     let root_path = PathBuf::from(&root);
@@ -1293,7 +1435,9 @@ fn sanitize_instance_id(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_json_value, sanitize_instance_id};
+    use super::{
+        duplicate_merge_heuristics, merge_json_value, sanitize_instance_id, AgoReconcileFacts,
+    };
     use serde_json::json;
 
     #[test]
@@ -1317,6 +1461,66 @@ mod tests {
         assert_eq!(sanitize_instance_id("ui-7788"), "ui-7788");
         assert_eq!(sanitize_instance_id("main ui"), "main_ui");
         assert_eq!(sanitize_instance_id(""), "default");
+    }
+
+    #[test]
+    fn test_duplicate_name_merge_prefers_top_level_pyproject() {
+        let facts = vec![
+            AgoReconcileFacts {
+                name: "ArqonCore".to_string(),
+                repo_path: "/root/ArqonCore".to_string(),
+                canonical_path: "/root/ArqonCore".to_string(),
+                exists: true,
+                rel_depth: 1,
+                in_archive: false,
+                has_pyproject: true,
+            },
+            AgoReconcileFacts {
+                name: "ArqonCore".to_string(),
+                repo_path: "/root/archive/ArqonCore".to_string(),
+                canonical_path: "/root/archive/ArqonCore".to_string(),
+                exists: true,
+                rel_depth: 2,
+                in_archive: true,
+                has_pyproject: false,
+            },
+        ];
+        let (issues, prune) = duplicate_merge_heuristics(&facts);
+        assert!(issues
+            .iter()
+            .any(|i| i.code == "duplicate_name_merge_candidate"));
+        assert!(prune.contains("/root/archive/ArqonCore"));
+        assert!(!prune.contains("/root/ArqonCore"));
+    }
+
+    #[test]
+    fn test_duplicate_canonical_path_merge_prunes_alias() {
+        let facts = vec![
+            AgoReconcileFacts {
+                name: "ArqonBus".to_string(),
+                repo_path: "/root/ArqonBus".to_string(),
+                canonical_path: "/canonical/ArqonBus".to_string(),
+                exists: true,
+                rel_depth: 1,
+                in_archive: false,
+                has_pyproject: true,
+            },
+            AgoReconcileFacts {
+                name: "ArqonBusAlias".to_string(),
+                repo_path: "/root/alias/ArqonBus".to_string(),
+                canonical_path: "/canonical/ArqonBus".to_string(),
+                exists: true,
+                rel_depth: 2,
+                in_archive: false,
+                has_pyproject: true,
+            },
+        ];
+        let (issues, prune) = duplicate_merge_heuristics(&facts);
+        assert!(issues
+            .iter()
+            .any(|i| i.code == "duplicate_path_merge_candidate"));
+        assert!(prune.contains("/root/alias/ArqonBus"));
+        assert!(!prune.contains("/root/ArqonBus"));
     }
 }
 

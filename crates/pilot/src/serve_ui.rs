@@ -1091,9 +1091,7 @@ async fn api_agorg_policy_report(
     };
     match state.agorg_store.reconcile_agorg(id).await {
         Ok(report) => match persist_agorg_policy_report(&report) {
-            Ok(path) => {
-                Json(json!({"ok": true, "report": report, "artifact_path": path})).into_response()
-            }
+            Ok(path) => Json(agorg_policy_report_response(&report, &path)).into_response(),
             Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
         },
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
@@ -1133,14 +1131,7 @@ async fn api_agorg_reconcile_apply(
         Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
     };
     if dry_run {
-        return Json(json!({
-            "ok": true,
-            "dry_run": true,
-            "planned_prune_count": report.prune_candidate_paths.len(),
-            "planned_prune_paths": report.prune_candidate_paths,
-            "report": report
-        }))
-        .into_response();
+        return Json(agorg_reconcile_apply_dry_run_response(&report)).into_response();
     }
     match state
         .agorg_store
@@ -1158,17 +1149,48 @@ async fn api_agorg_reconcile_apply(
                 "pruned": pruned,
                 "remaining_off_policy": after.off_policy_count
             }));
-            Json(json!({
-                "ok": true,
-                "dry_run": false,
-                "pruned": pruned,
-                "before": report,
-                "after": after
-            }))
+            Json(agorg_reconcile_apply_success_response(
+                pruned, &report, &after,
+            ))
             .into_response()
         }
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
     }
+}
+
+fn agorg_policy_report_response(
+    report: &agorg::AgorgReconcileReport,
+    artifact_path: &str,
+) -> Value {
+    json!({
+        "ok": true,
+        "report": report,
+        "artifact_path": artifact_path
+    })
+}
+
+fn agorg_reconcile_apply_dry_run_response(report: &agorg::AgorgReconcileReport) -> Value {
+    json!({
+        "ok": true,
+        "dry_run": true,
+        "planned_prune_count": report.prune_candidate_paths.len(),
+        "planned_prune_paths": report.prune_candidate_paths,
+        "report": report
+    })
+}
+
+fn agorg_reconcile_apply_success_response(
+    pruned: usize,
+    before: &agorg::AgorgReconcileReport,
+    after: &agorg::AgorgReconcileReport,
+) -> Value {
+    json!({
+        "ok": true,
+        "dry_run": false,
+        "pruned": pruned,
+        "before": before,
+        "after": after
+    })
 }
 
 async fn api_agorg_tree(
@@ -2410,16 +2432,20 @@ fn is_safe_cli_token(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_agorg_review_record, append_codex_contract_record, command_requires_cwd_scope,
-        command_requires_multi_selector, command_scope_required,
-        dependency_action_requires_cwd_scope, dependency_action_scope_required, is_safe_cli_token,
-        load_persisted_agorg_reviews, load_persisted_codex_contracts, payload_has_multi_selector,
-        with_event_agorg_scope, AgorgReviewRecord, CodexContractRecord,
+        agorg_policy_report_response, agorg_reconcile_apply_dry_run_response,
+        agorg_reconcile_apply_success_response, append_agorg_review_record,
+        append_codex_contract_record, command_requires_cwd_scope, command_requires_multi_selector,
+        command_scope_required, dependency_action_requires_cwd_scope,
+        dependency_action_scope_required, is_safe_cli_token, load_persisted_agorg_reviews,
+        load_persisted_codex_contracts, payload_has_multi_selector, with_event_agorg_scope,
+        AgorgReviewRecord, CodexContractRecord,
     };
+    use crate::agorg::{AgorgReconcileIssue, AgorgReconcileReport};
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use uuid::Uuid;
 
     #[test]
     fn test_safe_cli_token() {
@@ -2564,6 +2590,61 @@ mod tests {
         assert_eq!(got.updated_at_unix, 3);
 
         let _ = fs::remove_dir_all(base);
+    }
+
+    fn sample_reconcile_report() -> AgorgReconcileReport {
+        AgorgReconcileReport {
+            agorg_id: Uuid::nil(),
+            agorg_name: "Arqon".to_string(),
+            root_path: "/tmp/arqon".to_string(),
+            total_agos: 3,
+            issue_count: 1,
+            off_policy_count: 1,
+            prune_candidate_paths: vec!["/tmp/arqon/archive/old".to_string()],
+            issues: vec![AgorgReconcileIssue {
+                repo_name: "old".to_string(),
+                repo_path: "/tmp/arqon/archive/old".to_string(),
+                severity: "warn".to_string(),
+                code: "archive_path".to_string(),
+                message: "off-policy".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn test_agorg_reconcile_api_policy_report_contract() {
+        let report = sample_reconcile_report();
+        let out = agorg_policy_report_response(&report, "/tmp/report.json");
+        assert_eq!(out["ok"], true);
+        assert_eq!(out["artifact_path"], "/tmp/report.json");
+        assert_eq!(out["report"]["agorg_name"], "Arqon");
+        assert_eq!(out["report"]["off_policy_count"], 1);
+    }
+
+    #[test]
+    fn test_agorg_reconcile_api_dry_run_contract() {
+        let report = sample_reconcile_report();
+        let out = agorg_reconcile_apply_dry_run_response(&report);
+        assert_eq!(out["ok"], true);
+        assert_eq!(out["dry_run"], true);
+        assert_eq!(out["planned_prune_count"], 1);
+        assert_eq!(out["planned_prune_paths"][0], "/tmp/arqon/archive/old");
+    }
+
+    #[test]
+    fn test_agorg_reconcile_api_apply_contract() {
+        let before = sample_reconcile_report();
+        let mut after = sample_reconcile_report();
+        after.off_policy_count = 0;
+        after.issue_count = 0;
+        after.prune_candidate_paths = Vec::new();
+        after.issues = Vec::new();
+        let out = agorg_reconcile_apply_success_response(1, &before, &after);
+        assert_eq!(out["ok"], true);
+        assert_eq!(out["dry_run"], false);
+        assert_eq!(out["pruned"], 1);
+        assert_eq!(out["before"]["off_policy_count"], 1);
+        assert_eq!(out["after"]["off_policy_count"], 0);
     }
 }
 
