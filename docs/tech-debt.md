@@ -26,16 +26,16 @@ This document tracks identified technical debt, placeholders, and architectural 
 - **Ref**: `crates/pilot/src/agorg.rs:1775`
 - **Impact**: Stability
 
-### 5. Medium: Shim orchestration is hard-wired and spread across code paths 🏗️
-- **Status**: Centralized in `serve_ui.rs` via `bus_shim_command()`. Consolidation in `main.rs` pending. 🛰️
+### 5. Medium: Shim orchestration is hard-wired and spread across code paths ✅
+- **Status**: Centralized in shared runtime adapter `crates/pilot/src/shim_runtime.rs`; both `serve_ui.rs` and `main.rs` consume the same `bus_shim_command()` path.
 - **Refs**:
     - `crates/pilot/src/main.rs:2018`
     - `crates/pilot/src/serve_ui.rs:1855`
     - `scripts/arqonbus_shim.sh:63`
 - **Impact**: Maintainability
 
-### 6. Medium: Temporary-component checklist has brittle string-based checks
-- **Issue**: Pass/fail depends on text matching ("TODO", "G-021") rather than semantic contracts.
+### 6. Medium: Temporary-component checklist had brittle string-based checks ✅
+- **Status**: Replaced with semantic contract checks over runtime payload fields (`status`, `details.exit_code`, required IDs, exit criteria presence).
 - **Ref**: `crates/pilot/src/serve_ui.rs:2968`
 - **Impact**: Precision
 
@@ -70,11 +70,12 @@ This document tracks identified technical debt, placeholders, and architectural 
 - **Goal**: Enable debt check in `ConstitutionCheck::run_all`. (Note: `run_all` update pending but path hardened).
 - **Goal**: Replace `unwrap()` in AGOrg TOML edit path with typed validation.
 
-### TD Wave 3: Consolidate shim control plane 🏗️
-- **Status**: **IN-PROGRESS** 🚀
+### TD Wave 3: Consolidate shim control plane ✅
+- **Status**: **COMPLETE** 🏁
 - **Goal**: Create one bus runtime adapter module; remove duplicated shell strings.
 
-### TD Wave 4: Make health checks semantic and stricter (Medium)
+### TD Wave 4: Make health checks semantic and stricter ✅
+- **Status**: **COMPLETE** 🏁
 - **Goal**: Replace checklist text-matching with schema/endpoint contract checks.
 - **Goal**: Set `ui_smoke_check` to include command-lane checks by default.
 - **Exit Gate**: Smoke fails on command regressions.

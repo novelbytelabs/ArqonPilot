@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 20:40 EST — Wave I in progress + TD hardening iteration
+**Last updated**: 2026-02-28 21:30 EST — Wave I hard-close complete + TD Wave 3/4 complete
 
 ---
 
@@ -253,7 +253,7 @@ Add new commands/endpoints:
 8. `pilot agorg link`
 9. `pilot agorg scan_master`
 10. `pilot agorg batch-create`
-11. `pilot agorg create_project` (create + autoscan in one call)
+11. `pilot agorg create-project` (CLI; create + autoscan in one call) and `/api/agorg/create_project` (API route)
 
 ---
 
@@ -280,7 +280,7 @@ Add new commands/endpoints:
 | Feature | Status | Evidence |
 |---------|--------|----------|
 | `create` — create AGOrg record | ✅ | `agorg.rs:116-160`, route at `serve_ui.rs:266` |
-| `create_project` — create + autoscan in one call | ✅ | `agorg.rs:442-463`, route at `serve_ui.rs:267` |
+| `create-project` (CLI) / `create_project` (API) — create + autoscan in one call | ✅ | `agorg.rs:442-463`, route at `serve_ui.rs:267` |
 | `list` — list all registered AGOrgs | ✅ | `agorg.rs:218-231`, route at `serve_ui.rs:263` |
 | `use` — set active scope | ✅ | `agorg.rs:233-246`, route at `serve_ui.rs:270` |
 | `discover` — scan directory tree | ✅ | `agorg.rs:686-742`, route at `serve_ui.rs:271` |
@@ -979,9 +979,27 @@ Verification completed:
 2. `cargo test -p pilot --locked test_edit_relationship_handles_malformed_tool_table` ✅
 3. `cargo check -p pilot --locked` ✅
 
+### Iteration Update (2026-02-28 21:30 EST)
+
+Completed in this iteration:
+
+1. **Wave I hard-close confirmation captured**
+   - Full profile acceptance matrix run completed with all checks passing and artifact evidence recorded.
+2. **TD Wave 3 hard-close**
+   - Added shared shim runtime adapter `crates/pilot/src/shim_runtime.rs`.
+   - Consolidated shim lifecycle command construction for both `main.rs` and `serve_ui.rs`.
+3. **TD Wave 4 hard-close**
+   - Replaced temporary-component checklist text probes with semantic payload-contract validation.
+   - Enabled command-lane UI smoke checks by default in script and CI (`PILOT_UI_SMOKE_INCLUDE_COMMANDS=1`).
+
+Verification completed:
+
+1. `cargo test -p pilot --locked test_bus_shim_` ✅
+2. `cargo test -p pilot --locked test_parse_json_from_mixed_output_` ✅
+3. `cargo check -p pilot --locked` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave I hard-close (runtime evidence)** — execute full-profile matrix from live UI/API path on operator host and attach artifact path in timeline evidence.
-2. **TD Wave 3 hard-close** — complete shim lifecycle consolidation in both `main.rs` and `serve_ui.rs` using shared runtime contract.
-3. **TD Wave 4** — replace temporary-component checklist string probes with semantic checks.
-4. **Wave J planning** — define next roadmap once Wave I runtime evidence is captured and TD Wave 3/4 are closed.
+1. **Wave J planning and execution start** — define and begin post-acceptance roadmap now that Wave I and TD Wave 3/4 are closed.
+2. **B.4 duplicate-merge UX hard-close** — implement winner/loser merge preview controls in reconcile UI and validate dry-run/apply report parity.
+3. **Temporary component inventory governance** — keep inventory/report/checklist in sync with runbook and gotcha registry on every iteration.

@@ -371,11 +371,20 @@ Current progress (this iteration):
    - returns explicit miette errors instead.
 5. Added regression test:
    - `test_edit_relationship_handles_malformed_tool_table`.
+6. Closed TD Wave 3 shim consolidation:
+   - introduced shared runtime adapter `crates/pilot/src/shim_runtime.rs`
+   - unified shim lifecycle command construction for both `main.rs` and `serve_ui.rs`.
+7. Closed TD Wave 4 checklist hardening:
+   - replaced temporary-component checklist string probes with semantic payload-contract checks.
+8. Enabled command-lane validation by default in UI smoke:
+   - `scripts/ui_smoke_check.sh` now defaults `PILOT_UI_SMOKE_INCLUDE_COMMANDS=1`
+   - CI `ui-smoke` job sets `PILOT_UI_SMOKE_INCLUDE_COMMANDS: "1"`.
 
 Exit criteria:
 1. No fake/pass-through assertions remain in active non-fixture test paths.
 2. No known panic-on-user-input path remains in AGOrg mutation APIs.
 3. Temporary components and shims are either removed or centralized with explicit inventory contracts.
+4. UI smoke command-lane checks are enabled by default in both local and CI execution.
 
 ## Operational Rules
 
