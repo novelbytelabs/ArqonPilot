@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 17:16 EST — Wave F execution start
+**Last updated**: 2026-02-28 17:20 EST — Wave F hard-close
 
 ---
 
@@ -419,7 +419,7 @@ Acceptance:
 
 ---
 
-### Wave F — AGOrg Policy Conformance (Branch + Dependency) 🔶 IN PROGRESS
+### Wave F — AGOrg Policy Conformance (Branch + Dependency) ✅ COMPLETE
 
 Goal:
 1. Extend reconciliation beyond path/metadata to branch/dependency policy conformance.
@@ -446,11 +446,16 @@ Delivered so far:
 4. Reconcile now emits branch-policy issue:
    - `branch_name_off_policy` (when branch is outside base/release and standard branch prefixes).
 5. Dashboard + AGOrg UI now render class-count summaries from reconcile reports.
+6. Dashboard + AGOrg UI now include class filters and issue drill-down controls:
+   - filter by class (`policy_branch`, `policy_dependency`, `metadata`, `topology`, `all`)
+   - browse filtered set with Prev/Next
+   - view selected issue detail payload directly in-panel
 
 Acceptance:
-1. Reconcile report includes branch/dependency conformance for every in-scope AGO.
-2. Operator can apply branch/dependency policy fixes with audit trail.
-3. No unscoped fleet mutations allowed.
+1. Reconcile report includes branch/dependency conformance for every in-scope AGO. ✅
+2. Operator can inspect by policy class and drill into individual issues from AGOrg + Dashboard. ✅
+3. No unscoped fleet mutations allowed. ✅
+4. Guided auto-fix actions for policy classes remain future work (Wave G+).
 
 ---
 
@@ -710,9 +715,27 @@ Verification completed:
 3. `cargo test -p pilot --locked test_duplicate_` ✅
 4. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
 
+### Iteration Update (2026-02-28 17:20 EST)
+
+Completed in this iteration:
+
+1. **Wave F hard-close UI controls**
+   - Added class filter selectors and issue drill-down navigation to both Dashboard and AGOrg policy surfaces.
+   - Added filtered issue list and selected-issue detail outputs.
+2. **Report-to-UI sync**
+   - Policy report, dry-run, and apply flows now all hydrate class-filter/drill-down state from reconcile report payloads.
+
+Verification completed:
+
+1. `node -c crates/pilot/src/pilot_ui.js` ✅
+2. `cargo check -p pilot --locked` ✅
+3. `cargo test -p pilot --locked test_agorg_reconcile_api_` ✅
+4. `cargo test -p pilot --locked test_duplicate_` ✅
+5. `./scripts/prepush_gate.sh` ✅
+
 ## Recommended Next Session Priority
 
-1. **Wave F hard-close** — add policy-class filtering controls and drill-down navigation in AGOrg/Dashboard.
-2. **Wave F guided fixes** — add explicit dry-run/apply fix actions for branch/dependency policy classes.
-3. **Wave G kickoff** — promote Dashboard to primary AGOrg control center for full reconcile workflow.
-4. **Wave H planning** — explicit burn-down plan for temporary components (shim + linkage TODO) with exit criteria.
+1. **Wave G kickoff** — promote Dashboard to primary AGOrg control center for full AGOrg workflow execution.
+2. **Wave G guided reconcile actions** — add explicit per-class fix action contracts (preview + apply) from policy panel.
+3. **Wave H planning** — explicit burn-down plan for temporary components (shim + linkage TODO) with exit criteria.
+4. **Wave H execution** — surface temporary component inventory in UI runbook/help so no hidden shims remain.

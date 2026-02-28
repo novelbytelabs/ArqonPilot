@@ -63,6 +63,9 @@ const agorgReviewSelect = document.getElementById('agorg-review-select');
 const agorgPolicyReportSelect = document.getElementById('agorg-policy-report-select');
 const agorgDuplicatePreviewOut = document.getElementById('agorg-duplicate-preview-out');
 const agorgClassCountsOut = document.getElementById('agorg-class-counts-out');
+const agorgIssueClassFilter = document.getElementById('agorg-issue-class-filter');
+const agorgFilteredIssuesOut = document.getElementById('agorg-filtered-issues-out');
+const agorgIssueDetailOut = document.getElementById('agorg-issue-detail-out');
 const codexOut = document.getElementById('codex-out');
 const codexContractsOut = document.getElementById('codex-contracts-out');
 const codexContractSelect = document.getElementById('codex-contract-select');
@@ -81,6 +84,9 @@ const dashAgorgReportSelect = document.getElementById('dash-agorg-report-select'
 const dashAgorgPolicyOut = document.getElementById('dash-agorg-policy-out');
 const dashAgorgDuplicatesOut = document.getElementById('dash-agorg-duplicates-out');
 const dashAgorgClassCountsOut = document.getElementById('dash-agorg-class-counts-out');
+const dashAgorgIssueClassFilter = document.getElementById('dash-agorg-issue-class-filter');
+const dashAgorgFilteredIssuesOut = document.getElementById('dash-agorg-filtered-issues-out');
+const dashAgorgIssueDetailOut = document.getElementById('dash-agorg-issue-detail-out');
 const dashOracleScanBtn = document.getElementById('dash-oracle-scan-btn');
 const dashOracleQueryBtn = document.getElementById('dash-oracle-query-btn');
 const dashHealPlanBtn = document.getElementById('dash-heal-plan-btn');
@@ -110,6 +116,8 @@ let currentAgorgReviewId = '';
 let restoringUiSession = false;
 let uiSessionSaveTimer = null;
 let agorgCache = { at: 0, items: [], active: null, recent: [], instanceId: 'unknown' };
+let agorgIssueFilterState = { issues: [], classFilter: 'all', selectedIndex: 0 };
+let dashAgorgIssueFilterState = { issues: [], classFilter: 'all', selectedIndex: 0 };
 const AGORG_CACHE_TTL_MS = 8000;
 
 function activatePanel(tabName, opts = {}) {
@@ -1512,6 +1520,8 @@ async function agorgReconcile() {
     if (dashAgorgDuplicatesOut) dashAgorgDuplicatesOut.textContent = renderDuplicateResolutionText(data.report);
     if (agorgClassCountsOut) agorgClassCountsOut.textContent = renderClassCountsText(data.report);
     if (dashAgorgClassCountsOut) dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
+    setAgorgIssueStateFromReport(data.report);
+    setDashAgorgIssueStateFromReport(data.report);
     await agorgLoadPolicyReports();
   }
 }
@@ -1541,6 +1551,10 @@ async function agorgReconcileDryRun() {
   }
   if (dashAgorgClassCountsOut && data && data.report) {
     dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
+  }
+  if (data && data.report) {
+    setAgorgIssueStateFromReport(data.report);
+    setDashAgorgIssueStateFromReport(data.report);
   }
   appendLive({
     source: 'agorg_policy',
@@ -1575,6 +1589,10 @@ async function agorgReconcileApply() {
   }
   if (dashAgorgClassCountsOut && data && data.before) {
     dashAgorgClassCountsOut.textContent = renderClassCountsText(data.before);
+  }
+  if (data && data.before) {
+    setAgorgIssueStateFromReport(data.before);
+    setDashAgorgIssueStateFromReport(data.before);
   }
   appendLive({ source: 'agorg_policy', action: 'apply', ok: !!data.ok, pruned: data.pruned || 0 });
   if (data && data.ok) {
@@ -1626,6 +1644,113 @@ function renderClassCountsText(report) {
     .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
     .map(([k, v]) => `${k}: ${v}`)
     .join('\n');
+}
+
+function issueSummaryLine(issue, idx) {
+  const cls = String(issue.issue_class || 'unknown');
+  const code = String(issue.code || 'unknown');
+  const repo = String(issue.repo_name || issue.repo_path || 'repo');
+  return `${idx + 1}. [${cls}] ${code} :: ${repo}`;
+}
+
+function filterIssuesByClass(issues, classFilter) {
+  if (classFilter === 'all') return issues;
+  return issues.filter((it) => String(it.issue_class || '') === classFilter);
+}
+
+function renderIssueDetail(issue) {
+  if (!issue) return 'No issue selected.';
+  return JSON.stringify(issue, null, 2);
+}
+
+function setAgorgIssueStateFromReport(report, preserveSelection = false) {
+  const issues = Array.isArray(report && report.issues) ? report.issues : [];
+  const classFilter = agorgIssueClassFilter && agorgIssueClassFilter.value ? agorgIssueClassFilter.value : 'all';
+  agorgIssueFilterState = {
+    issues,
+    classFilter,
+    selectedIndex: preserveSelection ? agorgIssueFilterState.selectedIndex : 0
+  };
+  renderAgorgIssueView();
+}
+
+function setDashAgorgIssueStateFromReport(report, preserveSelection = false) {
+  const issues = Array.isArray(report && report.issues) ? report.issues : [];
+  const classFilter = dashAgorgIssueClassFilter && dashAgorgIssueClassFilter.value ? dashAgorgIssueClassFilter.value : 'all';
+  dashAgorgIssueFilterState = {
+    issues,
+    classFilter,
+    selectedIndex: preserveSelection ? dashAgorgIssueFilterState.selectedIndex : 0
+  };
+  renderDashAgorgIssueView();
+}
+
+function renderAgorgIssueView() {
+  const filter = agorgIssueFilterState.classFilter || 'all';
+  const rows = filterIssuesByClass(agorgIssueFilterState.issues || [], filter);
+  const idxMax = Math.max(rows.length - 1, 0);
+  if (agorgIssueFilterState.selectedIndex > idxMax) agorgIssueFilterState.selectedIndex = idxMax;
+  if (agorgIssueFilterState.selectedIndex < 0) agorgIssueFilterState.selectedIndex = 0;
+  if (agorgFilteredIssuesOut) {
+    agorgFilteredIssuesOut.textContent = rows.length
+      ? rows.map((it, idx) => issueSummaryLine(it, idx)).join('\n')
+      : 'No issues match current class filter.';
+  }
+  const selected = rows.length ? rows[agorgIssueFilterState.selectedIndex] : null;
+  if (agorgIssueDetailOut) {
+    agorgIssueDetailOut.textContent = renderIssueDetail(selected);
+  }
+}
+
+function renderDashAgorgIssueView() {
+  const filter = dashAgorgIssueFilterState.classFilter || 'all';
+  const rows = filterIssuesByClass(dashAgorgIssueFilterState.issues || [], filter);
+  const idxMax = Math.max(rows.length - 1, 0);
+  if (dashAgorgIssueFilterState.selectedIndex > idxMax) dashAgorgIssueFilterState.selectedIndex = idxMax;
+  if (dashAgorgIssueFilterState.selectedIndex < 0) dashAgorgIssueFilterState.selectedIndex = 0;
+  if (dashAgorgFilteredIssuesOut) {
+    dashAgorgFilteredIssuesOut.textContent = rows.length
+      ? rows.map((it, idx) => issueSummaryLine(it, idx)).join('\n')
+      : 'No issues match current class filter.';
+  }
+  const selected = rows.length ? rows[dashAgorgIssueFilterState.selectedIndex] : null;
+  if (dashAgorgIssueDetailOut) {
+    dashAgorgIssueDetailOut.textContent = renderIssueDetail(selected);
+  }
+}
+
+function agorgApplyIssueClassFilter() {
+  agorgIssueFilterState.classFilter = agorgIssueClassFilter && agorgIssueClassFilter.value ? agorgIssueClassFilter.value : 'all';
+  agorgIssueFilterState.selectedIndex = 0;
+  renderAgorgIssueView();
+}
+
+function dashAgorgApplyIssueClassFilter() {
+  dashAgorgIssueFilterState.classFilter = dashAgorgIssueClassFilter && dashAgorgIssueClassFilter.value ? dashAgorgIssueClassFilter.value : 'all';
+  dashAgorgIssueFilterState.selectedIndex = 0;
+  renderDashAgorgIssueView();
+}
+
+function agorgPrevIssue() {
+  agorgIssueFilterState.selectedIndex = Math.max(agorgIssueFilterState.selectedIndex - 1, 0);
+  renderAgorgIssueView();
+}
+
+function agorgNextIssue() {
+  const rows = filterIssuesByClass(agorgIssueFilterState.issues || [], agorgIssueFilterState.classFilter || 'all');
+  agorgIssueFilterState.selectedIndex = Math.min(agorgIssueFilterState.selectedIndex + 1, Math.max(rows.length - 1, 0));
+  renderAgorgIssueView();
+}
+
+function dashAgorgPrevIssue() {
+  dashAgorgIssueFilterState.selectedIndex = Math.max(dashAgorgIssueFilterState.selectedIndex - 1, 0);
+  renderDashAgorgIssueView();
+}
+
+function dashAgorgNextIssue() {
+  const rows = filterIssuesByClass(dashAgorgIssueFilterState.issues || [], dashAgorgIssueFilterState.classFilter || 'all');
+  dashAgorgIssueFilterState.selectedIndex = Math.min(dashAgorgIssueFilterState.selectedIndex + 1, Math.max(rows.length - 1, 0));
+  renderDashAgorgIssueView();
 }
 
 async function openReportPath(path, targetEl, fallbackEl) {
@@ -1913,6 +2038,8 @@ async function dashAgorgPolicyReport() {
     if (agorgDuplicatePreviewOut) agorgDuplicatePreviewOut.textContent = renderDuplicateResolutionText(data.report);
     if (dashAgorgClassCountsOut) dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
     if (agorgClassCountsOut) agorgClassCountsOut.textContent = renderClassCountsText(data.report);
+    setDashAgorgIssueStateFromReport(data.report);
+    setAgorgIssueStateFromReport(data.report);
     await agorgLoadPolicyReports();
   }
 }
@@ -1938,6 +2065,10 @@ async function dashAgorgReconcileDryRun() {
   }
   if (agorgClassCountsOut && data && data.report) {
     agorgClassCountsOut.textContent = renderClassCountsText(data.report);
+  }
+  if (data && data.report) {
+    setDashAgorgIssueStateFromReport(data.report);
+    setAgorgIssueStateFromReport(data.report);
   }
   appendLive({
     source: 'dashboard',
@@ -1968,6 +2099,10 @@ async function dashAgorgReconcileApply() {
   }
   if (agorgClassCountsOut && data && data.before) {
     agorgClassCountsOut.textContent = renderClassCountsText(data.before);
+  }
+  if (data && data.before) {
+    setDashAgorgIssueStateFromReport(data.before);
+    setAgorgIssueStateFromReport(data.before);
   }
   appendLive({ source: 'dashboard', action: 'agorg-reconcile-apply', ok: !!data.ok, pruned: data.pruned || 0 });
   if (data && data.ok) {

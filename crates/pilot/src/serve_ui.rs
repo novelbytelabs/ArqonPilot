@@ -3771,6 +3771,32 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <pre id="dash-agorg-class-counts-out">No issue class counts yet.</pre>
       </div>
+      <div class="row">
+        <select id="dash-agorg-issue-class-filter">
+          <option value="all">All Classes</option>
+          <option value="policy_branch">policy_branch</option>
+          <option value="policy_dependency">policy_dependency</option>
+          <option value="metadata">metadata</option>
+          <option value="topology">topology</option>
+        </select>
+        <button class="btn secondary" onclick="dashAgorgApplyIssueClassFilter()">Apply Filter</button>
+        <button class="btn secondary" onclick="dashAgorgPrevIssue()">Prev</button>
+        <button class="btn secondary" onclick="dashAgorgNextIssue()">Next</button>
+      </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-agorg-filtered-issues-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-agorg-filtered-issues-out')">CLEAR</button>
+        </div>
+        <pre id="dash-agorg-filtered-issues-out">No filtered issues yet.</pre>
+      </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-agorg-issue-detail-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-agorg-issue-detail-out')">CLEAR</button>
+        </div>
+        <pre id="dash-agorg-issue-detail-out">No issue selected.</pre>
+      </div>
       </div>
 
     </div>
@@ -4146,6 +4172,32 @@ Recommended flow:
                 <button class="action-btn" onclick="clearElement('agorg-class-counts-out')">CLEAR</button>
               </div>
               <pre id="agorg-class-counts-out">No issue class counts yet.</pre>
+            </div>
+            <div class="row">
+              <select id="agorg-issue-class-filter">
+                <option value="all">All Classes</option>
+                <option value="policy_branch">policy_branch</option>
+                <option value="policy_dependency">policy_dependency</option>
+                <option value="metadata">metadata</option>
+                <option value="topology">topology</option>
+              </select>
+              <button class="btn secondary" onclick="agorgApplyIssueClassFilter()">Apply Filter</button>
+              <button class="btn secondary" onclick="agorgPrevIssue()">Prev</button>
+              <button class="btn secondary" onclick="agorgNextIssue()">Next</button>
+            </div>
+            <div class="pre-wrap">
+              <div class="pre-actions">
+                <button class="action-btn" onclick="copyToClipboard('agorg-filtered-issues-out', this)">COPY</button>
+                <button class="action-btn" onclick="clearElement('agorg-filtered-issues-out')">CLEAR</button>
+              </div>
+              <pre id="agorg-filtered-issues-out">No filtered issues yet.</pre>
+            </div>
+            <div class="pre-wrap">
+              <div class="pre-actions">
+                <button class="action-btn" onclick="copyToClipboard('agorg-issue-detail-out', this)">COPY</button>
+                <button class="action-btn" onclick="clearElement('agorg-issue-detail-out')">CLEAR</button>
+              </div>
+              <pre id="agorg-issue-detail-out">No issue selected.</pre>
             </div>
           </div>
 
