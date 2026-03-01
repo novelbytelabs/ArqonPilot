@@ -2,7 +2,7 @@
 
 This document captures the long-term AGOrg vision and the implementation plan so it is never lost across sessions.
 
-**Last updated**: 2026-02-28 20:40 EST — Wave K matrix checks passed; final smoke evidence pending
+**Last updated**: 2026-02-28 22:25 EST — Wave K complete; full push + UI smoke evidence captured.
 
 ---
 
@@ -627,7 +627,7 @@ Acceptance:
 
 ---
 
-### Wave K — Final Production Hard-Close 🔶 IN PROGRESS
+### Wave K — Final Production Hard-Close ✅ COMPLETE
 
 Goal:
 
@@ -655,7 +655,7 @@ Acceptance:
 
 1. Wave I full matrix passes. ✅
 2. Wave J full matrix passes. ✅
-3. UI smoke + prepush gate pass in closure run. 🔶 (prepush ✅, UI smoke pending non-sandbox environment evidence)
+3. UI smoke + prepush gate pass in closure run. ✅ (prepush: `prepush_gate_20260228T220452Z.log`, ui-smoke: `ui_smoke_20260228T220954Z.log`)
 4. Docs and plan are internally consistent with no stale wave-status contradictions. ✅
 
 ---
@@ -1115,6 +1115,6 @@ Verification completed:
 
 ## Recommended Next Session Priority
 
-1. **Wave K hard-close evidence** — execute `ui_smoke_check.sh` in non-sandbox operator environment and attach artifact path to this plan.
-2. **Release evidence consolidation** — attach latest Wave I/J matrix artifact paths and timestamped closure run summary.
-3. **Wave L kickoff (Tech Debt burn-down)** — start top-priority debt items from `docs/tech-debt.md` with no placeholder/shim regressions.
+1. **Wave L kickoff (Tech Debt burn-down)** — start top-priority debt items from `docs/tech-debt.md` with no placeholder/shim regressions.
+2. **Release evidence consolidation** — keep the latest Wave I/J/K matrix + smoke artifact references mirrored in runbook and troubleshooting docs.
+3. **AGOrg governance polish** — continue operator UX refinement with no hidden placeholders, shims, or undocumented temporary components.

@@ -143,6 +143,20 @@ CI workflows:
 - `.github/workflows/ci.yml`
 - `.github/workflows/pypi.yml`
 
+## Release Management (Alpha)
+
+For non-half-step release process and evidence requirements:
+
+1. `docs/release-playbook.md` (authoritative release procedure)
+2. `docs/release-log.md` (auditable release journal)
+3. `docs/releases/0.2.0-alpha.1.md` (version-specific release notes)
+
+Collect release evidence bundle/logs in one command:
+
+```bash
+./scripts/release_collect_evidence.sh --label 0.2.0a1
+```
+
 ## Documentation
 
 Primary docs are in `docs/` and published with MkDocs.

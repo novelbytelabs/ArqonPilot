@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPORTS_DIR="${HOME}/.pilot/reports"
+TMP_REPORTS_DIR="/tmp/pilot-reports"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/release_collect_evidence.sh --label <release_label> [--out <dir>]
+
+Collects latest release evidence logs/artifacts into a single directory and writes
+a summary markdown file.
+
+Examples:
+  ./scripts/release_collect_evidence.sh --label 0.2.0a1
+  ./scripts/release_collect_evidence.sh --label 0.2.0a1 --out ~/.pilot/release_evidence
+EOF
+}
+
+LABEL=""
+OUT_BASE="${HOME}/.pilot/release_evidence"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --label)
+      LABEL="${2:-}"
+      shift 2
+      ;;
+    --out)
+      OUT_BASE="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown option '$1'" >&2
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "$LABEL" ]]; then
+  echo "ERROR: --label is required." >&2
+  exit 2
+fi
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+OUT_DIR="${OUT_BASE}/release_${LABEL}_${STAMP}"
+mkdir -p "${OUT_DIR}"
+
+copy_latest() {
+  local pattern="$1"
+  local src_dir="$2"
+  local dst_name="$3"
+  local file
+  file="$(ls -1t "${src_dir}"/${pattern} 2>/dev/null | head -n 1 || true)"
+  if [[ -n "${file}" && -f "${file}" ]]; then
+    cp "${file}" "${OUT_DIR}/${dst_name}"
+    echo "copied: ${file} -> ${OUT_DIR}/${dst_name}"
+  else
+    echo "missing: ${src_dir}/${pattern}"
+  fi
+}
+
+copy_latest "prepush_gate_*.log" "${REPORTS_DIR}" "prepush_gate_latest.log"
+copy_latest "push_main_*.log" "${REPORTS_DIR}" "push_main_latest.log"
+copy_latest "acceptance_matrix_wave_i_full_*.json" "${REPORTS_DIR}" "acceptance_matrix_wave_i_full_latest.json"
+copy_latest "acceptance_matrix_wave_j_full_*.json" "${REPORTS_DIR}" "acceptance_matrix_wave_j_full_latest.json"
+copy_latest "ui_smoke_*.log" "${TMP_REPORTS_DIR}" "ui_smoke_latest.log"
+
+GIT_SHA="$(git -C "${ROOT}" rev-parse HEAD)"
+GIT_BRANCH="$(git -C "${ROOT}" branch --show-current)"
+PY_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "${ROOT}/pyproject.toml" | head -n1)"
+CRATE_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "${ROOT}/Cargo.toml" | head -n1)"
+
+cat > "${OUT_DIR}/SUMMARY.md" <<EOF
+# Release Evidence Summary
+
+- label: ${LABEL}
+- collected_at_utc: ${STAMP}
+- git_branch: ${GIT_BRANCH}
+- git_sha: ${GIT_SHA}
+- pyproject_version: ${PY_VERSION}
+- cargo_workspace_version: ${CRATE_VERSION}
+
+## Files
+
+$(ls -1 "${OUT_DIR}" | sed 's/^/- /')
+EOF
+
+echo ""
+echo "Release evidence collected at:"
+echo "  ${OUT_DIR}"
+echo "Summary:"
+echo "  ${OUT_DIR}/SUMMARY.md"

@@ -42,12 +42,16 @@ nav:
   - Roadmap & Plan: "roadmap-and-execution-plan.md"
   - AGOrg Plan: "agorg-control-plane-plan.md"
   - Technical Debt: "tech-debt.md"
+  - Release Playbook: "release-playbook.md"
+  - Release Log: "release-log.md"
   - Developer Guide: "developer-guide.md"
   - Arqon Bus Integration: "bus-integration-guide.md"
   - Troubleshooting: "troubleshooting.md"
   - Testing Strategy: "testing-strategy.md"
   - Operator Runbook: "operator-runbook.md"
   - Branch Management Guide: "branch-management-guide.md"
+  - Releases:
+      - 0.2.0-alpha.1: "releases/0.2.0-alpha.1.md"
   - Tutorials:
       - AGOrg Interface: "tutorial/agorg-interface.md"
 
@@ -105,7 +109,7 @@ edit_uri: edit/main/docs/
 
 # Extra configuration
 extra:
-  version: "1.0.0"
+  version: "0.2.0-alpha.1 (planned)"
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/novelbytelabs/arqonbus

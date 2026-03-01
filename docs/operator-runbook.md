@@ -228,14 +228,25 @@ When a multi-repo operation fails:
 3. re-run command scoped to failed repo only
 4. record root cause and corrective action in `pilot know`
 
-## 7. Release Candidate Gate (v1-rc1)
+## 7. Alpha Release Gate
 
-Before cutting `pilot-v1-rc1`:
+Before cutting an alpha tag (example: `v0.2.0-alpha.1`):
 
-1. `cargo check -p pilot --locked`
-2. full CLI suite green
-3. wave acceptance docs updated
-4. dogfooding + controlled apply evidence documented
-5. audit/report artifacts present and interpretable
+1. `./scripts/prepush_gate.sh`
+2. `./scripts/release_readiness_check.sh`
+3. `./scripts/wave_acceptance_matrix.sh --wave I --profile full`
+4. `./scripts/wave_acceptance_matrix.sh --wave J --profile full`
+5. `./scripts/ui_smoke_check.sh`
 6. if publishing, verify index visibility:
-    - `./scripts/verify_pypi_release.sh --index pypi`
+   - `./scripts/verify_pypi_release.sh --index pypi --version <X.Y.ZaN>`
+7. collect release evidence:
+   - `./scripts/release_collect_evidence.sh --label <X.Y.ZaN>`
+
+Authoritative release docs:
+
+1. `docs/release-playbook.md`
+2. `docs/release-log.md`
+
+Execution order is defined in:
+
+1. `docs/release-playbook.md` -> `0) Full Release Order (Do Not Reorder)`

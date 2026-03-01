@@ -1,6 +1,6 @@
 # ArqonPilot Unified Master Plan
 
-**Last updated**: 2026-02-28 20:40 EST
+**Last updated**: 2026-02-28 22:30 EST
 
 This is the canonical execution plan for ArqonPilot. It merges product delivery, guardrails, testing, and documentation into one system plan so work does not fragment across sessions.
 
@@ -42,10 +42,10 @@ ArqonPilot becomes a centralized control system:
    - duplicate winner/loser controls
    - dry-run-token enforced class apply flow
    - report/dry-run/apply parity summaries.
-9. Wave K (final production hard-close) is in final verification:
+9. Wave K (final production hard-close) is complete:
    - acceptance matrix expansion (`--wave I|J`)
    - Wave I/J full matrix pass evidence captured
-   - closure docs parity done, UI smoke evidence pending non-sandbox run.
+   - closure docs parity and UI smoke evidence captured.
 10. Mixed-stdout JSON parsing is hardened for matrix API path (to tolerate non-JSON prefix lines).
 
 ## Program Tracks (Run In Parallel)
