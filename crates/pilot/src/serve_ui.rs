@@ -4891,16 +4891,16 @@ Recommended flow:
 
           <!-- Sub-Panel: Import -->
           <div id="agorg-import-panel" class="sub-panel active">
-            <h3>Import AGOrg</h3>
-            <div class="helper">Onboard an existing Master Directory. All AGOs/AGOrgs must exist as siblings within this space.</div>
-            <label class="field-label" for="agorg-master">AGOrg Master Directory</label>
+            <h3>Import</h3>
+            <div class="helper">Onboard an existing Master Directory. All repositories must exist as siblings within this space.</div>
+            <label class="field-label" for="agorg-master">Master Directory</label>
             <div class="row">
               <input id="agorg-master" placeholder="/path/to/parent/dir" value="/home/irbsurfer/Projects/arqon" />
               <button class="btn secondary" onclick="browseAgorgMaster()">Browse…</button>
             </div>
-            <label class="field-label" for="agorg-name">AGOrg Name</label>
+            <label class="field-label" for="agorg-name">Name</label>
             <input id="agorg-name" placeholder="Arqon" value="Arqon" />
-            <label class="field-label" for="agorg-root">Parent AGOrg Root Path (Active)</label>
+            <label class="field-label" for="agorg-root">Parent Root Path (Active)</label>
             <div class="row">
               <input id="agorg-root" placeholder="/path/to/org/repo" value="/home/irbsurfer/Projects/arqon" />
               <button class="btn secondary" onclick="browseAgorgRoot()">Browse…</button>
