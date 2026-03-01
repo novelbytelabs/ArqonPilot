@@ -158,6 +158,7 @@ struct AgorgImportSelectedRequest {
     candidates: Vec<agorg::DiscoverCandidate>,
     prune_missing: Option<bool>,
     review_id: Option<String>,
+    default_scope_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1066,6 +1067,16 @@ async fn api_agorg_import_selected(
                     "review_id": review_record.review_id,
                     "error": err.to_string()
                 }));
+            }
+            if let Some(scope_path) = req.default_scope_path {
+                let path_obj = std::path::Path::new(&scope_path);
+                if let Ok(Some(ago)) = state.agorg_store.get_ago_by_path(id, path_obj).await {
+                    let _ = state.agorg_store.set_active_agorg(ago.id).await;
+                } else {
+                    let _ = state.agorg_store.set_active_agorg(id).await;
+                }
+            } else if discovery.candidates.is_empty() {
+                let _ = state.agorg_store.set_active_agorg(id).await;
             }
             Json(json!({"ok": true, "agorg_id": id, "import_summary": summary, "review": review_record}))
                 .into_response()
@@ -2646,7 +2657,14 @@ fn load_persisted_agorg_reviews(
             }
         }
     }
-    Ok(reviews)
+    let mut vec_reviews: Vec<_> = reviews.into_values().collect();
+    vec_reviews.sort_by_key(|r| std::cmp::Reverse(r.updated_at_unix));
+    vec_reviews.truncate(10);
+    let mut top_10: HashMap<String, AgorgReviewRecord> = HashMap::new();
+    for r in vec_reviews {
+        top_10.insert(r.review_id.clone(), r);
+    }
+    Ok(top_10)
 }
 
 async fn upsert_agorg_review(
@@ -2663,7 +2681,35 @@ async fn upsert_agorg_review(
     }
     record.updated_at_unix = now_unix();
     reviews.insert(record.review_id.clone(), record.clone());
-    append_agorg_review_record(&state.agorg_reviews_log, &record)
+    
+    // Trim strictly to 10
+    if reviews.len() > 10 {
+        let mut vec_reviews: Vec<_> = reviews.clone().into_values().collect();
+        vec_reviews.sort_by_key(|r| std::cmp::Reverse(r.updated_at_unix));
+        vec_reviews.truncate(10);
+        reviews.clear();
+        for r in vec_reviews {
+            reviews.insert(r.review_id.clone(), r);
+        }
+        
+        // rewrite the log file cleanly
+        let path = &state.agorg_reviews_log;
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(path) {
+            for (_, r) in reviews.iter() {
+                if let Ok(line) = serde_json::to_string(r) {
+                    use std::io::Write;
+                    let _ = writeln!(file, "{}", line);
+                }
+            }
+        }
+    } else {
+        let _ = append_agorg_review_record(&state.agorg_reviews_log, &record);
+    }
+    
+    Ok(())
 }
 
 fn is_safe_cli_token(s: &str) -> bool {
@@ -3781,39 +3827,103 @@ const INDEX_HTML: &str = r#"<!doctype html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet" />
   <title>Pilot Control Panel</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #090f1c;
-      --panel: #111a2d;
-      --panel-2: #14213a;
-      --border: #2e3f64;
-      --text: #e7ecff;
-      --muted: #9db0df;
-      --primary: #6d7dff;
-      --primary-hover: #8090ff;
-      --accent: #30c7f4;
+      --bg-deep: #06080B;
+      --bg-mid: #0B0F14;
+      --bg-light: #161C24;
+      --border: rgba(255, 255, 255, 0.06);
+      --border-hover: rgba(255, 255, 255, 0.15);
+      --text: #e2e8f0;
+      --muted: #94A3B8;
+      --dim: #475569;
+      --primary: #00F5FF;
+      --primary-dim: rgba(0, 245, 255, 0.15);
+      --accent: #FFD700;
+      --rose: #FF2E2E;
+      --glass-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+      --glass-border: rgba(255, 255, 255, 0.05);
     }
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; margin: 0; }
+
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--primary-dim); border-radius: 999px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(0, 245, 255, 0.4); }
+
     body {
       margin: 0;
       color: var(--text);
-      font-family: "Segoe UI", "Inter", ui-sans-serif, system-ui, sans-serif;
-      background:
-        radial-gradient(circle at 50% 0%, rgba(115, 97, 255, 0.25), transparent 52%),
-        radial-gradient(circle at 90% 100%, rgba(37, 209, 246, 0.16), transparent 38%),
-        var(--bg);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: var(--bg-deep);
       min-height: 100vh;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
-    .wrap { max-width: 1200px; margin: 0 auto; padding: 28px 20px 48px; }
+    ::selection { background: rgba(0, 245, 255, 0.25); color: #fff; }
+
+    /* ═══════════ Animated Orb Background ═══════════ */
+    .bg-orbs { position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
+    .bg-orbs::before, .bg-orbs::after {
+      content: '';
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(120px);
+      animation: orbFloat 8s ease-in-out infinite;
+    }
+    .bg-orbs::before {
+      width: 600px; height: 600px;
+      top: -15%; left: 15%;
+      background: rgba(99, 60, 255, 0.12);
+    }
+    .bg-orbs::after {
+      width: 500px; height: 500px;
+      bottom: -10%; right: 10%;
+      background: rgba(0, 245, 255, 0.06);
+      animation-delay: 4s;
+    }
+    .orb-accent {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(100px);
+      animation: orbFloat 10s ease-in-out infinite;
+      animation-delay: 2s;
+      width: 400px; height: 400px;
+      top: 40%; right: 30%;
+      background: rgba(139, 92, 246, 0.08);
+    }
+    @keyframes orbFloat {
+      0%, 100% { transform: translate(0, 0) scale(1); opacity: 1; }
+      50% { transform: translate(30px, -20px) scale(1.1); opacity: 0.7; }
+    }
+
+    /* ═══════════ Layout ═══════════ */
+    .wrap {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 100%;
+      padding: 0;
+    }
+
+    /* ═══════════ Top Nav / Hero ═══════════ */
     .hero {
-      border: 1px solid var(--border);
-      background: linear-gradient(160deg, rgba(20, 33, 58, 0.9), rgba(13, 21, 36, 0.95));
-      border-radius: 14px;
-      padding: 22px;
-      margin-bottom: 18px;
-      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.28);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      border-bottom: 1px solid var(--border);
+      background: rgba(6, 8, 11, 0.85);
+      backdrop-filter: blur(16px) saturate(180%);
+      padding: 16px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
     .bus-status-row {
       margin-top: 10px;
@@ -3831,329 +3941,464 @@ const INDEX_HTML: &str = r#"<!doctype html>
       gap: 8px;
     }
     .status-right {
-      border: 1px solid #3a578a;
-      background: #152845;
-      color: #dbe7ff;
-      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted);
+      border-radius: 6px;
       padding: 4px 10px;
       cursor: pointer;
-      user-select: none;
-      transition: all 0.15s ease;
+      transition: all 0.25s;
+      font-size: 0.8rem;
     }
     .status-right:hover {
-      border-color: #5b7cc0;
-      box-shadow: 0 0 0 2px rgba(90, 124, 200, 0.25);
+      border-color: var(--primary);
+      color: var(--primary);
+      box-shadow: 0 0 12px rgba(0, 245, 255, 0.15);
     }
     .bus-chip {
-      border-radius: 999px;
-      padding: 4px 9px;
-      font-weight: 700;
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-weight: 600;
       border: 1px solid;
-      font-size: 0.74rem;
-      letter-spacing: 0.02em;
+      font-size: 0.7rem;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.04em;
     }
     .bus-chip.connected {
-      color: #b7f7ca;
-      border-color: #2f965d;
-      background: #113022;
+      color: var(--primary);
+      border-color: rgba(0, 245, 255, 0.25);
+      background: rgba(0, 245, 255, 0.06);
+      box-shadow: 0 0 8px rgba(0, 245, 255, 0.1);
     }
     .bus-chip.disconnected {
-      color: #ffb9b9;
-      border-color: #aa4c4c;
-      background: #351919;
+      color: var(--rose);
+      border-color: rgba(255, 46, 46, 0.25);
+      background: rgba(255, 46, 46, 0.06);
     }
     .agorg-chip.active {
-      color: #b7f7ca;
-      border-color: #2f965d;
-      background: #113022;
+      color: var(--primary);
+      border-color: rgba(0, 245, 255, 0.25);
+      background: rgba(0, 245, 255, 0.06);
     }
     .agorg-chip.none {
-      color: #ffe6a6;
-      border-color: #997a33;
-      background: #2f2610;
+      color: var(--accent);
+      border-color: rgba(255, 215, 0, 0.25);
+      background: rgba(255, 215, 0, 0.06);
     }
-    h1 { margin: 0; font-size: 2rem; line-height: 1.1; letter-spacing: 0.01em; }
-    h2 { margin: 0; font-size: 1rem; color: var(--muted); font-weight: 500; }
-    h3 { margin: 0 0 10px; font-size: 1.05rem; }
+    h1 { font-size: 1.1rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #fff; }
+    h1 .accent { color: var(--primary); }
+    h2 { font-size: 0.7rem; color: var(--dim); font-weight: 400; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.15em; text-transform: uppercase; }
+    h3 { margin: 0 0 14px; font-size: 0.75rem; font-weight: 600; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+
+    /* ═══════════ Tab Bar ═══════════ */
     .tabs {
       display: flex;
-      gap: 10px;
-      margin: 0 0 16px;
-      flex-wrap: wrap;
+      gap: 0;
+      border-bottom: 1px solid var(--border);
+      padding: 0 28px;
+      background: rgba(6, 8, 11, 0.6);
+      backdrop-filter: blur(8px);
+      overflow-x: auto;
+      position: sticky;
+      top: 56px;
+      z-index: 40;
     }
     button.tab {
-      background: #182744;
-      border: 1px solid #355285;
-      color: #dbe7ff;
-      padding: 9px 16px;
-      border-radius: 999px;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--dim);
+      padding: 12px 18px;
       cursor: pointer;
-      font-weight: 600;
-      transition: all 0.15s ease;
+      font-weight: 500;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+      white-space: nowrap;
     }
-    button.tab:hover { border-color: #4b72b6; }
+    button.tab:hover { color: var(--text); }
     button.tab.active {
-      background: linear-gradient(90deg, #4f63dc, #3e56cf);
-      border-color: #5c74ef;
-      box-shadow: 0 0 0 3px rgba(79, 99, 220, 0.18);
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+      text-shadow: 0 0 10px rgba(0, 245, 255, 0.3);
     }
+
+    /* ═══════════ Panels ═══════════ */
     .panel {
       display: none;
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 14px;
-      background: rgba(16, 26, 44, 0.92);
-      backdrop-filter: blur(2px);
+      padding: 28px;
+      animation: fadeIn 0.25s ease-out;
     }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
     .panel.active { display: block; }
+    /* ═══════════ Grid / Cards ═══════════ */
     .grid {
       display: grid;
-      gap: 14px;
+      gap: 24px;
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .card {
-      background: linear-gradient(155deg, rgba(21, 34, 57, 0.92), rgba(15, 24, 40, 0.98));
-      border: 1px solid var(--border);
+      background: var(--glass-bg);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--glass-border);
       border-radius: 12px;
-      padding: 14px;
+      padding: 20px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 14px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.3s;
     }
+    .card:hover { border-color: var(--border-hover); }
+    .card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at 50% -20%, rgba(0, 245, 255, 0.03), transparent 70%);
+      pointer-events: none;
+    }
+
+    /* ═══════════ Section Box (Import panel groups) ═══════════ */
+    .section-box {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px;
+      background: rgba(255, 255, 255, 0.015);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      position: relative;
+    }
+    .section-box h4 {
+      margin: 0;
+      font-size: 0.7rem;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section-box h4::before {
+      content: '';
+      width: 3px;
+      height: 14px;
+      background: var(--primary);
+      border-radius: 2px;
+      box-shadow: 0 0 6px rgba(0,245,255,0.4);
+    }
+    /* ═══════════ Inputs ═══════════ */
     input, select, textarea {
       width: 100%;
-      background: #0d1526;
-      color: #ebf1ff;
-      border: 1px solid #334f7d;
+      background: rgba(0, 0, 0, 0.3);
+      color: var(--text);
+      border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 10px 11px;
-      font-size: 0.95rem;
+      padding: 10px 14px;
+      font-size: 0.82rem;
+      font-family: 'JetBrains Mono', monospace;
+      transition: all 0.25s;
     }
     textarea {
       resize: vertical;
       min-height: 110px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
-    input::placeholder, textarea::placeholder { color: #7f94c6; }
+    input::placeholder, textarea::placeholder { color: var(--dim); }
     input:focus, select:focus, textarea:focus {
       outline: none;
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(48, 199, 244, 0.18);
+      border-color: rgba(0, 245, 255, 0.4);
+      box-shadow: 0 0 0 3px rgba(0, 245, 255, 0.06), 0 0 12px rgba(0, 245, 255, 0.08);
+      background: rgba(0, 0, 0, 0.4);
     }
+    select option {
+      background: #0d1117; 
+      color: #e6edf3;
+    }
+
+    /* ═══════════ Row / Buttons ═══════════ */
     .row {
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
+      align-items: center;
     }
     .btn {
-      background: linear-gradient(90deg, var(--primary), #5567e4);
-      border: 1px solid #7484ff;
-      color: #fff;
-      border-radius: 9px;
-      padding: 9px 13px;
+      background: linear-gradient(135deg, rgba(0, 245, 255, 0.15), rgba(99, 60, 255, 0.1));
+      border: 1px solid rgba(0, 245, 255, 0.3);
+      color: var(--primary);
+      border-radius: 8px;
+      padding: 9px 16px;
       cursor: pointer;
       font-weight: 600;
-      transition: all 0.15s ease;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      transition: all 0.25s ease;
+      position: relative;
+      overflow: hidden;
     }
-    .btn:hover { background: linear-gradient(90deg, var(--primary-hover), #6578f5); }
+    .btn::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(0,245,255,0.1), transparent);
+      opacity: 0;
+      transition: opacity 0.25s;
+    }
+    .btn:hover::before { opacity: 1; }
+    .btn:hover {
+      border-color: var(--primary);
+      box-shadow: 0 0 20px rgba(0, 245, 255, 0.15), inset 0 0 20px rgba(0, 245, 255, 0.05);
+      transform: translateY(-1px);
+    }
+    .btn:active { transform: translateY(0); }
     .btn.secondary {
-      background: #1a2844;
-      border-color: #3a578a;
-      color: #d9e6ff;
+      background: rgba(255, 255, 255, 0.03);
+      border-color: var(--border);
+      color: var(--muted);
     }
-    .field-label {
-      font-size: 0.82rem;
-      color: #b6c7ee;
+    .btn.secondary::before { display: none; }
+    .btn.secondary:hover {
+      border-color: var(--border-hover);
+      color: var(--text);
+      box-shadow: none;
+      transform: none;
+    }
+    .btn.btn-jumbo {
+      font-size: 1.25rem;
+      padding: 18px 32px;
       font-weight: 700;
-      letter-spacing: 0.01em;
+      letter-spacing: 0.08em;
+    }
+    
+    /* Pulsating Background Glow for specific buttons */
+    .btn-glow-wrap {
+      position: relative;
+      display: inline-flex;
+    }
+    .btn-glow-wrap::before {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      background: rgba(0, 245, 255, 0.6);
+      border-radius: 10px;
+      filter: blur(8px);
+      z-index: 0;
+      animation: neonPulseBg 2s ease-in-out infinite alternate;
+      pointer-events: none;
+    }
+    .btn-glow-wrap .btn {
+      position: relative;
+      z-index: 1;
+      background: #06080b; /* make it opaque so glow is strictly behind */
+    }
+    @keyframes neonPulseBg {
+      from { opacity: 0.3; filter: blur(6px); }
+      to { opacity: 0.8; filter: blur(12px); transform: scale(1.02); }
+    }
+
+    /* ═══════════ Labels / Helpers ═══════════ */
+    .field-label {
+      font-size: 0.68rem;
+      color: var(--dim);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-family: 'JetBrains Mono', monospace;
     }
     .helper {
-      font-size: 0.82rem;
-      color: #9cb0dc;
-      line-height: 1.45;
-      margin-top: -4px;
+      font-size: 0.78rem;
+      color: var(--dim);
+      line-height: 1.5;
     }
     .sequence-strip {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 12px;
-      padding: 8px;
-      border: 1px solid #2f436f;
-      border-radius: 10px;
-      background: rgba(10, 19, 33, 0.7);
+      gap: 6px;
+      margin-bottom: 24px;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.2);
     }
     .seq-step {
-      border-radius: 999px;
-      border: 1px solid #3a578a;
-      background: #152845;
-      color: #d5e4ff;
-      font-size: 0.85rem;
-      font-weight: 700;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-family: 'JetBrains Mono', monospace;
       padding: 4px 10px;
       white-space: nowrap;
-      cursor: pointer;
     }
-    .step {
-      border: 1px solid #2f4975;
-      border-radius: 10px;
-      padding: 10px;
-      background: rgba(13, 22, 38, 0.6);
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .step-title {
-      font-size: 0.9rem;
-      font-weight: 700;
-      color: #dbe7ff;
-    }
-    .status {
-      margin-top: 14px;
-      display: grid;
-      gap: 14px;
-      grid-template-columns: 1fr 1fr;
-    }
+
+    /* ═══════════ Pre / Code ═══════════ */
     pre {
       margin: 0;
-      background: #080f1a;
-      border: 1px solid #2d426c;
-      border-radius: 10px;
-      padding: 12px;
-      max-height: 480px;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      max-height: 420px;
       overflow: auto;
-      font-size: 0.84rem;
-      line-height: 1.4;
+      font-size: 0.78rem;
+      line-height: 1.6;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
       white-space: pre-wrap;
       word-break: break-all;
     }
+
+    /* ═══════════ Timeline ═══════════ */
     .timeline {
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 6px;
       max-height: 340px;
-      overflow: auto;
+      overflow-y: auto;
       padding-right: 4px;
     }
     .tl-card {
-      border: 1px solid #2f436f;
-      border-radius: 10px;
-      background: #0a1321;
-      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.02);
+      padding: 12px;
       cursor: pointer;
+      transition: all 0.25s;
+      border-left: 2px solid transparent;
     }
+    .tl-card:hover { border-left-color: rgba(0, 245, 255, 0.3); background: rgba(0, 245, 255, 0.02); }
     .tl-card.selected {
-      border-color: #6a7dff;
-      box-shadow: inset 0 0 0 1px rgba(109, 125, 255, 0.55);
+      border-left-color: var(--primary);
+      background: rgba(0, 245, 255, 0.04);
     }
     .tl-head {
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 8px;
-      margin-bottom: 8px;
+      margin-bottom: 4px;
     }
     .tl-title {
-      font-size: 0.88rem;
-      font-weight: 600;
-      color: #dce8ff;
+      font-size: 0.78rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+      color: var(--text);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .tl-badge {
-      border-radius: 999px;
-      font-size: 0.72rem;
-      font-weight: 700;
+      border-radius: 4px;
+      font-size: 0.65rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      padding: 2px 6px;
+      border: 1px solid;
+      flex-shrink: 0;
+    }
+    .tl-badge.started { color: var(--muted); border-color: var(--border); background: transparent; }
+    .tl-badge.progress { color: var(--accent); border-color: rgba(255, 215, 0, 0.25); background: rgba(255, 215, 0, 0.06); }
+    .tl-badge.completed { color: var(--primary); border-color: rgba(0, 245, 255, 0.25); background: rgba(0, 245, 255, 0.06); }
+    .tl-badge.failed { color: var(--rose); border-color: rgba(255, 46, 46, 0.25); background: rgba(255, 46, 46, 0.06); }
+    .tl-steps {
+      margin: 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--dim);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .tl-empty {
+      color: var(--muted);
+      font-size: 0.85rem;
+      font-family: "JetBrains Mono", monospace;
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      padding: 14px;
+      text-align: center;
+    }
+    .dep-status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .dep-status-card { border: 1px solid var(--border); border-radius: 6px; padding: 12px; background: var(--bg-mid); }
+    .dep-status-card h4 { margin: 0 0 8px; font-size: 0.85rem; text-transform: uppercase; color: var(--muted); }
+    .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .chip {
+      border-radius: 4px;
+      font-size: 0.68rem;
+      font-family: 'JetBrains Mono', monospace;
       padding: 3px 8px;
       border: 1px solid;
     }
-    .tl-badge.started { color: #9dc7ff; border-color: #3f6db5; background: #152845; }
-    .tl-badge.progress { color: #9de7ff; border-color: #2c7d9c; background: #113242; }
-    .tl-badge.completed { color: #b6f7cb; border-color: #2d8a52; background: #102d1f; }
-    .tl-badge.failed { color: #ffb2b2; border-color: #9e3f3f; background: #341616; }
-    .tl-steps {
-      margin: 0;
-      padding-left: 16px;
-      font-size: 0.8rem;
-      color: #a8b9e3;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .tl-empty {
-      color: #8ca0cf;
-      font-size: 0.88rem;
-      border: 1px dashed #34507e;
-      border-radius: 8px;
-      padding: 10px;
-      text-align: center;
-    }
-    .dep-status-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
-    }
-    .dep-status-card {
-      border: 1px solid #2f436f;
-      border-radius: 10px;
-      padding: 10px;
-      background: #0a1321;
-    }
-    .dep-status-card h4 {
-      margin: 0 0 8px;
-      font-size: 0.9rem;
-    }
-    .chip-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-    .chip {
-      border-radius: 999px;
-      font-size: 0.72rem;
-      font-weight: 700;
-      padding: 4px 10px;
-      border: 1px solid #3a578a;
-      background: #152845;
-      color: #d5e4ff;
-    }
-    .chip.ok { border-color: #2d8a52; background: #102d1f; color: #b6f7cb; }
-    .chip.fail { border-color: #9e3f3f; background: #341616; color: #ffb2b2; }
-    .chip.warn { border-color: #997a33; background: #2f2610; color: #ffe6a6; }
-    .chip.neutral { border-color: #3a578a; background: #152845; color: #d5e4ff; }
+    .chip.ok { border-color: rgba(0, 245, 255, 0.2); background: rgba(0, 245, 255, 0.04); color: var(--primary); }
+    .chip.fail { border-color: rgba(255, 46, 46, 0.2); background: rgba(255, 46, 46, 0.04); color: var(--rose); }
+    .chip.warn { border-color: rgba(255, 215, 0, 0.2); background: rgba(255, 215, 0, 0.04); color: var(--accent); }
+    .chip.neutral { border-color: var(--border); background: rgba(255,255,255,0.02); color: var(--muted); }
     .pre-wrap { position: relative; }
-    .pre-actions {
-      position: absolute; top: 10px; right: 20px;
-      display: flex; gap: 6px; opacity: 0.35; transition: opacity 0.2s; z-index: 20;
-    }
+    .pre-actions { position: absolute; top: 6px; right: 10px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.2s; z-index: 20; }
     .pre-wrap:hover .pre-actions { opacity: 1; }
     .action-btn {
-      background: rgba(30, 45, 80, 0.85); border: 1px solid #355285; color: #dbe7ff;
-      border-radius: 6px; padding: 4px 9px; font-size: 0.72rem; font-weight: 700;
-      cursor: pointer; backdrop-filter: blur(4px); transition: all 0.1s ease;
+      background: rgba(0,0,0,0.6); border: 1px solid var(--border); color: var(--dim);
+      border-radius: 4px; padding: 3px 7px; font-size: 0.65rem; font-family: 'JetBrains Mono', monospace;
+      cursor: pointer; transition: all 0.2s; backdrop-filter: blur(4px);
     }
-    .action-btn:hover { background: #4f63dc; color: #fff; border-color: #5c74ef; }
-    .action-btn:active { transform: scale(0.95); }
-    .dep-ok { color: #b6f7cb; }
-    .dep-fail { color: #ffb2b2; }
-    .muted { color: var(--muted); margin-top: 7px; }
+    .action-btn:hover { background: rgba(0, 245, 255, 0.1); color: var(--primary); border-color: rgba(0,245,255,0.3); }
+    .dep-ok { color: var(--primary); }
+    .dep-fail { color: var(--rose); }
+    .muted { color: var(--muted); margin-top: 4px; }
     .three-panel-layout { display: flex; flex-direction: column; gap: 24px; }
     .panel-left, .panel-center, .panel-right { width: 100%; }
-    .panel-center { border-top: 1px solid #2f436f; border-bottom: 1px solid #2f436f; padding: 24px 0; }
-    .tree-node { cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: background 0.2s; }
-    .tree-node:hover { background: rgba(109, 125, 255, 0.15); }
-    .tree-node.selected { background: rgba(109, 125, 255, 0.3); border: 1px solid #6a7dff; }
-    .tree-node.agorg { color: #9dc7ff; font-weight: 700; }
-    .tree-node.ago { color: #b6f7cb; }
-    .tree-node.none { color: #8ca0cf; font-style: italic; }
-    .sub-tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid #2d426c; padding-bottom: 4px; }
-    .sub-tab { background: none; border: none; color: #8ca0cf; font-size: 0.8rem; font-weight: 700; cursor: pointer; padding: 4px 8px; border-bottom: 2px solid transparent; }
-    .sub-tab.active { color: #6a7dff; border-bottom-color: #6a7dff; }
-    .sub-panel { display: none; }
+    .panel-center { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 24px 0; }
+    .tree-node { cursor: pointer; padding: 5px 10px; border-radius: 6px; font-size: 0.78rem; font-family: 'JetBrains Mono', monospace; transition: all 0.2s; border-left: 2px solid transparent; }
+    .tree-node:hover { background: rgba(255,255,255,0.04); border-left-color: rgba(255,255,255,0.1); }
+    .tree-node.selected { background: rgba(0, 245, 255, 0.06); border-left-color: var(--primary); }
+    .tree-node.agorg { color: #818cf8; font-weight: 600; }
+    .tree-node.ago { color: var(--primary); }
+    .tree-node.none { color: var(--dim); font-style: italic; }
+    .sub-tabs { display: flex; gap: 0; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+    .sub-tab { background: none; border: none; color: var(--dim); font-size: 0.78rem; font-weight: 500; cursor: pointer; padding: 10px 16px; border-bottom: 2px solid transparent; transition: all 0.2s; }
+    .sub-tab:hover { color: var(--text); }
+    .sub-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+    .sub-panel { display: none; animation: fadeIn 0.25s ease-out; }
     .sub-panel.active { display: block; }
-    .batch-list { font-family: monospace; min-height: 80px; padding: 8px; background: #1a2a47; color: #b6f7cb; border: 1px solid #2d426c; border-radius: 4px; }
+    .batch-list { font-family: 'JetBrains Mono', monospace; min-height: 80px; padding: 10px; background: rgba(0,0,0,0.3); color: var(--primary); border: 1px solid var(--border); border-radius: 8px; }
+    .check-label {
+      font-size: 0.78rem;
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      padding: 4px 0;
+      transition: color 0.2s;
+    }
+    .check-label:hover { color: var(--text); }
+    .check-label input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--primary); }
+    .status {
+      margin-top: 24px;
+      display: grid;
+      gap: 24px;
+      grid-template-columns: 1fr 1fr;
+    }
+    .step {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.015);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .step-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
     
     /* Hero Dropdown */
     .agorg-scope-container { position: relative; display: inline-block; }
@@ -4164,48 +4409,47 @@ const INDEX_HTML: &str = r#"<!doctype html>
       position: absolute;
       top: 100%;
       left: 16px;
-      margin-top: 4px;
-      background: #0f111a;
-      border: 1px solid #4e6ba6;
-      border-radius: 4px;
+      margin-top: 8px;
+      background: var(--bg-mid);
+      border: 1px solid var(--border);
+      border-radius: 6px;
       min-width: 280px;
       max-height: 400px;
       overflow-y: auto;
       z-index: 1000;
       display: none;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+      backdrop-filter: blur(8px);
     }
-    .agorg-dropdown.active .agorg-dropdown-menu {
-      display: block;
-    }
+    .agorg-dropdown.active .agorg-dropdown-menu { display: block; }
     .agorg-drop-item {
-      padding: 8px 12px;
+      padding: 10px 14px;
       cursor: pointer;
-      border-bottom: 1px solid #202b38;
+      border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
       align-items: center;
-      color: #a8b9e3;
+      color: var(--text);
+      transition: background 0.2s;
     }
-    .agorg-drop-item:hover {
-      background: #1a2235;
-      color: #fff;
-    }
+    .agorg-drop-item:hover { background: rgba(0, 245, 255, 0.05); color: #00F5FF; border-left: 2px solid var(--primary); }
     .agorg-drop-item .type {
       font-size: 0.7rem;
+      font-family: "JetBrains Mono", monospace;
       padding: 2px 6px;
-      background: #202b38;
+      background: var(--bg-light);
       border-radius: 4px;
-      color: #8b9bb4;
+      color: var(--muted);
     }
     .agorg-drop-header {
-      padding: 8px 12px;
+      padding: 8px 14px;
       font-size: 0.75rem;
+      font-family: "JetBrains Mono", monospace;
       text-transform: uppercase;
-      color: #4e6ba6;
-      font-weight: bold;
-      background: #161b22;
-      border-bottom: 1px solid #202b38;
+      color: var(--muted);
+      font-weight: 600;
+      background: var(--bg-deep);
+      border-bottom: 1px solid var(--border);
       position: sticky;
       top: 0;
     }
@@ -4233,17 +4477,34 @@ const INDEX_HTML: &str = r#"<!doctype html>
       border-radius: 4px;
       color: #8b9bb4;
     }
+    /* ═══════════ Responsive ═══════════ */
+    @media (min-width: 1200px) {
+      .three-panel-layout { flex-direction: row; }
+      .panel-left { flex: 1; }
+      .panel-center { flex: 1; }
+      .panel-right { flex: 1; }
+    }
     @media (max-width: 980px) {
       .grid, .status { grid-template-columns: 1fr; }
-      h1 { font-size: 1.72rem; }
+      .hero { flex-direction: column; gap: 12px; align-items: flex-start; }
+      .tabs { padding: 0 16px; }
+      .panel { padding: 16px; }
+    }
+    @media (max-width: 600px) {
+      .tabs { gap: 0; }
+      button.tab { padding: 10px 12px; font-size: 0.72rem; }
+      .hero { padding: 12px 16px; }
     }
   </style>
 </head>
 <body>
+<div class="bg-orbs"><div class="orb-accent"></div></div>
 <div class="wrap">
   <div class="hero">
-    <h1>Arqon Pilot</h1>
-    <h2 class="muted">Orchestrating Autonomous Evolution</h2>
+    <div>
+      <h1>Arqon <span class="accent">Pilot</span></h1>
+      <h2>Orchestrating Autonomous Evolution</h2>
+    </div>
     <div class="bus-status-row">
       <div class="status-left">
         ArqonBus:
@@ -4256,8 +4517,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
       
       <!-- Active AGOrg Scope dropdown -->
       <div style="position:relative; display:inline-block;" class="agorg-dropdown" id="agorg-hero-dropdown-container">
-        <button class="btn secondary" id="agorg-open-btn" style="margin-left: 16px; min-width: 140px; border-color:#4e6ba6; color:#a8b9e3;" onclick="toggleAgorgDropdown(event)">
-          AGOrg: <span id="agorg-status-chip" style="color:#fff; font-weight:bold;">Loading...</span> ▼
+        <button class="btn secondary" id="agorg-open-btn" style="margin-left: 16px; min-width: 140px; color:var(--text);" onclick="toggleAgorgDropdown(event)">
+          AGOrg: <span id="agorg-status-chip" style="color:#00F5FF; text-shadow: 0 0 5px rgba(0,245,255,0.4);">Loading...</span> ▼
         </button>
         <div class="agorg-dropdown-menu" id="agorg-hero-dropdown" onclick="event.stopPropagation()">
           <div class="agorg-drop-header">Loading registered repositories...</div>
@@ -4833,275 +5094,275 @@ Recommended flow:
   </section>
 
   <section class="panel" id="agorg">
-    <div class="three-panel-layout">
-      <!-- Panel 1: Settings/CRUD -->
-      <div class="panel-left" style="display:flex; flex-direction:row; gap:16px;">
-        <div style="flex:1;">
-          <div class="card">
-            <h3>Active Scope</h3>
-            <div class="helper">Manage global scope. Switch between known AGOrg contexts or input manually.</div>
-            <div id="agorg-active-details" style="background:#0f111a; border-radius:4px; padding:10px; border:1px solid #202b38; margin-bottom:12px; font-size:0.85rem; word-break:break-all;">
-              <em>Loading active scope...</em>
-            </div>
-            <label class="field-label" for="agorg-use-id">Manual Switch (UUID or Name)</label>
-            <div class="row">
-              <input id="agorg-use-id" placeholder="UUID or name" />
-              <button class="btn secondary" onclick="agorgUse()">Switch</button>
-            </div>
-            <div class="row" style="margin-top:8px;">
-              <button class="btn secondary" onclick="agorgUpdate()">Update</button>
-              <button class="btn secondary" style="color:#ff6b6b; border-color:#ff6b6b;" onclick="agorgDelete()">Delete</button>
-            </div>
-            <h4 style="margin:14px 0 6px;">Scope Profile Preferences</h4>
-            <label class="field-label" for="agorg-profile-name">Profile Name</label>
-            <input id="agorg-profile-name" placeholder="primary" />
-            <label class="field-label" for="agorg-pref-default-branch">Default Branch</label>
-            <input id="agorg-pref-default-branch" placeholder="dev" />
-            <label class="field-label" for="agorg-pref-release-branch">Release Branch</label>
-            <input id="agorg-pref-release-branch" placeholder="main" />
-            <label style="font-size:0.82rem;color:#a8b9e3; display:block; margin-top:6px;">
-              <input id="agorg-pref-auto-prune" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
-              Auto-prune stale AGO rows by default
-            </label>
-            <div class="row" style="margin-top:8px;">
-              <button class="btn secondary" onclick="agorgLoadPreferences()">Load Prefs</button>
-              <button class="btn secondary" onclick="agorgSavePreferences()">Save Prefs</button>
-            </div>
-          </div>
+
+    <!-- Row 1: Active Scope + Registry (50/50) -->
+    <div class="grid">
+      <div class="card">
+        <h3>Active Scope</h3>
+        <div class="helper">Manage global scope. Switch between known AGOrg contexts or input manually.</div>
+        <div id="agorg-active-details" style="background:rgba(0,0,0,0.3); border-radius:8px; padding:12px; border:1px solid var(--border); font-size:0.8rem; font-family:'JetBrains Mono',monospace; word-break:break-all;">
+          <em style="color:var(--dim);">Loading active scope...</em>
+        </div>
+        <label class="field-label" for="agorg-use-id">Manual Switch (UUID or Name)</label>
+        <div class="row">
+          <input id="agorg-use-id" placeholder="UUID or name" />
+          <button class="btn secondary" onclick="agorgUse()">Switch</button>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn secondary" onclick="agorgUpdate()">Update</button>
+          <button class="btn secondary" style="color:var(--rose); border-color:rgba(255,46,46,0.3);" onclick="agorgDelete()">Delete</button>
         </div>
 
-        <div style="flex:1;">
-          <div class="card" style="height:100%; display:flex; flex-direction:column;">
-            <h3>Registry</h3>
-            <div class="helper" style="margin-bottom:8px;">Click to switch scope instantly.</div>
-            <div id="agorg-registry-list" class="agorg-registry-list" style="flex:1; overflow-y:auto; background:#0f111a; border:1px solid #202b38; border-radius:4px;">
-              <div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">Loading registry...</div>
-            </div>
+        <div class="section-box" style="margin-top:12px;">
+          <h4>Profile Preferences</h4>
+          <label class="field-label" for="agorg-profile-name">Profile Name</label>
+          <input id="agorg-profile-name" placeholder="primary" />
+          <label class="field-label" for="agorg-pref-default-branch">Default Branch</label>
+          <input id="agorg-pref-default-branch" placeholder="dev" />
+          <label class="field-label" for="agorg-pref-release-branch">Release Branch</label>
+          <input id="agorg-pref-release-branch" placeholder="main" />
+          <label class="check-label" style="margin-top:4px;">
+            <input id="agorg-pref-auto-prune" type="checkbox" />
+            Auto-prune stale AGO rows by default
+          </label>
+          <div class="row" style="margin-top:6px;">
+            <button class="btn secondary" onclick="agorgLoadPreferences()">Load Prefs</button>
+            <button class="btn secondary" onclick="agorgSavePreferences()">Save Prefs</button>
           </div>
         </div>
       </div>
 
-      <div class="panel-left">
+      <div class="card" style="display:flex; flex-direction:column;">
+        <h3>Registry</h3>
+        <div class="helper">Click to switch scope instantly.</div>
+        <div id="agorg-registry-list" class="agorg-registry-list" style="flex:1; overflow-y:auto; background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:8px; min-height:200px;">
+          <div style="padding:14px; color:var(--dim); font-size:0.78rem; font-family:'JetBrains Mono',monospace;">Loading registry...</div>
+        </div>
+      </div>
+    </div>
 
-        <div class="card" style="margin-top: 16px;">
-          <div class="sub-tabs">
-            <button class="sub-tab active" onclick="activateSubPanel('agorg-import-panel', this)">Import Existing</button>
-            <button class="sub-tab" onclick="activateSubPanel('agorg-create-panel', this)">Create New</button>
-          </div>
+    <!-- Row 2: Import / Create New (full width) -->
+    <div class="card" style="margin-top:24px;">
+      <div class="sub-tabs">
+        <button class="sub-tab active" onclick="activateSubPanel('agorg-import-panel', this)">Import Existing</button>
+        <button class="sub-tab" onclick="activateSubPanel('agorg-create-panel', this)">Create New</button>
+      </div>
 
-          <!-- Sub-Panel: Import -->
-          <div id="agorg-import-panel" class="sub-panel active">
-            <h3>Import</h3>
-            <div class="helper">Onboard an existing Master Directory. All repositories must exist as siblings within this space.</div>
-            <label class="field-label" for="agorg-master">Master Directory</label>
+      <!-- Sub-Panel: Import -->
+      <div id="agorg-import-panel" class="sub-panel active">
+        <h3>Import Existing</h3>
+        <div class="helper">Onboard an existing Master Directory. All repositories must exist as siblings within this space.</div>
+
+        <div class="grid" style="margin-top:16px; grid-template-columns: 1fr;">
+          <!-- Section 1: Target Definition -->
+          <div class="section-box">
+            <h4>Target Definition</h4>
+            <label class="field-label" for="agorg-name">Name</label>
+            <input id="agorg-name" placeholder="Arqon" value="Arqon" />
+            <label class="field-label" for="agorg-master">Directory</label>
             <div class="row">
               <input id="agorg-master" placeholder="/path/to/parent/dir" value="/home/irbsurfer/Projects/arqon" />
               <button class="btn secondary" onclick="browseAgorgMaster()">Browse…</button>
             </div>
-            <label class="field-label" for="agorg-name">Name</label>
-            <input id="agorg-name" placeholder="Arqon" value="Arqon" />
-            <label class="field-label" for="agorg-root">Parent Root Path (Active)</label>
+          </div>
+        </div>
+
+        <!-- Section: Discovery Review -->
+        <div class="section-box" style="margin-top:16px;">
+          <h4>Discovery Review (Approve / Reject)</h4>
+          <div class="row" style="justify-content: space-between;">
             <div class="row">
-              <input id="agorg-root" placeholder="/path/to/org/repo" value="/home/irbsurfer/Projects/arqon" />
-              <button class="btn secondary" onclick="browseAgorgRoot()">Browse…</button>
-            </div>
-            <label class="field-label" for="agorg-depth">Discovery Depth</label>
-            <input id="agorg-depth" placeholder="scan depth" value="4" />
-            <div class="row">
-              <label style="font-size:0.82rem;color:#a8b9e3;">
-                <input id="agorg-autoscan" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-                autoscan
-              </label>
-              <label style="font-size:0.82rem;color:#a8b9e3;">
-                <input id="agorg-import" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-                import discovery
-              </label>
-              <label style="font-size:0.82rem;color:#a8b9e3;">
-                <input id="agorg-prune" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-                prune stale AGO rows
-              </label>
-              <label style="font-size:0.82rem;color:#a8b9e3;">
-                <input id="agorg-default" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-                set default scope
-              </label>
-            </div>
+              <button class="btn" onclick="agorgDiscoverPreview()">Discover</button>
+              <button class="btn secondary" onclick="agorgSelectAllReview(true)">Select All</button>
+              <button class="btn secondary" onclick="agorgSelectAllReview(false)">Deselect All</button>
+              <button class="btn secondary" onclick="agorgLoadReviews()">Load Review</button>
             </div>
             <div class="row">
-              <select id="agorg-reconcile-class">
-                <option value="">all classes</option>
-                <option value="topology">topology (auto-fix)</option>
-                <option value="policy_dependency">policy_dependency (manual)</option>
-                <option value="policy_branch">policy_branch (manual)</option>
-                <option value="metadata">metadata (manual)</option>
-              </select>
-              <button class="btn secondary" onclick="agorgDiscoverPreview()">Discover Preview</button>
-              <button class="btn secondary" onclick="agorgImportApproved()">Import Approved</button>
-              <button class="btn secondary" onclick="agorgReconcile()">Policy Report</button>
-              <button class="btn secondary" onclick="agorgReconcileDryRun()">Reconcile Dry Run</button>
-              <button class="btn secondary" onclick="agorgReconcileApply()">Reconcile Apply</button>
-              <button class="btn" onclick="agorgCreateProject()">Import</button>
-            </div>
-            <div class="row">
-              <button class="btn secondary" onclick="agorgLoadPolicyReports()">Refresh Policy Artifacts</button>
-              <select id="agorg-policy-report-select"></select>
-              <button class="btn secondary" onclick="agorgOpenPolicyReport()">Open</button>
-            </div>
-            <div class="helper" style="margin-top:8px;">`Discover Preview` lets you approve/reject before import. `Import` is one-shot create + autoscan + import.</div>
-            <div class="pre-wrap">
-              <div class="pre-actions">
-                <button class="action-btn" onclick="copyToClipboard('agorg-duplicate-preview-out', this)">COPY</button>
-                <button class="action-btn" onclick="clearElement('agorg-duplicate-preview-out')">CLEAR</button>
-              </div>
-              <pre id="agorg-duplicate-preview-out">No duplicate merge candidates yet.</pre>
-            </div>
-            <div class="row">
-              <select id="agorg-dup-kind-filter">
-                <option value="all">All Duplicate Kinds</option>
-                <option value="canonical_path">canonical_path</option>
-                <option value="name">name</option>
-              </select>
-              <button class="btn secondary" onclick="agorgApplyDuplicateFilter()">Apply Filter</button>
-              <button class="btn secondary" onclick="agorgPrevDuplicate()">Prev</button>
-              <button class="btn secondary" onclick="agorgNextDuplicate()">Next</button>
-            </div>
-            <div class="pre-wrap">
-              <div class="pre-actions">
-                <button class="action-btn" onclick="copyToClipboard('agorg-filtered-duplicates-out', this)">COPY</button>
-                <button class="action-btn" onclick="clearElement('agorg-filtered-duplicates-out')">CLEAR</button>
-              </div>
-              <pre id="agorg-filtered-duplicates-out">No duplicate candidates for current filter.</pre>
-            </div>
-            <div class="pre-wrap">
-              <div class="pre-actions">
-                <button class="action-btn" onclick="copyToClipboard('agorg-duplicate-detail-out', this)">COPY</button>
-                <button class="action-btn" onclick="clearElement('agorg-duplicate-detail-out')">CLEAR</button>
-              </div>
-              <pre id="agorg-duplicate-detail-out">No duplicate candidate selected.</pre>
-            </div>
-            <div class="pre-wrap">
-              <div class="pre-actions">
-                <button class="action-btn" onclick="copyToClipboard('agorg-class-counts-out', this)">COPY</button>
-                <button class="action-btn" onclick="clearElement('agorg-class-counts-out')">CLEAR</button>
-              </div>
-              <pre id="agorg-class-counts-out">No issue class counts yet.</pre>
-            </div>
-            <div class="pre-wrap">
-              <div class="pre-actions">
-                <button class="action-btn" onclick="copyToClipboard('agorg-parity-out', this)">COPY</button>
-                <button class="action-btn" onclick="clearElement('agorg-parity-out')">CLEAR</button>
-              </div>
-              <pre id="agorg-parity-out">No report/dry-run/apply parity summary yet.</pre>
-            </div>
-            <div class="row">
-              <select id="agorg-issue-class-filter">
-                <option value="all">All Classes</option>
-                <option value="policy_branch">policy_branch</option>
-                <option value="policy_dependency">policy_dependency</option>
-                <option value="metadata">metadata</option>
-                <option value="topology">topology</option>
-              </select>
-              <button class="btn secondary" onclick="agorgApplyIssueClassFilter()">Apply Filter</button>
-              <button class="btn secondary" onclick="agorgPrevIssue()">Prev</button>
-              <button class="btn secondary" onclick="agorgNextIssue()">Next</button>
-            </div>
-            <div class="pre-wrap">
-              <div class="pre-actions">
-                <button class="action-btn" onclick="copyToClipboard('agorg-filtered-issues-out', this)">COPY</button>
-                <button class="action-btn" onclick="clearElement('agorg-filtered-issues-out')">CLEAR</button>
-              </div>
-              <pre id="agorg-filtered-issues-out">No filtered issues yet.</pre>
-            </div>
-            <div class="pre-wrap">
-              <div class="pre-actions">
-                <button class="action-btn" onclick="copyToClipboard('agorg-issue-detail-out', this)">COPY</button>
-                <button class="action-btn" onclick="clearElement('agorg-issue-detail-out')">CLEAR</button>
-              </div>
-              <pre id="agorg-issue-detail-out">No issue selected.</pre>
+               <div class="btn-glow-wrap" style="margin-left:auto;">
+                 <button class="btn btn-jumbo" onclick="agorgImportApproved()">Import Approved</button>
+               </div>
             </div>
           </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="field-label" for="agorg-review-select">Saved Review Sessions</label>
+            <select id="agorg-review-select" style="max-width: 300px; display: inline-block;"></select>
+            <button class="btn secondary" onclick="agorgLoadSelectedReview()">Load</button>
+          </div>
+          <div class="helper" style="margin-bottom:8px;">Only approved AGO candidates are imported by `Import Approved`.</div>
+          <div id="agorg-discovery-review" class="timeline" style="max-height: 320px; overflow-y: auto; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(0,0,0,0.2);">
+            <div class="tl-empty">Run Discover Preview to populate candidates.</div>
+          </div>
+        </div>
 
-          <!-- Sub-Panel: Create -->
-          <div id="agorg-create-panel" class="sub-panel">
-            <h3>Initialize New AGOrg</h3>
-            <div class="helper">Create a new Master Directory and optionally instantiate several AGOs at once.</div>
-            <label class="field-label" for="agorg-create-dest">Destination Parent Folder</label>
+        <!-- Section 3: Governance & Policy -->
+        <div class="section-box" style="margin-top:16px;">
+          <h4>Governance & Policy</h4>
+          <div class="row">
+            <select id="agorg-reconcile-class">
+              <option value="">all classes</option>
+              <option value="topology">topology (auto-fix)</option>
+              <option value="policy_dependency">policy_dependency (manual)</option>
+              <option value="policy_branch">policy_branch (manual)</option>
+              <option value="metadata">metadata (manual)</option>
+            </select>
+            <button class="btn secondary" onclick="agorgReconcile()">Policy Report</button>
+            <button class="btn secondary" onclick="agorgReconcileDryRun()">Reconcile Dry Run</button>
+            <button class="btn secondary" onclick="agorgReconcileApply()">Reconcile Apply</button>
+          </div>
+          <div class="row">
+            <button class="btn secondary" onclick="agorgLoadPolicyReports()">Refresh Policy Artifacts</button>
+            <select id="agorg-policy-report-select"></select>
+            <button class="btn secondary" onclick="agorgOpenPolicyReport()">Open</button>
+          </div>
+        </div>
+
+        <!-- Duplicate / Issue inspection (advanced) -->
+        <div class="grid" style="margin-top:16px;">
+          <div class="pre-wrap">
+            <div class="pre-actions">
+              <button class="action-btn" onclick="copyToClipboard('agorg-duplicate-preview-out', this)">COPY</button>
+              <button class="action-btn" onclick="clearElement('agorg-duplicate-preview-out')">CLEAR</button>
+            </div>
+            <pre id="agorg-duplicate-preview-out">No duplicate merge candidates yet.</pre>
+          </div>
+          <div class="pre-wrap">
+            <div class="pre-actions">
+              <button class="action-btn" onclick="copyToClipboard('agorg-class-counts-out', this)">COPY</button>
+              <button class="action-btn" onclick="clearElement('agorg-class-counts-out')">CLEAR</button>
+            </div>
+            <pre id="agorg-class-counts-out">No issue class counts yet.</pre>
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <select id="agorg-dup-kind-filter">
+            <option value="all">All Duplicate Kinds</option>
+            <option value="canonical_path">canonical_path</option>
+            <option value="name">name</option>
+          </select>
+          <button class="btn secondary" onclick="agorgApplyDuplicateFilter()">Apply Filter</button>
+          <button class="btn secondary" onclick="agorgPrevDuplicate()">Prev</button>
+          <button class="btn secondary" onclick="agorgNextDuplicate()">Next</button>
+        </div>
+        <div class="grid" style="margin-top:12px;">
+          <div class="pre-wrap">
+            <div class="pre-actions">
+              <button class="action-btn" onclick="copyToClipboard('agorg-filtered-duplicates-out', this)">COPY</button>
+              <button class="action-btn" onclick="clearElement('agorg-filtered-duplicates-out')">CLEAR</button>
+            </div>
+            <pre id="agorg-filtered-duplicates-out">No duplicate candidates for current filter.</pre>
+          </div>
+          <div class="pre-wrap">
+            <div class="pre-actions">
+              <button class="action-btn" onclick="copyToClipboard('agorg-duplicate-detail-out', this)">COPY</button>
+              <button class="action-btn" onclick="clearElement('agorg-duplicate-detail-out')">CLEAR</button>
+            </div>
+            <pre id="agorg-duplicate-detail-out">No duplicate candidate selected.</pre>
+          </div>
+        </div>
+        <div class="pre-wrap" style="margin-top:12px;">
+          <div class="pre-actions">
+            <button class="action-btn" onclick="copyToClipboard('agorg-parity-out', this)">COPY</button>
+            <button class="action-btn" onclick="clearElement('agorg-parity-out')">CLEAR</button>
+          </div>
+          <pre id="agorg-parity-out">No report/dry-run/apply parity summary yet.</pre>
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <select id="agorg-issue-class-filter">
+            <option value="all">All Classes</option>
+            <option value="policy_branch">policy_branch</option>
+            <option value="policy_dependency">policy_dependency</option>
+            <option value="metadata">metadata</option>
+            <option value="topology">topology</option>
+          </select>
+          <button class="btn secondary" onclick="agorgApplyIssueClassFilter()">Apply Filter</button>
+          <button class="btn secondary" onclick="agorgPrevIssue()">Prev</button>
+          <button class="btn secondary" onclick="agorgNextIssue()">Next</button>
+        </div>
+        <div class="grid" style="margin-top:12px;">
+          <div class="pre-wrap">
+            <div class="pre-actions">
+              <button class="action-btn" onclick="copyToClipboard('agorg-filtered-issues-out', this)">COPY</button>
+              <button class="action-btn" onclick="clearElement('agorg-filtered-issues-out')">CLEAR</button>
+            </div>
+            <pre id="agorg-filtered-issues-out">No filtered issues yet.</pre>
+          </div>
+          <div class="pre-wrap">
+            <div class="pre-actions">
+              <button class="action-btn" onclick="copyToClipboard('agorg-issue-detail-out', this)">COPY</button>
+              <button class="action-btn" onclick="clearElement('agorg-issue-detail-out')">CLEAR</button>
+            </div>
+            <pre id="agorg-issue-detail-out">No issue selected.</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sub-Panel: Create -->
+      <div id="agorg-create-panel" class="sub-panel">
+        <h3>Initialize New</h3>
+        <div class="helper">Create a new Master Directory and optionally instantiate several AGOs at once.</div>
+        <div class="grid" style="margin-top:16px;">
+          <div class="section-box">
+            <h4>Destination</h4>
+            <label class="field-label" for="agorg-create-dest">Parent Folder</label>
             <div class="row">
               <input id="agorg-create-dest" placeholder="/home/irbsurfer/Projects/arqon" value="/home/irbsurfer/Projects/arqon" />
               <button class="btn secondary" onclick="browseAgorgCreateDest()">Browse…</button>
             </div>
             <label class="field-label" for="agorg-create-name">New Master Directory Name</label>
             <input id="agorg-create-name" placeholder="MyNewOrg" />
-            
-            <label class="field-label" for="agorg-create-siblings">Sibling AGOs to Create (one per line)</label>
+            <label class="check-label" style="margin-top:6px;">
+              <input id="agorg-create-git" type="checkbox" checked />
+              git init each
+            </label>
+          </div>
+          <div class="section-box">
+            <h4>Sibling AGOs</h4>
+            <label class="field-label" for="agorg-create-siblings">One per line</label>
             <textarea id="agorg-create-siblings" class="batch-list" placeholder="Core&#10;Pilot&#10;Sense"></textarea>
-            
-            <div class="row" style="margin-top:10px;">
-              <label style="font-size:0.82rem;color:#a8b9e3;">
-                <input id="agorg-create-git" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-                git init each
-              </label>
-            </div>
-            
-            <div class="row">
-              <button class="btn" onclick="agorgBatchCreate()">Batch Create & Register</button>
-            </div>
           </div>
         </div>
-      </div>
-
-      <!-- Panel 2: Interactive Hierarchy -->
-      <div class="panel-center">
-        <div class="card">
-          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <h3 style="margin:0">Master Hierarchy</h3>
-            <button class="btn secondary" onclick="agorgScanMaster()">Scan Master</button>
-          </div>
-          <div class="helper">Interactive view of all siblings in the Master Directory. Click to select; relationship edits are governed via explicit AGOrg editor actions.</div>
-          <div id="agorg-hierarchy-tree" class="timeline" style="max-height: 800px; padding: 10px; border: 1px solid #2d426c; border-radius: 10px; background: rgba(0,0,0,0.2);">
-            <div class="tl-empty">No hierarchy loaded. Click "Scan Master" or "Import".</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Panel 3: Results Display -->
-      <div class="panel-right">
-        <div class="card">
-          <h3>AGOrg Response</h3>
-          <div class="pre-wrap">
-            <div class="pre-actions">
-              <button class="action-btn" onclick="copyToClipboard('agorg-out', this)">COPY</button>
-              <button class="action-btn" onclick="clearElement('agorg-out')">CLEAR</button>
-            </div>
-            <pre id="agorg-out">ready</pre>
-          </div>
-        </div>
-        <div class="card">
-          <h3>Discovery Output</h3>
-          <div class="pre-wrap">
-            <div class="pre-actions">
-              <button class="action-btn" onclick="copyToClipboard('agorg-discovery-out', this)">COPY</button>
-              <button class="action-btn" onclick="clearElement('agorg-discovery-out')">CLEAR</button>
-            </div>
-            <pre id="agorg-discovery-out">[]</pre>
-          </div>
-        </div>
-        <div class="card">
-          <h3>Discovery Review (Approve / Reject)</h3>
-          <div class="row">
-            <button class="btn secondary" onclick="agorgSelectAllReview(true)">Approve All</button>
-            <button class="btn secondary" onclick="agorgSelectAllReview(false)">Reject All</button>
-            <button class="btn secondary" onclick="agorgLoadReviews()">Refresh Reviews</button>
-            <button class="btn secondary" onclick="agorgLoadSelectedReview()">Load Review</button>
-          </div>
-          <label class="field-label" for="agorg-review-select">Saved Review Sessions</label>
-          <select id="agorg-review-select"></select>
-          <div class="helper">Only approved AGO candidates are imported by `Import Approved`.</div>
-          <div id="agorg-discovery-review" class="timeline" style="max-height: 320px; overflow-y: auto; padding: 8px; border: 1px solid #2d426c; border-radius: 10px; background: rgba(0,0,0,0.2);">
-            <div class="tl-empty">Run Discover Preview to populate candidates.</div>
-          </div>
+        <div class="row" style="margin-top:16px;">
+          <button class="btn" onclick="agorgBatchCreate()">Batch Create & Register</button>
         </div>
       </div>
     </div>
+
+    <!-- Row 3: Master Hierarchy (full width) -->
+    <div class="card" style="margin-top:24px;">
+      <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <h3 style="margin:0; border:0; padding:0;">Master Hierarchy</h3>
+        <button class="btn secondary" onclick="agorgScanMaster()">Scan Master</button>
+      </div>
+      <div class="helper">Interactive view of all siblings in the Master Directory. Click to select.</div>
+      <div id="agorg-hierarchy-tree" class="timeline" style="max-height: 600px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: rgba(0,0,0,0.2);">
+        <div class="tl-empty">No hierarchy loaded. Click "Scan Master" or "Import".</div>
+      </div>
+    </div>
+
+    <!-- Row 4: Response + Discovery Output (50/50) -->
+    <div class="grid" style="margin-top:24px;">
+      <div class="card">
+        <h3>Response</h3>
+        <div class="pre-wrap">
+          <div class="pre-actions">
+            <button class="action-btn" onclick="copyToClipboard('agorg-out', this)">COPY</button>
+            <button class="action-btn" onclick="clearElement('agorg-out')">CLEAR</button>
+          </div>
+          <pre id="agorg-out">ready</pre>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Discovery Output</h3>
+        <div class="pre-wrap">
+          <div class="pre-actions">
+            <button class="action-btn" onclick="copyToClipboard('agorg-discovery-out', this)">COPY</button>
+            <button class="action-btn" onclick="clearElement('agorg-discovery-out')">CLEAR</button>
+          </div>
+          <pre id="agorg-discovery-out">[]</pre>
+        </div>
+      </div>
+    </div>
+
   </section>
 
   <section class="panel" id="telemetry">

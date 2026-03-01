@@ -471,6 +471,22 @@ impl AgorgStore {
         Ok(())
     }
 
+    pub async fn get_ago_by_path(&self, agorg_id: Uuid, path: &Path) -> Result<Option<AgoRecord>> {
+        self.initialize().await?;
+        let client = self.connect().await?;
+        let canonical = canonicalize_or_input(path);
+        let row = client
+            .query_opt(
+                "SELECT id, agorg_id, name, repo_path, relationship_parent, relationship_children
+                 FROM agos
+                 WHERE agorg_id = $1 AND repo_path = $2",
+                &[&agorg_id, &canonical],
+            )
+            .await
+            .into_diagnostic()?;
+        Ok(row.as_ref().map(row_to_ago))
+    }
+
     pub async fn upsert_ago(
         &self,
         agorg_id: Uuid,
@@ -873,9 +889,22 @@ impl AgorgStore {
         let mut keep_paths: Vec<String> = Vec::new();
 
         for c in &discovery.candidates {
-            if c.kind == "ago" {
+            if c.kind == "ago" || c.kind == "folder" {
                 let path = PathBuf::from(&c.path);
                 keep_paths.push(canonicalize_or_input(&path));
+                
+                // If it was just a plain folder, let's bootstrap an AGO marker
+                if c.kind == "folder" && path.exists() {
+                    let pyproject = path.join("pyproject.toml");
+                    if !pyproject.exists() {
+                        let content = format!(
+                            "[tool.arqon.relationships]\nparent = \"{}\"\nchildren = []\n",
+                            c.parent_hint.as_deref().unwrap_or("")
+                        );
+                        let _ = fs::write(pyproject, content);
+                    }
+                }
+
                 self.upsert_ago(
                     agorg_id,
                     &c.name,
@@ -1493,6 +1522,8 @@ fn walk_dirs(
                 let rel = parse_relationships(&path).ok().flatten();
                 repos.push((name.to_string(), path.clone(), rel));
             } else {
+                // If the folder is empty or has no project markers, we still want to discover it as a potential AGO candidate
+                repos.push((name.to_string(), path.clone(), None));
                 recurse(&path, max_depth, at_depth + 1, repos, allow_nested_repos)?;
             }
         }
