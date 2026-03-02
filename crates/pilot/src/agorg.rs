@@ -904,21 +904,14 @@ impl AgorgStore {
                 let path = PathBuf::from(&c.path);
                 keep_paths.push(canonicalize_or_input(&path));
                 
-                // Bootstrap pyproject.toml with parent hierarchy if missing
+                // Bootstrap pyproject.toml with parent hierarchy if missing or incomplete
                 if path.exists() {
-                    let pyproject = path.join("pyproject.toml");
-                    if !pyproject.exists() {
-                        let parent_name = c.parent_hint.as_deref().unwrap_or("");
-                        let content = format!(
-                            "[tool.arqon.relationships]\nparent = \"{}\"\nchildren = []\n",
-                            parent_name
-                        );
-                        if let Err(e) = fs::write(&pyproject, &content) {
-                            eprintln!("[agorg] Failed to write pyproject.toml at {:?}: {}", pyproject, e);
-                        } else {
-                            eprintln!("[agorg] Created pyproject.toml at {:?} with parent={}", pyproject, parent_name);
-                        }
-                    }
+                    let parent_name = c.parent_hint.as_deref();
+                    ensure_pyproject_relationships(
+                        &path,
+                        parent_name.or(Some("")), // AGO has parent = "AGOrgName" or ""
+                        &[], // AGOs have no children
+                    );
                     // Init git if needed
                     if !path.join(".git").exists() {
                         match std::process::Command::new("git")
@@ -1498,9 +1491,9 @@ pub fn discover_hierarchy(root: &Path, depth: usize) -> Result<DiscoverResult> {
 
 fn walk_dirs(
     root: &Path,
-    depth: usize,
+    _depth: usize,
     repos: &mut Vec<(String, PathBuf, Option<RepoRelationships>)>,
-    allow_nested_repos: bool,
+    _allow_nested_repos: bool,
 ) -> Result<()> {
     fn should_skip_dir(name: &str) -> bool {
         name.starts_with('.')
@@ -1510,53 +1503,83 @@ fn walk_dirs(
             || name == "archive"
     }
 
-    fn recurse(
-        current: &Path,
-        max_depth: usize,
-        at_depth: usize,
-        repos: &mut Vec<(String, PathBuf, Option<RepoRelationships>)>,
-        allow_nested_repos: bool,
-    ) -> Result<()> {
-        if at_depth > max_depth {
-            return Ok(());
-        }
-        let read = match fs::read_dir(current) {
+    // Flat: only read immediate children of root, no recursion
+    let read = match fs::read_dir(root) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    for entry in read {
+        let entry = match entry {
             Ok(v) => v,
-            Err(_) => return Ok(()),
+            Err(_) => continue,
         };
-        for entry in read {
-            let entry = match entry {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if should_skip_dir(name) {
-                continue;
-            }
-            let has_repo_marker =
-                path.join(".git").exists() || path.join("pyproject.toml").exists();
-            if has_repo_marker {
-                if at_depth > 1 && !allow_nested_repos {
-                    // Flat-fleet rule: ignore nested repositories by default.
-                    continue;
-                }
-                let rel = parse_relationships(&path).ok().flatten();
-                repos.push((name.to_string(), path.clone(), rel));
-            } else {
-                // If the folder is empty or has no project markers, we still want to discover it as a potential AGO candidate
-                repos.push((name.to_string(), path.clone(), None));
-                recurse(&path, max_depth, at_depth + 1, repos, allow_nested_repos)?;
-            }
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
         }
-        Ok(())
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if should_skip_dir(name) {
+            continue;
+        }
+        let rel = parse_relationships(&path).ok().flatten();
+        repos.push((name.to_string(), path.clone(), rel));
     }
-    recurse(root, depth, 1, repos, allow_nested_repos)
+    Ok(())
+}
+
+/// Ensure a pyproject.toml in `dir` has `[tool.arqon.relationships]`.
+/// - If the file doesn't exist, create it.
+/// - If the file exists but lacks the section, append it.
+/// - `parent`: None means `parent = []` (AGOrg), Some("name") means `parent = "name"` (AGO).
+/// - `children`: list of child AGO names (usually populated for AGOrg, empty for AGO).
+pub fn ensure_pyproject_relationships(
+    dir: &Path,
+    parent: Option<&str>,
+    children: &[String],
+) {
+    let pyproject = dir.join("pyproject.toml");
+    
+    let parent_val = match parent {
+        Some(name) => format!("\"{}\"", name),
+        None => "[]".to_string(),
+    };
+    let children_val = if children.is_empty() {
+        "[]".to_string()
+    } else {
+        let items: Vec<String> = children.iter().map(|c| format!("\"{}\"", c)).collect();
+        format!("[{}]", items.join(", "))
+    };
+    let section = format!(
+        "\n[tool.arqon.relationships]\nparent = {}\nchildren = {}\n",
+        parent_val, children_val
+    );
+
+    if !pyproject.exists() {
+        // Create new file
+        if let Err(e) = fs::write(&pyproject, &section) {
+            eprintln!("[agorg] Failed to create pyproject.toml at {:?}: {}", pyproject, e);
+        } else {
+            eprintln!("[agorg] Created pyproject.toml at {:?}", pyproject);
+        }
+    } else {
+        // Check if [tool.arqon.relationships] already exists
+        match fs::read_to_string(&pyproject) {
+            Ok(content) => {
+                if !content.contains("[tool.arqon.relationships]") {
+                    // Append the section
+                    let new_content = format!("{}\n{}", content.trim_end(), section);
+                    if let Err(e) = fs::write(&pyproject, new_content) {
+                        eprintln!("[agorg] Failed to append relationships to {:?}: {}", pyproject, e);
+                    } else {
+                        eprintln!("[agorg] Appended [tool.arqon.relationships] to {:?}", pyproject);
+                    }
+                }
+            }
+            Err(e) => eprintln!("[agorg] Failed to read {:?}: {}", pyproject, e),
+        }
+    }
 }
 
 pub fn parse_relationships(repo_dir: &Path) -> Result<Option<RepoRelationships>> {

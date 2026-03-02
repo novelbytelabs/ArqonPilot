@@ -48,8 +48,6 @@ struct UiState {
     allowed_commands: Option<HashSet<String>>,
     codex_contracts: Arc<Mutex<HashMap<String, CodexContractRecord>>>,
     codex_contracts_log: PathBuf,
-    agorg_reviews: Arc<Mutex<HashMap<String, AgorgReviewRecord>>>,
-    agorg_reviews_log: PathBuf,
     agorg_store: AgorgStore,
 }
 
@@ -157,24 +155,13 @@ struct AgorgImportSelectedRequest {
     depth: Option<usize>,
     candidates: Vec<agorg::DiscoverCandidate>,
     prune_missing: Option<bool>,
-    review_id: Option<String>,
     default_scope_path: Option<String>,
+    agorg_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct AgorgReconcileRequest {
     agorg: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgorgReviewsQuery {
-    limit: Option<usize>,
-    agorg: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgorgReviewQuery {
-    review_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -306,28 +293,11 @@ struct CodexContractRecord {
     updated_at_unix: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AgorgReviewRecord {
-    review_id: String,
-    status: String,
-    agorg_id: Option<String>,
-    root: String,
-    depth: usize,
-    prune_missing: bool,
-    candidates: Vec<agorg::DiscoverCandidate>,
-    approved_paths: Vec<String>,
-    imported_summary: Option<agorg::ImportDiscoverySummary>,
-    created_at_unix: u64,
-    updated_at_unix: u64,
-}
-
 pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
     let (event_tx, _) = broadcast::channel(512);
     spawn_bus_telemetry_listener(cfg.bus.clone(), event_tx.clone());
     let codex_contracts_log = codex_contracts_log_path();
     let contract_seed = load_persisted_codex_contracts(&codex_contracts_log).unwrap_or_default();
-    let agorg_reviews_log = agorg_reviews_log_path();
-    let agorg_review_seed = load_persisted_agorg_reviews(&agorg_reviews_log).unwrap_or_default();
     let agorg_store = AgorgStore::from_instance(cfg.instance_id.clone());
     if let Err(e) = agorg_store.initialize().await {
         eprintln!(
@@ -343,8 +313,6 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         allowed_commands: cfg.allowed_commands,
         codex_contracts: Arc::new(Mutex::new(contract_seed)),
         codex_contracts_log,
-        agorg_reviews: Arc::new(Mutex::new(agorg_review_seed)),
-        agorg_reviews_log,
         agorg_store,
     });
 
@@ -381,8 +349,6 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
             "/api/agorg/import_selected",
             post(api_agorg_import_selected),
         )
-        .route("/api/agorg/reviews", get(get_agorg_reviews))
-        .route("/api/agorg/review", get(get_agorg_review))
         .route("/api/agorg/policy_reports", get(get_agorg_policy_reports))
         .route("/api/agorg/policy_report", post(api_agorg_policy_report))
         .route(
@@ -631,44 +597,6 @@ async fn get_codex_contract(
         return error_response(StatusCode::NOT_FOUND, "contract_id not found");
     };
     Json(json!({"ok": true, "contract": contract})).into_response()
-}
-
-async fn get_agorg_reviews(
-    State(state): State<Arc<UiState>>,
-    Query(q): Query<AgorgReviewsQuery>,
-) -> Response {
-    let limit = q.limit.unwrap_or(50).clamp(1, 500);
-    let agorg_filter = q.agorg.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let reviews = state.agorg_reviews.lock().await;
-    let mut items: Vec<AgorgReviewRecord> = reviews
-        .values()
-        .filter(|r| {
-            if let Some(target) = agorg_filter {
-                r.agorg_id.as_deref() == Some(target)
-            } else {
-                true
-            }
-        })
-        .cloned()
-        .collect();
-    items.sort_by(|a, b| b.updated_at_unix.cmp(&a.updated_at_unix));
-    items.truncate(limit);
-    Json(json!({"ok": true, "reviews": items})).into_response()
-}
-
-async fn get_agorg_review(
-    State(state): State<Arc<UiState>>,
-    Query(q): Query<AgorgReviewQuery>,
-) -> Response {
-    let id = q.review_id.trim();
-    if id.is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "review_id is required");
-    }
-    let reviews = state.agorg_reviews.lock().await;
-    let Some(review) = reviews.get(id) else {
-        return error_response(StatusCode::NOT_FOUND, "review_id not found");
-    };
-    Json(json!({"ok": true, "review": review})).into_response()
 }
 
 async fn get_agorg_policy_reports(Query(q): Query<AgorgPolicyReportsQuery>) -> Response {
@@ -952,36 +880,11 @@ async fn api_agorg_discover(
         Ok(v) => v,
         Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
     };
-    let review_id = new_agorg_review_id();
-    let mut review_record = AgorgReviewRecord {
-        review_id: review_id.clone(),
-        status: if req.import_to.is_some() {
-            "imported".to_string()
-        } else {
-            "previewed".to_string()
-        },
-        agorg_id: None,
-        root: scan.root.clone(),
-        depth: scan.depth,
-        prune_missing: req.prune_missing.unwrap_or(false),
-        candidates: scan.candidates.clone(),
-        approved_paths: scan
-            .candidates
-            .iter()
-            .filter(|c| c.kind == "ago")
-            .map(|c| c.path.clone())
-            .collect(),
-        imported_summary: None,
-        created_at_unix: now_unix(),
-        updated_at_unix: now_unix(),
-    };
-
     if let Some(target) = req.import_to.as_deref() {
         let id = match resolve_agorg_ref(&state.agorg_store, target.trim()).await {
             Ok(v) => v,
             Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
         };
-        review_record.agorg_id = Some(id.to_string());
         let prune_missing = req.prune_missing.unwrap_or(false);
         match state
             .agorg_store
@@ -989,37 +892,17 @@ async fn api_agorg_discover(
             .await
         {
             Ok(summary) => {
-                review_record.imported_summary = Some(summary.clone());
-                if let Err(err) =
-                    upsert_agorg_review(&state, review_record.clone(), Some("imported")).await
-                {
-                    let _ = state.events.send(json!({
-                        "source": "agorg_review",
-                        "phase": "persist_warning",
-                        "review_id": review_record.review_id,
-                        "error": err.to_string()
-                    }));
-                }
                 return Json(json!({
                     "ok": true,
                     "discovery": scan,
-                    "import_summary": summary,
-                    "review": review_record
+                    "import_summary": summary
                 }))
                 .into_response();
             }
             Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
         };
     }
-    if let Err(err) = upsert_agorg_review(&state, review_record.clone(), Some("previewed")).await {
-        let _ = state.events.send(json!({
-            "source": "agorg_review",
-            "phase": "persist_warning",
-            "review_id": review_record.review_id,
-            "error": err.to_string()
-        }));
-    }
-    Json(json!({"ok": true, "discovery": scan, "review": review_record})).into_response()
+    Json(json!({"ok": true, "discovery": scan})).into_response()
 }
 
 async fn api_agorg_import_selected(
@@ -1042,33 +925,6 @@ async fn api_agorg_import_selected(
         .await
     {
         Ok(summary) => {
-            let approved_paths: Vec<String> = discovery
-                .candidates
-                .iter()
-                .filter(|c| c.kind == "ago" || c.kind == "folder")
-                .map(|c| c.path.clone())
-                .collect();
-            let review_record = AgorgReviewRecord {
-                review_id: req.review_id.clone().unwrap_or_else(new_agorg_review_id),
-                status: "imported".to_string(),
-                agorg_id: Some(id.to_string()),
-                root: discovery.root.clone(),
-                depth: discovery.depth,
-                prune_missing,
-                candidates: discovery.candidates.clone(),
-                approved_paths,
-                imported_summary: Some(summary.clone()),
-                created_at_unix: now_unix(),
-                updated_at_unix: now_unix(),
-            };
-            if let Err(err) = upsert_agorg_review(&state, review_record.clone(), None).await {
-                let _ = state.events.send(json!({
-                    "source": "agorg_review",
-                    "phase": "persist_warning",
-                    "review_id": review_record.review_id,
-                    "error": err.to_string()
-                }));
-            }
             if let Some(scope_path) = req.default_scope_path {
                 let path_obj = std::path::Path::new(&scope_path);
                 if let Ok(Some(ago)) = state.agorg_store.get_ago_by_path(id, path_obj).await {
@@ -1079,7 +935,27 @@ async fn api_agorg_import_selected(
             } else if discovery.candidates.is_empty() {
                 let _ = state.agorg_store.set_active_agorg(id).await;
             }
-            Json(json!({"ok": true, "agorg_id": id, "import_summary": summary, "review": review_record}))
+            // Create / update AGOrg pyproject.toml with children list
+            if let Some(ref _agorg_name) = req.agorg_name {
+                if let Ok(agorgs) = state.agorg_store.list_agorgs().await {
+                    if let Some(agorg_rec) = agorgs.iter().find(|a| a.id == id) {
+                        let agorg_dir = std::path::Path::new(&agorg_rec.root_path);
+                        let children_names: Vec<String> = discovery
+                            .candidates
+                            .iter()
+                            .filter(|c| c.kind == "ago" || c.kind == "folder")
+                            .map(|c| c.name.clone())
+                            .collect();
+                        agorg::ensure_pyproject_relationships(
+                            agorg_dir,
+                            None, // parent = [] for AGOrg
+                            &children_names,
+                        );
+                    }
+                }
+            }
+
+            Json(json!({"ok": true, "agorg_id": id, "import_summary": summary}))
                 .into_response()
         }
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
@@ -2574,20 +2450,8 @@ fn new_codex_contract_id() -> String {
     format!("codex-{}", nanos)
 }
 
-fn new_agorg_review_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("agorg-review-{}", nanos)
-}
-
 fn codex_contracts_log_path() -> PathBuf {
     reports_root().join("codex_contracts.jsonl")
-}
-
-fn agorg_reviews_log_path() -> PathBuf {
-    reports_root().join("agorg_reviews.jsonl")
 }
 
 fn append_codex_contract_record(
@@ -2635,100 +2499,6 @@ fn load_persisted_codex_contracts(
     Ok(contracts)
 }
 
-fn append_agorg_review_record(path: &PathBuf, record: &AgorgReviewRecord) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    let line = serde_json::to_string(record)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-    writeln!(file, "{}", line)?;
-    Ok(())
-}
-
-fn load_persisted_agorg_reviews(
-    path: &PathBuf,
-) -> std::io::Result<HashMap<String, AgorgReviewRecord>> {
-    if !path.exists() {
-        return Ok(HashMap::new());
-    }
-    let file = OpenOptions::new().read(true).open(path)?;
-    let reader = BufReader::new(file);
-    let mut reviews = HashMap::new();
-    for line in reader.lines() {
-        let line = line?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let parsed: serde_json::Result<AgorgReviewRecord> = serde_json::from_str(trimmed);
-        if let Ok(record) = parsed {
-            let replace = reviews
-                .get(&record.review_id)
-                .map(|current: &AgorgReviewRecord| {
-                    current.updated_at_unix <= record.updated_at_unix
-                })
-                .unwrap_or(true);
-            if replace {
-                reviews.insert(record.review_id.clone(), record);
-            }
-        }
-    }
-    let mut vec_reviews: Vec<_> = reviews.into_values().collect();
-    vec_reviews.sort_by_key(|r| std::cmp::Reverse(r.updated_at_unix));
-    vec_reviews.truncate(10);
-    let mut top_10: HashMap<String, AgorgReviewRecord> = HashMap::new();
-    for r in vec_reviews {
-        top_10.insert(r.review_id.clone(), r);
-    }
-    Ok(top_10)
-}
-
-async fn upsert_agorg_review(
-    state: &Arc<UiState>,
-    mut record: AgorgReviewRecord,
-    set_status: Option<&str>,
-) -> std::io::Result<()> {
-    let mut reviews = state.agorg_reviews.lock().await;
-    if let Some(existing) = reviews.get(&record.review_id).cloned() {
-        record.created_at_unix = existing.created_at_unix;
-    }
-    if let Some(status) = set_status {
-        record.status = status.to_string();
-    }
-    record.updated_at_unix = now_unix();
-    reviews.insert(record.review_id.clone(), record.clone());
-    
-    // Trim strictly to 10
-    if reviews.len() > 10 {
-        let mut vec_reviews: Vec<_> = reviews.clone().into_values().collect();
-        vec_reviews.sort_by_key(|r| std::cmp::Reverse(r.updated_at_unix));
-        vec_reviews.truncate(10);
-        reviews.clear();
-        for r in vec_reviews {
-            reviews.insert(r.review_id.clone(), r);
-        }
-        
-        // rewrite the log file cleanly
-        let path = &state.agorg_reviews_log;
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(path) {
-            for (_, r) in reviews.iter() {
-                if let Ok(line) = serde_json::to_string(r) {
-                    use std::io::Write;
-                    let _ = writeln!(file, "{}", line);
-                }
-            }
-        }
-    } else {
-        let _ = append_agorg_review_record(&state.agorg_reviews_log, &record);
-    }
-    
-    Ok(())
-}
-
 fn is_safe_cli_token(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
@@ -2740,12 +2510,11 @@ mod tests {
     use super::{
         agorg_conformance_score, agorg_policy_report_response,
         agorg_reconcile_apply_dry_run_response, agorg_reconcile_apply_success_response,
-        append_agorg_review_record, append_codex_contract_record, command_requires_cwd_scope,
+        append_codex_contract_record, command_requires_cwd_scope,
         command_requires_multi_selector, command_requires_mutation, command_scope_required,
         dependency_action_requires_cwd_scope, dependency_action_scope_required,
-        filter_prune_paths_by_class, is_safe_cli_token, load_persisted_agorg_reviews,
         load_persisted_codex_contracts, parse_json_from_mixed_output, payload_has_multi_selector,
-        with_event_agorg_scope, AgorgReviewRecord, CodexContractRecord,
+        with_event_agorg_scope, CodexContractRecord,
     };
     use crate::agorg::{AgorgReconcileIssue, AgorgReconcileReport};
     use serde_json::{json, Value};
@@ -2880,44 +2649,6 @@ mod tests {
             load_persisted_codex_contracts(&path).unwrap();
         let got = loaded.get("codex-1").unwrap();
         assert_eq!(got.status, "executed");
-        assert_eq!(got.updated_at_unix, 3);
-
-        let _ = fs::remove_dir_all(base);
-    }
-
-    #[test]
-    fn test_agorg_review_persistence_roundtrip() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let base = std::env::temp_dir().join(format!("pilot_agorg_review_test_{}", nanos));
-        fs::create_dir_all(&base).unwrap();
-        let path = base.join("agorg_reviews.jsonl");
-
-        let r1 = AgorgReviewRecord {
-            review_id: "agorg-review-1".to_string(),
-            status: "previewed".to_string(),
-            agorg_id: Some("ag-1".to_string()),
-            root: "/tmp/root".to_string(),
-            depth: 4,
-            prune_missing: true,
-            candidates: vec![],
-            approved_paths: vec!["/tmp/root/repo-a".to_string()],
-            imported_summary: None,
-            created_at_unix: 1,
-            updated_at_unix: 1,
-        };
-        let mut r2 = r1.clone();
-        r2.status = "imported".to_string();
-        r2.updated_at_unix = 3;
-
-        append_agorg_review_record(&path, &r1).unwrap();
-        append_agorg_review_record(&path, &r2).unwrap();
-
-        let loaded = load_persisted_agorg_reviews(&path).unwrap();
-        let got = loaded.get("agorg-review-1").unwrap();
-        assert_eq!(got.status, "imported");
         assert_eq!(got.updated_at_unix, 3);
 
         let _ = fs::remove_dir_all(base);
@@ -5161,13 +4892,13 @@ Recommended flow:
     <!-- Row 2: Import / Create New (full width) -->
     <div class="card" style="margin-top:24px;">
       <div class="sub-tabs">
-        <button class="sub-tab active" onclick="activateSubPanel('agorg-import-panel', this)">Import Existing</button>
-        <button class="sub-tab" onclick="activateSubPanel('agorg-create-panel', this)">Create New</button>
+        <button class="sub-tab active" onclick="activateSubPanel('agorg-import-panel', this)">IMPORT EXISTING</button>
+        <button class="sub-tab" onclick="activateSubPanel('agorg-create-panel', this)">CREATE NEW</button>
       </div>
 
       <!-- Sub-Panel: Import -->
       <div id="agorg-import-panel" class="sub-panel active">
-        <h3>Import Existing</h3>
+        <h3 style="border-bottom: 2px solid var(--accent); padding-bottom: 8px; margin-bottom: 16px;">IMPORT EXISTING</h3>
         <div class="helper">Onboard an existing Master Directory. All repositories must exist as siblings within this space.</div>
 
         <div class="grid" style="margin-top:16px; grid-template-columns: 1fr;">
@@ -5176,7 +4907,7 @@ Recommended flow:
             <h4>1) TARGET</h4>
             <label class="field-label" for="agorg-master">Directory</label>
             <div class="row">
-              <input id="agorg-master" placeholder="/path/to/parent/dir" value="" />
+              <input id="agorg-master" placeholder="/path/to/parent/dir" value="" onchange="agorgDiscoverPreview()" />
               <button class="btn secondary" onclick="browseAgorgMaster()">Browse…</button>
             </div>
           </div>
@@ -5187,7 +4918,6 @@ Recommended flow:
           <h4>2) DISCOVERY REVIEW</h4>
           <div class="row" style="justify-content: space-between;">
             <div class="row">
-              <button class="btn" onclick="agorgDiscoverPreview()">Discover</button>
               <button class="btn secondary" onclick="agorgSelectAllReview(true)">Select All</button>
               <button class="btn secondary" onclick="agorgSelectAllReview(false)">Deselect All</button>
             </div>
@@ -5197,12 +4927,6 @@ Recommended flow:
                </div>
             </div>
           </div>
-          <div class="row" style="margin-top:8px; display:none;">
-            <label class="field-label" for="agorg-review-select">Saved Review Sessions</label>
-            <select id="agorg-review-select" style="max-width: 300px; display: inline-block;"></select>
-            <button class="btn secondary" onclick="agorgLoadSelectedReview()">Load</button>
-          </div>
-          <div class="helper" style="margin-bottom:8px;">Only approved AGO candidates are imported by `Import Approved`.</div>
           <div id="agorg-discovery-review" class="timeline" style="max-height: 320px; overflow-y: auto; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(0,0,0,0.2);">
             <div class="tl-empty">Run Discover Preview to populate candidates.</div>
           </div>
@@ -5220,7 +4944,6 @@ Recommended flow:
               <option value="metadata">metadata (manual)</option>
             </select>
             <button class="btn secondary" onclick="agorgReconcile()">Policy Report</button>
-            <button class="btn secondary" onclick="agorgReconcileDryRun()">Reconcile Dry Run</button>
             <button class="btn secondary" onclick="agorgReconcileApply()">Reconcile Apply</button>
           </div>
           <div class="row">
@@ -5233,89 +4956,12 @@ Recommended flow:
           </div>
         </div>
 
-        <!-- Duplicate / Issue inspection (advanced) -->
-        <div class="grid" style="margin-top:16px;">
-          <div class="pre-wrap">
-            <div class="pre-actions">
-              <button class="action-btn" onclick="copyToClipboard('agorg-duplicate-preview-out', this)">COPY</button>
-              <button class="action-btn" onclick="clearElement('agorg-duplicate-preview-out')">CLEAR</button>
-            </div>
-            <pre id="agorg-duplicate-preview-out">No duplicate merge candidates yet.</pre>
-          </div>
-          <div class="pre-wrap">
-            <div class="pre-actions">
-              <button class="action-btn" onclick="copyToClipboard('agorg-class-counts-out', this)">COPY</button>
-              <button class="action-btn" onclick="clearElement('agorg-class-counts-out')">CLEAR</button>
-            </div>
-            <pre id="agorg-class-counts-out">No issue class counts yet.</pre>
-          </div>
-        </div>
-        <div class="row" style="margin-top:12px;">
-          <select id="agorg-dup-kind-filter">
-            <option value="all">All Duplicate Kinds</option>
-            <option value="canonical_path">canonical_path</option>
-            <option value="name">name</option>
-          </select>
-          <button class="btn secondary" onclick="agorgApplyDuplicateFilter()">Apply Filter</button>
-          <button class="btn secondary" onclick="agorgPrevDuplicate()">Prev</button>
-          <button class="btn secondary" onclick="agorgNextDuplicate()">Next</button>
-        </div>
-        <div class="grid" style="margin-top:12px;">
-          <div class="pre-wrap">
-            <div class="pre-actions">
-              <button class="action-btn" onclick="copyToClipboard('agorg-filtered-duplicates-out', this)">COPY</button>
-              <button class="action-btn" onclick="clearElement('agorg-filtered-duplicates-out')">CLEAR</button>
-            </div>
-            <pre id="agorg-filtered-duplicates-out">No duplicate candidates for current filter.</pre>
-          </div>
-          <div class="pre-wrap">
-            <div class="pre-actions">
-              <button class="action-btn" onclick="copyToClipboard('agorg-duplicate-detail-out', this)">COPY</button>
-              <button class="action-btn" onclick="clearElement('agorg-duplicate-detail-out')">CLEAR</button>
-            </div>
-            <pre id="agorg-duplicate-detail-out">No duplicate candidate selected.</pre>
-          </div>
-        </div>
-        <div class="pre-wrap" style="margin-top:12px;">
-          <div class="pre-actions">
-            <button class="action-btn" onclick="copyToClipboard('agorg-parity-out', this)">COPY</button>
-            <button class="action-btn" onclick="clearElement('agorg-parity-out')">CLEAR</button>
-          </div>
-          <pre id="agorg-parity-out">No report/dry-run/apply parity summary yet.</pre>
-        </div>
-        <div class="row" style="margin-top:12px;">
-          <select id="agorg-issue-class-filter">
-            <option value="all">All Classes</option>
-            <option value="policy_branch">policy_branch</option>
-            <option value="policy_dependency">policy_dependency</option>
-            <option value="metadata">metadata</option>
-            <option value="topology">topology</option>
-          </select>
-          <button class="btn secondary" onclick="agorgApplyIssueClassFilter()">Apply Filter</button>
-          <button class="btn secondary" onclick="agorgPrevIssue()">Prev</button>
-          <button class="btn secondary" onclick="agorgNextIssue()">Next</button>
-        </div>
-        <div class="grid" style="margin-top:12px;">
-          <div class="pre-wrap">
-            <div class="pre-actions">
-              <button class="action-btn" onclick="copyToClipboard('agorg-filtered-issues-out', this)">COPY</button>
-              <button class="action-btn" onclick="clearElement('agorg-filtered-issues-out')">CLEAR</button>
-            </div>
-            <pre id="agorg-filtered-issues-out">No filtered issues yet.</pre>
-          </div>
-          <div class="pre-wrap">
-            <div class="pre-actions">
-              <button class="action-btn" onclick="copyToClipboard('agorg-issue-detail-out', this)">COPY</button>
-              <button class="action-btn" onclick="clearElement('agorg-issue-detail-out')">CLEAR</button>
-            </div>
-            <pre id="agorg-issue-detail-out">No issue selected.</pre>
-          </div>
-        </div>
+
       </div>
 
       <!-- Sub-Panel: Create -->
       <div id="agorg-create-panel" class="sub-panel">
-        <h3>Initialize New</h3>
+        <h3 style="border-bottom: 2px solid var(--accent); padding-bottom: 8px; margin-bottom: 16px;">CREATE NEW</h3>
         <div class="helper">Create a new Master Directory and optionally instantiate several AGOs at once.</div>
         <div class="grid" style="margin-top:16px;">
           <div class="section-box">
@@ -5356,26 +5002,15 @@ Recommended flow:
       </div>
     </div>
 
-    <!-- Row 4: Response + Discovery Output (50/50) -->
-    <div class="grid" style="margin-top:24px;">
-      <div class="card">
-        <h3>Response</h3>
-        <div class="pre-wrap">
-          <div class="pre-actions">
-            <button class="action-btn" onclick="copyToClipboard('agorg-out', this)">COPY</button>
-            <button class="action-btn" onclick="clearElement('agorg-out')">CLEAR</button>
-          </div>
-          <pre id="agorg-out">ready</pre>
+    <!-- Row 4: Activity Log -->
+    <div class="card" style="margin-top:24px;">
+      <h3>Activity Log</h3>
+      <div class="pre-wrap" style="background: rgba(0,0,0,0.2);">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="clearElement('agorg-activity-log')">CLEAR</button>
         </div>
-      </div>
-      <div class="card">
-        <h3>Discovery Output</h3>
-        <div class="pre-wrap">
-          <div class="pre-actions">
-            <button class="action-btn" onclick="copyToClipboard('agorg-discovery-out', this)">COPY</button>
-            <button class="action-btn" onclick="clearElement('agorg-discovery-out')">CLEAR</button>
-          </div>
-          <pre id="agorg-discovery-out">[]</pre>
+        <div id="agorg-activity-log" style="max-height: 400px; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+          <div style="color: var(--text-muted); font-style: italic; font-size: 0.9em; text-align: center;">Activity log started.</div>
         </div>
       </div>
     </div>
