@@ -33,7 +33,10 @@ function clearElement(id) {
     }
   }
 }
-const out = document.getElementById('out');
+const out = {
+  get textContent() { return ""; },
+  set textContent(val) { console.log("Global Response (Hidden):", val); }
+};
 const liveStream = document.getElementById('live-stream');
 const busStatusChip = document.getElementById('bus-status-chip');
 const agorgOpenBtn = document.getElementById('agorg-open-btn');
@@ -49,7 +52,10 @@ const streamToggleBtn = document.getElementById('stream-toggle');
 const oracleReportSelect = document.getElementById('oracle-report-select');
 const oracleReportContent = document.getElementById('oracle-report-content');
 const depActionOut = document.getElementById('dep-action-out');
-const depActionOutGlobal = document.getElementById('dep-action-out-global');
+const depActionOutGlobal = {
+  get textContent() { return ""; },
+  set textContent(val) { console.log("Dep Action Output (Hidden):", val); }
+};
 const depLogs = document.getElementById('dep-logs');
 const depPolicyStatus = document.getElementById('dep-policy-status');
 const depHookStatus = document.getElementById('dep-hook-status');
@@ -1568,11 +1574,11 @@ function renderAgorgDiscoveryReview() {
     else if (c.kind === 'folder') { icon = '📁'; kindTag = 'DIR'; chipClass = 'neutral'; }
 
     const designationHtml = isDefault 
-      ? `<span class="chip" style="background:rgba(255,234,0,0.15); color:#ffea00; border-color:rgba(255,234,0,0.5); box-shadow:0 0 10px rgba(255,234,0,0.3);">⭐ DEFAULT</span>`
+      ? `<span class="chip" style="background:rgba(0,245,255,0.15); color:var(--accent); border-color:rgba(0,245,255,0.5); box-shadow:0 0 10px rgba(0,245,255,0.3);">AGOrg</span>`
       : `<span class="chip ${chipClass}">${kindTag}</span>`;
 
     return `<div style="display:grid;grid-template-columns:30px 30px 90px 1fr;gap:8px;align-items:center;padding:8px 4px;border-bottom:1px solid rgba(0,245,255,0.15); transition:background 0.2s; ${checked ? 'background:rgba(0,245,255,0.05);' : ''}">
-      <div title="Set as Default Scope">
+      <div title="Set as AGOrg Scope">
         <input type="radio" name="agorg-default-radio" ${defaultChecked} ${disabled} onchange="agorgSetDefaultCandidate('${encodeURIComponent(c.path)}')"/>
       </div>
       <div title="Include in Import">
@@ -1586,9 +1592,17 @@ function renderAgorgDiscoveryReview() {
     </div>`;
   }).join('');
   agorgDiscoveryReview.innerHTML = `
+    <div style="background:rgba(0,245,255,0.05); padding:10px; border-radius:6px; border:1px solid rgba(0,245,255,0.2); margin-bottom:12px; font-size:0.9em; line-height:1.4;">
+      <div style="color:var(--accent); font-weight:bold; margin-bottom:4px;">Instructions:</div>
+      <ul style="margin:0; padding-left:18px; color:var(--text-muted);">
+        <li>Select a <b>radio button</b> to designate the <b>AGOrg</b> (this folder becomes the root).</li>
+        <li>Select <b>checkboxes</b> for the <b>AGOs</b> (sub-projects/replicated repositories).</li>
+        <li>Click the <b>IMPORT APPROVED</b> button.</li>
+      </ul>
+    </div>
     <div style="padding:6px 4px;color:#a8b9e3;font-size:0.82rem;display:flex;justify-content:space-between;">
       <span>Approved ${approvedCount}/${selectableCount} candidates</span>
-      ${agorgDefaultScopeCandidate ? `<span style="color:#ffea00;font-weight:600;">⭐ Default Scope Selected</span>` : `<span style="color:var(--dim);">No Default Scope Selected</span>`}
+      ${agorgDefaultScopeCandidate ? `<span style="color:var(--accent);font-weight:600;">AGOrg Scope Selected</span>` : `<span style="color:#ff4d4d;font-weight:600;">⚠️ No AGOrg Scope Selected</span>`}
     </div>
     ${rows}
   `;
@@ -1634,12 +1648,37 @@ async function agorgDiscoverPreview() {
   if (data.ok && data.discovery) {
     setDiscoveryCache(data.discovery);
 
-    // Auto-set the root directory as the default scope candidate
-    agorgDefaultScopeCandidate = root;
+    // agorgDefaultScopeCandidate = root; // REMOVED: Do not select it as the default AGOrg by default
 
     const candidates = Array.isArray(data.discovery.candidates) ? data.discovery.candidates : [];
     agorgApprovedPaths = new Set(candidates.filter(c => c.kind === 'ago' || c.kind === 'folder').map(c => c.path));
     renderAgorgDiscoveryReview();
+  }
+}
+
+async function agorgCreateNewFolder() {
+  const root = document.getElementById('agorg-master').value.trim();
+  if (!root) {
+    alert("Please select or enter a master directory first.");
+    return;
+  }
+  const folderName = prompt("Enter new folder name:");
+  if (!folderName || !folderName.trim()) return;
+
+  const path = root.replace(/\/+$/, '') + "/" + folderName.trim();
+  logActivity("Creating Folder", path);
+  const data = await fetchJsonSafe('/api/fs/create-dir', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path })
+  });
+
+  if (data.ok) {
+    logActivity("Folder Created", path);
+    agorgDiscoverPreview();
+  } else {
+    logActivity("Folder Creation Failed", data);
+    alert("Failed to create folder: " + (data.error || "Unknown error"));
   }
 }
 
@@ -1652,7 +1691,8 @@ async function agorgImportApproved() {
       return;
     }
     if (!agorgDefaultScopeCandidate) {
-      logActivity("Import Approved", { ok: false, error: 'You must designate a Default (⭐) directory first. This directory becomes the AGOrg.' });
+      alert("⚠️ ACTION REQUIRED\n\nYou must select a directory to serve as the AGOrg for this group. Use the radio buttons in the Discovery Review panel to designate one.");
+      logActivity("Import Refused", "No AGOrg candidate selected. User must select one via radio button.");
       return;
     }
     

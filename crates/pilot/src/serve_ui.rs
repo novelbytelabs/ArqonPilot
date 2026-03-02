@@ -237,6 +237,11 @@ struct FsPickDirectoryRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct CreateDirRequest {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct ReportPathQuery {
     path: String,
     max_bytes: Option<usize>,
@@ -369,6 +374,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
             post(api_agorg_edit_relationship),
         )
         .route("/api/fs/pick-directory", post(api_fs_pick_directory))
+        .route("/api/fs/create-dir", post(api_fs_create_dir))
         .route("/api/dependencies/run", post(run_dependency_action))
         .route("/api/dependencies/logs", get(get_dependency_logs))
         .route(
@@ -1414,6 +1420,20 @@ async fn api_fs_pick_directory(Json(req): Json<FsPickDirectoryRequest>) -> Respo
     match pick_directory(req.start_dir.as_deref()).await {
         Ok(path) => Json(json!({"ok": true, "path": path})).into_response(),
         Err(err) => error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    }
+}
+
+async fn api_fs_create_dir(Json(req): Json<CreateDirRequest>) -> Response {
+    let path = req.path.trim();
+    if path.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "Path is required");
+    }
+    match tokio::fs::create_dir_all(path).await {
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Failed to create directory: {}", e),
+        ),
     }
 }
 
@@ -4909,6 +4929,7 @@ Recommended flow:
             <div class="row">
               <input id="agorg-master" placeholder="/path/to/parent/dir" value="" onchange="agorgDiscoverPreview()" />
               <button class="btn secondary" onclick="browseAgorgMaster()">Browse…</button>
+              <button class="btn secondary" onclick="agorgCreateNewFolder()">Create New Folder</button>
             </div>
           </div>
         </div>
@@ -4990,24 +5011,14 @@ Recommended flow:
       </div>
     </div>
 
-    <!-- Row 3: Master Hierarchy (full width) -->
-    <div class="card" style="margin-top:24px;">
-      <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <h3 style="margin:0; border:0; padding:0;">Master Hierarchy</h3>
-        <button class="btn secondary" onclick="agorgScanMaster()">Scan Master</button>
-      </div>
-      <div class="helper">Interactive view of all siblings in the Master Directory. Click to select.</div>
-      <div id="agorg-hierarchy-tree" class="timeline" style="max-height: 600px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: rgba(0,0,0,0.2);">
-        <div class="tl-empty">No hierarchy loaded. Click "Scan Master" or "Import".</div>
-      </div>
-    </div>
+
 
     <!-- Row 4: Activity Log -->
     <div class="card" style="margin-top:24px;">
       <h3>Activity Log</h3>
       <div class="pre-wrap" style="background: rgba(0,0,0,0.2);">
         <div class="pre-actions">
-          <button class="action-btn" onclick="clearElement('agorg-activity-log')">CLEAR</button>
+          <button class="action-btn" onclick="clearElement('agorg-activity-log')">CLEAR LOG</button>
         </div>
         <div id="agorg-activity-log" style="max-height: 400px; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
           <div style="color: var(--text-muted); font-style: italic; font-size: 0.9em; text-align: center;">Activity log started.</div>
@@ -5112,28 +5123,7 @@ Recommended flow:
     </div>
   </section>
 
-  <div class="status">
-    <div class="card">
-      <h3>Response</h3>
-    <div class="pre-wrap">
-      <div class="pre-actions">
-        <button class="action-btn" onclick="copyToClipboard('out', this)">COPY</button>
-        <button class="action-btn" onclick="clearElement('out')">CLEAR</button>
-      </div>
-      <pre id="out">ready</pre>
-    </div>
-    </div>
-    <div class="card">
-      <h3>Dependencies Action Output</h3>
-    <div class="pre-wrap">
-      <div class="pre-actions">
-        <button class="action-btn" onclick="copyToClipboard('dep-action-out-global', this)">COPY</button>
-        <button class="action-btn" onclick="clearElement('dep-action-out-global')">CLEAR</button>
-      </div>
-      <pre id="dep-action-out-global">No dependency action run yet.</pre>
-    </div>
-    </div>
-  </div>
+
 </div>
 <script src="/static/pilot_ui.js"></script>
 </body>
