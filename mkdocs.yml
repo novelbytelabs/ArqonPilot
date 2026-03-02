@@ -41,6 +41,7 @@ nav:
   - Home: "index.md"
   - Roadmap & Plan: "roadmap-and-execution-plan.md"
   - AGOrg Plan: "agorg-control-plane-plan.md"
+  - Branch Control Master Plan: "branch-control-master-plan.md"
   - Technical Debt: "tech-debt.md"
   - Release Playbook: "release-playbook.md"
   - Release Log: "release-log.md"

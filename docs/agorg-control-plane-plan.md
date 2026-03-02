@@ -4,6 +4,12 @@ This document captures the long-term AGOrg vision and the implementation plan so
 
 **Last updated**: 2026-02-28 22:25 EST — Wave K complete; full push + UI smoke evidence captured.
 
+## Related Plans
+
+1. Branch orchestration hardening and tab unification: `docs/branch-control-master-plan.md`
+2. Program-level roadmap and sequencing: `docs/roadmap-and-execution-plan.md`
+3. Operational failures and recovery recipes: `docs/gotcha-registry.md`
+
 ---
 
 ## Vision

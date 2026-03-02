@@ -4,6 +4,13 @@ ArqonPilot is the local control plane for Arqon's multi-repo ecosystem. It provi
 monorepo-like developer flow (single control surface, coordinated actions) while keeping
 repositories independent for security and lifecycle isolation.
 
+## Canonical References
+
+1. Unified roadmap/program plan: `docs/roadmap-and-execution-plan.md`
+2. Branch Control master execution plan: `docs/branch-control-master-plan.md`
+3. AGOrg control-plane plan: `docs/agorg-control-plane-plan.md`
+4. Gotcha/failure registry: `docs/gotcha-registry.md`
+
 ## Prerequisites
 
 - Rust toolchain pinned by `rust-toolchain.toml`

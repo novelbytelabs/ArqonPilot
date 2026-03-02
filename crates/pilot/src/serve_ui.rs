@@ -9,6 +9,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
 use miette::{IntoDiagnostic, Result};
+use pilot_branch as branch;
+use pilot_multi as multi;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -17,6 +19,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -257,6 +260,43 @@ struct DependencyActionRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct BranchMatrixRequest {
+    group: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    search: Option<String>,
+    base_branch: Option<String>,
+    target_branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BranchMatrixRow {
+    id: i64,
+    repo: String,
+    path: String,
+    group: Option<String>,
+    tags: Vec<String>,
+    current_branch: String,
+    clean: bool,
+    ahead: Option<u32>,
+    behind: Option<u32>,
+    on_target: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BranchRunRequest {
+    action: String,
+    branch: Option<String>,
+    base_branch: Option<String>,
+    dry_run: Option<bool>,
+    group: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    selected_repo_ids: Vec<i64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct EvidenceExportRequest {
     history_limit: Option<usize>,
     reports_limit: Option<usize>,
@@ -377,6 +417,8 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/fs/create-dir", post(api_fs_create_dir))
         .route("/api/dependencies/run", post(run_dependency_action))
         .route("/api/dependencies/logs", get(get_dependency_logs))
+        .route("/api/branch/matrix", post(api_branch_matrix))
+        .route("/api/branch/run", post(api_branch_run))
         .route(
             "/api/system/temporary_components",
             get(get_temporary_components),
@@ -531,6 +573,291 @@ async fn run_command(
             error_response(StatusCode::BAD_GATEWAY, &err.to_string())
         }
     }
+}
+
+async fn require_active_scope(state: &UiState) -> std::result::Result<agorg::Agorg, Response> {
+    match state.agorg_store.get_active_agorg().await {
+        Ok(Some(scope)) => Ok(scope),
+        Ok(None) => Err(error_response(
+            StatusCode::PRECONDITION_FAILED,
+            "No active AGOrg scope selected. Set AGOrg scope before using Branch Control.",
+        )),
+        Err(err) => Err(error_response(StatusCode::BAD_REQUEST, &err.to_string())),
+    }
+}
+
+fn branch_registry() -> std::result::Result<multi::MultiRegistry, Response> {
+    multi::MultiRegistry::open(&multi::MultiRegistry::default_db_path())
+        .map_err(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()))
+}
+
+fn parse_git_output(path: &Path, args: &[&str]) -> std::result::Result<String, ()> {
+    Command::new("git")
+        .args(args)
+        .current_dir(path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .ok_or(())
+}
+
+fn branch_row_from_repo(
+    repo: &multi::RepoEntry,
+    base_branch: &str,
+    target_branch: Option<&str>,
+) -> BranchMatrixRow {
+    let current_branch = parse_git_output(&repo.path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|_| "unknown".to_string());
+    let clean = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&repo.path)
+        .output()
+        .ok()
+        .map(|o| o.status.success() && o.stdout.is_empty())
+        .unwrap_or(false);
+
+    let (ahead, behind) = Command::new("git")
+        .args([
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("HEAD...origin/{}", base_branch),
+        ])
+        .current_dir(&repo.path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let raw = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let mut parts = raw.split_whitespace();
+            let left = parts.next()?.parse::<u32>().ok()?;
+            let right = parts.next()?.parse::<u32>().ok()?;
+            Some((Some(left), Some(right)))
+        })
+        .unwrap_or((None, None));
+
+    let on_target = target_branch
+        .and_then(|t| if t.trim().is_empty() { None } else { Some(t.trim()) })
+        .map(|t| current_branch == t);
+
+    BranchMatrixRow {
+        id: repo.id,
+        repo: repo.name.clone(),
+        path: repo.path.display().to_string(),
+        group: repo.group_name.clone(),
+        tags: repo.tags.clone(),
+        current_branch,
+        clean,
+        ahead,
+        behind,
+        on_target,
+    }
+}
+
+fn scope_filter_rows(
+    rows: Vec<BranchMatrixRow>,
+    scope_root: &Path,
+    search: Option<&str>,
+) -> Vec<BranchMatrixRow> {
+    let needle = search
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase());
+    rows.into_iter()
+        .filter(|row| {
+            let path = canonicalize_path_lossy(Path::new(&row.path));
+            if !path_is_within(&path, scope_root) {
+                return false;
+            }
+            if let Some(n) = needle.as_ref() {
+                let hay = format!("{} {}", row.repo.to_ascii_lowercase(), row.path.to_ascii_lowercase());
+                hay.contains(n)
+            } else {
+                true
+            }
+        })
+        .collect()
+}
+
+async fn api_branch_matrix(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<BranchMatrixRequest>,
+) -> Response {
+    let scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let registry = match branch_registry() {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let filter = multi::RepoFilter {
+        group: req.group.clone(),
+        tags: req.tags.clone(),
+    };
+    let repos = match registry.list_repos(&filter) {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    let base_branch = req.base_branch.unwrap_or_else(|| "main".to_string());
+    let mut rows: Vec<BranchMatrixRow> = repos
+        .iter()
+        .map(|repo| branch_row_from_repo(repo, &base_branch, req.target_branch.as_deref()))
+        .collect();
+    let scope_root = canonicalize_path_lossy(Path::new(&scope.root_path));
+    rows = scope_filter_rows(rows, &scope_root, req.search.as_deref());
+    rows.sort_by(|a, b| a.repo.cmp(&b.repo));
+    Json(json!({
+        "ok": true,
+        "base_branch": base_branch,
+        "count": rows.len(),
+        "rows": rows
+    }))
+    .into_response()
+}
+
+fn resolve_branch_targets(
+    registry: &multi::MultiRegistry,
+    req: &BranchRunRequest,
+    scope_root: &Path,
+) -> std::result::Result<Vec<multi::RepoEntry>, String> {
+    let filter = multi::RepoFilter {
+        group: req.group.clone(),
+        tags: req.tags.clone(),
+    };
+    let mut repos = registry
+        .list_repos(&filter)
+        .map_err(|e| format!("Failed to list repos: {e}"))?;
+    if !req.selected_repo_ids.is_empty() {
+        let selected: HashSet<i64> = req.selected_repo_ids.iter().copied().collect();
+        repos.retain(|r| selected.contains(&r.id));
+    }
+    repos.retain(|repo| {
+        let path = canonicalize_path_lossy(&repo.path);
+        path_is_within(&path, scope_root)
+    });
+    if repos.is_empty() {
+        return Err("No repositories matched selected filters/selection within active AGOrg scope.".to_string());
+    }
+    Ok(repos)
+}
+
+async fn api_branch_run(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<BranchRunRequest>,
+) -> Response {
+    let scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let action = req.action.trim().to_ascii_lowercase();
+    if !matches!(action.as_str(), "create" | "sync" | "prune" | "status") {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "action must be one of: create, sync, prune, status",
+        );
+    }
+    let dry_run = req.dry_run.unwrap_or(true);
+    let mutating = matches!(action.as_str(), "create" | "sync" | "prune") && !dry_run;
+    if mutating && !state.allow_mutations {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "branch action blocked in read-only UI mode; restart pilot serve with --ui-allow-mutations",
+        );
+    }
+
+    let registry = match branch_registry() {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let scope_root = canonicalize_path_lossy(Path::new(&scope.root_path));
+    let repos = match resolve_branch_targets(&registry, &req, &scope_root) {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
+    };
+    let base_branch = req.base_branch.clone().unwrap_or_else(|| "main".to_string());
+
+    let response = match action.as_str() {
+        "status" => {
+            let statuses = branch::branch_status(&repos);
+            json!({
+                "ok": true,
+                "action": action,
+                "dry_run": true,
+                "repo_count": repos.len(),
+                "statuses": statuses
+            })
+        }
+        "create" => {
+            let branch_name = req.branch.clone().unwrap_or_default();
+            if branch_name.trim().is_empty() {
+                return error_response(StatusCode::BAD_REQUEST, "branch is required for create action");
+            }
+            let outcomes = branch::create_branch(&repos, &branch_name, &base_branch, dry_run);
+            let failures = outcomes.iter().filter(|x| !x.success).count();
+            json!({
+                "ok": failures == 0,
+                "action": action,
+                "branch": branch_name,
+                "base_branch": base_branch,
+                "dry_run": dry_run,
+                "repo_count": repos.len(),
+                "failures": failures,
+                "outcomes": outcomes
+            })
+        }
+        "sync" => {
+            let branch_name = req.branch.clone().unwrap_or_default();
+            if branch_name.trim().is_empty() {
+                return error_response(StatusCode::BAD_REQUEST, "branch is required for sync action");
+            }
+            let outcomes = branch::sync_branch(&repos, &branch_name, &base_branch, dry_run);
+            let failures = outcomes.iter().filter(|x| !x.success).count();
+            json!({
+                "ok": failures == 0,
+                "action": action,
+                "branch": branch_name,
+                "base_branch": base_branch,
+                "dry_run": dry_run,
+                "repo_count": repos.len(),
+                "failures": failures,
+                "outcomes": outcomes
+            })
+        }
+        "prune" => match branch::prune_branches(&repos, &base_branch, dry_run) {
+            Ok(outcomes) => {
+                let failures = outcomes.iter().filter(|x| !x.success).count();
+                json!({
+                    "ok": failures == 0,
+                    "action": action,
+                    "base_branch": base_branch,
+                    "dry_run": dry_run,
+                    "repo_count": repos.len(),
+                    "failures": failures,
+                    "outcomes": outcomes
+                })
+            }
+            Err(err) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    &format!("Failed to prune branches: {err}"),
+                )
+            }
+        },
+        _ => unreachable!(),
+    };
+
+    let _ = state.events.send(json!({
+        "source": "branch_control",
+        "action": action,
+        "dry_run": dry_run,
+        "repo_count": repos.len(),
+        "ok": response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+        "response": response
+    }));
+
+    Json(response).into_response()
 }
 
 async fn get_history() -> Response {
@@ -2533,13 +2860,17 @@ mod tests {
         append_codex_contract_record, command_requires_cwd_scope,
         command_requires_multi_selector, command_requires_mutation, command_scope_required,
         dependency_action_requires_cwd_scope, dependency_action_scope_required,
-        load_persisted_codex_contracts, parse_json_from_mixed_output, payload_has_multi_selector,
-        with_event_agorg_scope, CodexContractRecord,
+        filter_prune_paths_by_class, is_safe_cli_token, load_persisted_codex_contracts,
+        parse_json_from_mixed_output, payload_has_multi_selector, resolve_branch_targets,
+        scope_filter_rows, with_event_agorg_scope, BranchMatrixRow, BranchRunRequest,
+        CodexContractRecord,
     };
     use crate::agorg::{AgorgReconcileIssue, AgorgReconcileReport};
+    use pilot_multi as multi;
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::fs;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
     use uuid::Uuid;
 
@@ -2578,7 +2909,7 @@ mod tests {
         assert!(!dependency_action_scope_required("db-status"));
         assert!(!dependency_action_scope_required("services-start"));
 
-        assert!(dependency_action_requires_cwd_scope("repair"));
+        assert!(!dependency_action_requires_cwd_scope("repair"));
         assert!(!dependency_action_requires_cwd_scope("db-start"));
     }
 
@@ -2766,6 +3097,106 @@ mod tests {
         let parsed = parse_json_from_mixed_output(raw).unwrap();
         assert_eq!(parsed["ok"], true);
         assert!(parsed["checks"].as_array().is_some());
+    }
+
+    #[test]
+    fn test_scope_filter_rows_respects_scope_and_search() {
+        let rows = vec![
+            BranchMatrixRow {
+                id: 1,
+                repo: "ArqonCore".to_string(),
+                path: "/tmp/agorg/ArqonCore".to_string(),
+                group: Some("core".to_string()),
+                tags: vec!["apply-pilot".to_string()],
+                current_branch: "dev".to_string(),
+                clean: true,
+                ahead: Some(0),
+                behind: Some(0),
+                on_target: Some(true),
+            },
+            BranchMatrixRow {
+                id: 2,
+                repo: "ExternalRepo".to_string(),
+                path: "/tmp/outside/ExternalRepo".to_string(),
+                group: Some("misc".to_string()),
+                tags: vec![],
+                current_branch: "main".to_string(),
+                clean: true,
+                ahead: Some(0),
+                behind: Some(0),
+                on_target: Some(false),
+            },
+        ];
+        let scope_root = Path::new("/tmp/agorg");
+        let filtered = scope_filter_rows(rows.clone(), scope_root, None);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].repo, "ArqonCore");
+
+        let searched = scope_filter_rows(rows, scope_root, Some("core"));
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0].repo, "ArqonCore");
+    }
+
+    #[test]
+    fn test_resolve_branch_targets_honors_selected_ids_and_scope() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("pilot_branch_targets_test_{}", nanos));
+        let scope_root = base.join("scope");
+        let outside_root = base.join("outside");
+        fs::create_dir_all(&scope_root).unwrap();
+        fs::create_dir_all(&outside_root).unwrap();
+        let repo_a = scope_root.join("A");
+        let repo_b = scope_root.join("B");
+        let repo_c = outside_root.join("C");
+        fs::create_dir_all(&repo_a).unwrap();
+        fs::create_dir_all(&repo_b).unwrap();
+        fs::create_dir_all(&repo_c).unwrap();
+
+        let db_path = base.join("workspace.db");
+        let registry = multi::MultiRegistry::open(&db_path).unwrap();
+        let a = registry
+            .register_repo(
+                &repo_a,
+                Some("A"),
+                Some("core"),
+                &vec!["apply-pilot".to_string()],
+            )
+            .unwrap();
+        let _b = registry
+            .register_repo(
+                &repo_b,
+                Some("B"),
+                Some("core"),
+                &vec!["apply-pilot".to_string()],
+            )
+            .unwrap();
+        let _c = registry
+            .register_repo(
+                &repo_c,
+                Some("C"),
+                Some("core"),
+                &vec!["apply-pilot".to_string()],
+            )
+            .unwrap();
+
+        let req = BranchRunRequest {
+            action: "status".to_string(),
+            branch: None,
+            base_branch: Some("main".to_string()),
+            dry_run: Some(true),
+            group: Some("core".to_string()),
+            tags: vec!["apply-pilot".to_string()],
+            selected_repo_ids: vec![a.id],
+        };
+        let targets =
+            resolve_branch_targets(&registry, &req, &PathBuf::from(&scope_root)).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "A");
+
+        let _ = fs::remove_dir_all(base);
     }
 }
 
@@ -3516,10 +3947,11 @@ fn dependency_action_scope_required(action: &str) -> bool {
 }
 
 fn dependency_action_requires_cwd_scope(action: &str) -> bool {
-    matches!(
-        action,
-        "policy" | "hook-policy" | "drift" | "gate" | "repair" | "push"
-    )
+    let _ = action;
+    // Dependency actions are control-plane operations and must be runnable
+    // regardless of where the Arqon Pilot process was started from.
+    // AGOrg selection is still required, but cwd path coupling is disabled.
+    false
 }
 
 fn command_requires_multi_selector(command: &str) -> bool {
@@ -4104,6 +4536,37 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .chip.fail { border-color: rgba(255, 46, 46, 0.2); background: rgba(255, 46, 46, 0.04); color: var(--rose); }
     .chip.warn { border-color: rgba(255, 215, 0, 0.2); background: rgba(255, 215, 0, 0.04); color: var(--accent); }
     .chip.neutral { border-color: var(--border); background: rgba(255,255,255,0.02); color: var(--muted); }
+    .branch-matrix-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--muted);
+      background: rgba(0, 0, 0, 0.25);
+    }
+    .branch-matrix-table th,
+    .branch-matrix-table td {
+      border-bottom: 1px solid var(--border);
+      padding: 8px 10px;
+      text-align: left;
+      white-space: nowrap;
+    }
+    .branch-matrix-table th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: rgba(10, 14, 20, 0.95);
+      color: var(--text);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .branch-matrix-table tbody tr:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .branch-matrix-table tbody tr.selected {
+      background: rgba(0, 245, 255, 0.08);
+    }
     .pre-wrap { position: relative; }
     .pre-actions { position: absolute; top: 6px; right: 10px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.2s; z-index: 20; }
     .pre-wrap:hover .pre-actions { opacity: 1; }
@@ -4785,23 +5248,93 @@ Recommended flow:
 
   <section class="panel" id="branch">
     <div class="grid">
+      <div class="card" style="grid-column: 1 / -1;">
+        <h3>Fleet Branch Matrix</h3>
+        <div class="helper">Filter repos, inspect branch health, and select exact targets for branch actions.</div>
+        <div class="row">
+          <input id="branch-matrix-group" placeholder="group (optional)" />
+          <input id="branch-matrix-tags" placeholder="tags (comma-separated)" />
+          <input id="branch-matrix-search" placeholder="search repo/path" />
+        </div>
+        <div class="row">
+          <input id="branch-matrix-base" placeholder="base branch for ahead/behind" value="main" />
+          <button id="branch-matrix-refresh-btn" class="btn secondary" onclick="branchLoadMatrix()">Refresh Matrix</button>
+          <button class="btn secondary" onclick="branchSelectVisible()">Select Visible</button>
+          <button class="btn secondary" onclick="branchClearSelection()">Clear Selection</button>
+        </div>
+        <div id="branch-matrix-summary" class="helper">No matrix loaded yet.</div>
+      <div class="pre-wrap">
+        <div style="max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 8px;">
+          <table class="branch-matrix-table">
+            <thead>
+              <tr>
+                <th>Sel</th>
+                <th>Repo</th>
+                <th>Group</th>
+                <th>Tags</th>
+                <th>Branch</th>
+                <th>Clean</th>
+                <th>Ahead</th>
+                <th>Behind</th>
+                <th>On Target</th>
+              </tr>
+            </thead>
+            <tbody id="branch-matrix-body">
+              <tr><td colspan="9" class="muted">No data loaded.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      </div>
       <div class="card">
         <h3>Create Branch</h3>
+        <div class="helper">Use Preview first, then Execute when response looks correct.</div>
+        <div class="chip-row">
+          <span id="branch-create-chip" class="chip neutral">Create: idle</span>
+        </div>
+        <div class="helper">Branch name</div>
         <input id="branch-name" placeholder="feat/pilot-wave7" />
+        <div class="helper">Base branch</div>
         <input id="branch-base" placeholder="main" value="main" />
+        <div class="helper">Group selector (optional)</div>
         <input id="branch-group" placeholder="core" />
+        <div class="helper">Tags selector (comma-separated)</div>
         <input id="branch-tags" placeholder="apply-pilot,wave7" />
-        <button class="btn" onclick="branchCreate()">Run</button>
+        <div class="row">
+          <button id="branch-create-preview-btn" class="btn secondary" onclick="branchCreatePreview()">Preview</button>
+          <button id="branch-create-exec-btn" class="btn" onclick="branchCreateExecute()">Execute</button>
+        </div>
       </div>
       <div class="card">
         <h3>Sync / Prune / Status</h3>
+        <div class="chip-row">
+          <span id="branch-sync-chip" class="chip neutral">Sync: idle</span>
+          <span id="branch-prune-chip" class="chip neutral">Prune: idle</span>
+          <span id="branch-status-chip" class="chip neutral">Status: idle</span>
+        </div>
+        <div class="helper">Target branch to sync</div>
         <input id="sync-branch" placeholder="dev" value="dev" />
+        <div class="helper">Base branch for sync/prune</div>
         <input id="sync-base" placeholder="main" value="main" />
         <div class="row">
-          <button class="btn" onclick="branchSync()">Sync</button>
-          <button class="btn secondary" onclick="branchPrune()">Prune</button>
-          <button class="btn secondary" onclick="branchStatus()">Status</button>
+          <button id="branch-sync-preview-btn" class="btn secondary" onclick="branchSyncPreview()">Sync Preview</button>
+          <button id="branch-sync-exec-btn" class="btn" onclick="branchSyncExecute()">Sync Execute</button>
         </div>
+        <div class="row">
+          <button id="branch-prune-preview-btn" class="btn secondary" onclick="branchPrunePreview()">Prune Preview</button>
+          <button id="branch-prune-exec-btn" class="btn" onclick="branchPruneExecute()">Prune Execute</button>
+          <button id="branch-status-btn" class="btn secondary" onclick="branchStatus()">Status</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Branch Action Output</h3>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('branch-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('branch-out')">CLEAR</button>
+        </div>
+        <pre id="branch-out">No branch action run yet.</pre>
+      </div>
       </div>
     </div>
   </section>

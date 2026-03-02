@@ -198,6 +198,21 @@ const multiApplyChip = document.getElementById('multi-apply-chip');
 const multiDagBtn = document.getElementById('multi-dag-btn');
 const multiApplyDryBtn = document.getElementById('multi-apply-dry-btn');
 const multiApplyExecBtn = document.getElementById('multi-apply-exec-btn');
+const branchOut = document.getElementById('branch-out');
+const branchMatrixBody = document.getElementById('branch-matrix-body');
+const branchMatrixSummary = document.getElementById('branch-matrix-summary');
+const branchMatrixRefreshBtn = document.getElementById('branch-matrix-refresh-btn');
+const branchCreateChip = document.getElementById('branch-create-chip');
+const branchSyncChip = document.getElementById('branch-sync-chip');
+const branchPruneChip = document.getElementById('branch-prune-chip');
+const branchStatusChip = document.getElementById('branch-status-chip');
+const branchCreatePreviewBtn = document.getElementById('branch-create-preview-btn');
+const branchCreateExecBtn = document.getElementById('branch-create-exec-btn');
+const branchSyncPreviewBtn = document.getElementById('branch-sync-preview-btn');
+const branchSyncExecBtn = document.getElementById('branch-sync-exec-btn');
+const branchPrunePreviewBtn = document.getElementById('branch-prune-preview-btn');
+const branchPruneExecBtn = document.getElementById('branch-prune-exec-btn');
+const branchStatusBtn = document.getElementById('branch-status-btn');
 const oracleChip = document.getElementById('oracle-chip');
 const oracleScanBtn = document.getElementById('oracle-scan-btn');
 const oracleQueryBtn = document.getElementById('oracle-query-btn');
@@ -212,6 +227,8 @@ let streamPaused = false;
 let streamHandle = null;
 let latestCodexContractId = '';
 let currentTab = 'dashboard';
+let branchMatrixRows = [];
+let branchSelectedRepoIds = new Set();
 let agorgDiscoveryCache = null;
 let agorgApprovedPaths = new Set();
 let restoringUiSession = false;
@@ -231,6 +248,15 @@ function activatePanel(tabName, opts = {}) {
   if (panel) panel.classList.add('active');
   const tabBtn = document.querySelector('.tab[data-tab="' + tabName + '"]');
   if (tabBtn) tabBtn.classList.add('active');
+  if (tabName === 'agorg') {
+    // Ensure AGOrg panel always reflects current saved state when opened.
+    agorgShowActive();
+    agorgList();
+    agorgTree();
+  }
+  if (tabName === 'branch') {
+    branchLoadMatrix();
+  }
   if (persist && !restoringUiSession) queueUiSessionSave();
 }
 
@@ -284,6 +310,10 @@ function collectUiSessionState() {
     multi_tags: readInputValue('multi-tags'),
     multi_branch: readInputValue('multi-apply-branch'),
     multi_stage_size: readInputValue('multi-apply-stage-size'),
+    branch_matrix_group: readInputValue('branch-matrix-group'),
+    branch_matrix_tags: readInputValue('branch-matrix-tags'),
+    branch_matrix_search: readInputValue('branch-matrix-search'),
+    branch_matrix_base: readInputValue('branch-matrix-base'),
     codex_contract_id: readInputValue('codex-contract-id'),
     sub_tabs: subTabs
   };
@@ -315,6 +345,10 @@ function applyUiSessionState(session) {
   setVal('multi-tags', session.multi_tags);
   setVal('multi-apply-branch', session.multi_branch);
   setVal('multi-apply-stage-size', session.multi_stage_size);
+  setVal('branch-matrix-group', session.branch_matrix_group);
+  setVal('branch-matrix-tags', session.branch_matrix_tags);
+  setVal('branch-matrix-search', session.branch_matrix_search);
+  setVal('branch-matrix-base', session.branch_matrix_base);
   setVal('codex-contract-id', session.codex_contract_id);
 }
 
@@ -486,11 +520,15 @@ async function run(command, payload, opts = {}) {
   const label = opts.label || command;
   const chip = opts.chip || null;
   const buttons = Array.isArray(opts.buttons) ? opts.buttons : [];
+  const outputEl = opts.outputEl || out;
+  const mirrorDashboard = opts.mirrorDashboard !== false;
   payload.schema_version = 1;
   setChipState(chip, label, 'running', 'running');
   for (const b of buttons) setButtonBusy(b, true, opts.runningLabel || null);
-  out.textContent = JSON.stringify({status: "running", command, payload}, null, 2);
-  if (dashStatusOut) {
+  const runningText = JSON.stringify({status: "running", command, payload}, null, 2);
+  outputEl.textContent = runningText;
+  out.textContent = runningText;
+  if (dashStatusOut && mirrorDashboard) {
     dashStatusOut.textContent = out.textContent;
   }
   try {
@@ -504,9 +542,11 @@ async function run(command, payload, opts = {}) {
     });
     clearTimeout(timeoutId);
     const data = await res.json();
-    out.textContent = JSON.stringify(data, null, 2);
-    if (dashStatusOut) {
-      dashStatusOut.textContent = JSON.stringify(data, null, 2);
+    const resultText = JSON.stringify(data, null, 2);
+    outputEl.textContent = resultText;
+    out.textContent = resultText;
+    if (dashStatusOut && mirrorDashboard) {
+      dashStatusOut.textContent = resultText;
     }
     const ok = !!data.ok;
     setChipState(chip, label, ok ? 'success' : 'failed', ok ? 'success' : 'failed');
@@ -518,8 +558,10 @@ async function run(command, payload, opts = {}) {
       ? 'Request timed out. Check ArqonBus bridge health and try again.'
       : (err && err.message ? err.message : String(err));
     const payloadErr = { ok: false, error: msg, command };
-    out.textContent = JSON.stringify(payloadErr, null, 2);
-    if (dashStatusOut) dashStatusOut.textContent = out.textContent;
+    const errorText = JSON.stringify(payloadErr, null, 2);
+    outputEl.textContent = errorText;
+    out.textContent = errorText;
+    if (dashStatusOut && mirrorDashboard) dashStatusOut.textContent = errorText;
     setChipState(chip, label, 'failed', 'failed');
     appendLive({ source: 'ui_command', command, ok: false, error: msg });
     return payloadErr;
@@ -882,29 +924,267 @@ failedOnlyToggle.addEventListener('change', renderTimeline);
 timelineCommandFilter.addEventListener('input', renderTimeline);
 timelineTextFilter.addEventListener('input', renderTimeline);
 
-function branchCreate() {
-  run('pilot.branch.create', {
+function branchScopeFilters() {
+  const group = (document.getElementById('branch-matrix-group')?.value || document.getElementById('branch-group').value || '').trim();
+  const tagRaw = (document.getElementById('branch-matrix-tags')?.value || document.getElementById('branch-tags').value || '').trim();
+  return {
+    group: group || null,
+    tags: tags(tagRaw)
+  };
+}
+
+function branchSelectedIdsArray() {
+  return Array.from(branchSelectedRepoIds).map(x => Number(x)).filter(x => Number.isFinite(x));
+}
+
+function branchMatrixRequest() {
+  const filters = branchScopeFilters();
+  return {
+    group: filters.group,
+    tags: filters.tags,
+    search: (document.getElementById('branch-matrix-search')?.value || '').trim() || null,
+    base_branch: (document.getElementById('branch-matrix-base')?.value || document.getElementById('sync-base').value || 'main').trim() || 'main',
+    target_branch: (document.getElementById('branch-name').value || '').trim() || null
+  };
+}
+
+function renderBranchMatrix() {
+  if (!branchMatrixBody) return;
+  branchMatrixBody.innerHTML = '';
+  if (!branchMatrixRows.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 9;
+    td.className = 'muted';
+    td.textContent = 'No repos matched current filter/scope.';
+    tr.appendChild(td);
+    branchMatrixBody.appendChild(tr);
+    if (branchMatrixSummary) branchMatrixSummary.textContent = '0 repos shown, 0 selected';
+    return;
+  }
+  let selectedVisible = 0;
+  for (const row of branchMatrixRows) {
+    const tr = document.createElement('tr');
+    if (branchSelectedRepoIds.has(row.id)) {
+      tr.classList.add('selected');
+      selectedVisible += 1;
+    }
+
+    const selTd = document.createElement('td');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = branchSelectedRepoIds.has(row.id);
+    cb.addEventListener('change', () => {
+      if (cb.checked) branchSelectedRepoIds.add(row.id);
+      else branchSelectedRepoIds.delete(row.id);
+      renderBranchMatrix();
+    });
+    selTd.appendChild(cb);
+    tr.appendChild(selTd);
+
+    const cols = [
+      row.repo,
+      row.group || '-',
+      (row.tags || []).join(','),
+      row.current_branch || 'unknown',
+      row.clean ? 'yes' : 'no',
+      row.ahead == null ? '-' : String(row.ahead),
+      row.behind == null ? '-' : String(row.behind),
+      row.on_target == null ? '-' : (row.on_target ? 'yes' : 'no')
+    ];
+    for (const value of cols) {
+      const td = document.createElement('td');
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    branchMatrixBody.appendChild(tr);
+  }
+  if (branchMatrixSummary) {
+    branchMatrixSummary.textContent = `${branchMatrixRows.length} repos shown, ${branchSelectedRepoIds.size} selected (${selectedVisible} visible)`;
+  }
+}
+
+async function branchLoadMatrix() {
+  if (branchMatrixRefreshBtn) setButtonBusy(branchMatrixRefreshBtn, true, 'Loading...');
+  const payload = branchMatrixRequest();
+  if (branchOut) branchOut.textContent = JSON.stringify({ status: 'running', endpoint: '/api/branch/matrix', payload }, null, 2);
+  try {
+    const res = await fetch('/api/branch/matrix', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      if (branchOut) branchOut.textContent = JSON.stringify(data, null, 2);
+      branchMatrixRows = [];
+      branchSelectedRepoIds = new Set();
+      renderBranchMatrix();
+      return;
+    }
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    const visibleIds = new Set(rows.map(r => r.id));
+    branchSelectedRepoIds = new Set(Array.from(branchSelectedRepoIds).filter(id => visibleIds.has(id)));
+    branchMatrixRows = rows;
+    if (branchOut) branchOut.textContent = JSON.stringify(data, null, 2);
+    renderBranchMatrix();
+  } catch (err) {
+    const msg = { ok: false, error: err && err.message ? err.message : String(err), endpoint: '/api/branch/matrix' };
+    if (branchOut) branchOut.textContent = JSON.stringify(msg, null, 2);
+  } finally {
+    if (branchMatrixRefreshBtn) setButtonBusy(branchMatrixRefreshBtn, false, null);
+  }
+}
+
+function branchSelectVisible() {
+  for (const row of branchMatrixRows) branchSelectedRepoIds.add(row.id);
+  renderBranchMatrix();
+}
+
+function branchClearSelection() {
+  branchSelectedRepoIds.clear();
+  renderBranchMatrix();
+}
+
+function branchCreatePayload(dryRun) {
+  const selectors = branchScopeFilters();
+  return {
+    action: 'create',
     branch: document.getElementById('branch-name').value,
     base_branch: document.getElementById('branch-base').value,
-    group: document.getElementById('branch-group').value || null,
-    tags: tags(document.getElementById('branch-tags').value),
-    dry_run: true
-  });
+    dry_run: !!dryRun,
+    group: selectors.group,
+    tags: selectors.tags,
+    selected_repo_ids: branchSelectedIdsArray()
+  };
 }
-function branchSync() {
-  run('pilot.branch.sync', {
+
+function branchSyncPayload(dryRun) {
+  const selectors = branchScopeFilters();
+  return {
+    action: 'sync',
     branch: document.getElementById('sync-branch').value,
     base_branch: document.getElementById('sync-base').value,
-    dry_run: true
-  });
+    dry_run: !!dryRun,
+    group: selectors.group,
+    tags: selectors.tags,
+    selected_repo_ids: branchSelectedIdsArray()
+  };
 }
-function branchPrune() {
-  run('pilot.branch.prune', {
+
+function branchPrunePayload(dryRun) {
+  const selectors = branchScopeFilters();
+  return {
+    action: 'prune',
     base_branch: document.getElementById('sync-base').value,
-    dry_run: true
+    dry_run: !!dryRun,
+    group: selectors.group,
+    tags: selectors.tags,
+    selected_repo_ids: branchSelectedIdsArray()
+  };
+}
+
+async function runBranchAction(payload, opts = {}) {
+  const label = opts.label || 'Branch';
+  const chip = opts.chip || null;
+  const buttons = Array.isArray(opts.buttons) ? opts.buttons : [];
+  setChipState(chip, label, 'running', 'running');
+  for (const b of buttons) setButtonBusy(b, true, opts.runningLabel || null);
+  if (branchOut) branchOut.textContent = JSON.stringify({ status: 'running', endpoint: '/api/branch/run', payload }, null, 2);
+  try {
+    const res = await fetch('/api/branch/run', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (branchOut) branchOut.textContent = JSON.stringify(data, null, 2);
+    const ok = !!data.ok;
+    setChipState(chip, label, ok ? 'success' : 'failed', ok ? 'success' : 'failed');
+    appendLive({ source: 'branch_control', action: payload.action, ok, status: res.status, dry_run: !!payload.dry_run });
+    loadHistory();
+    if (ok) await branchLoadMatrix();
+    return data;
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    if (branchOut) branchOut.textContent = JSON.stringify({ ok: false, error: msg, payload }, null, 2);
+    setChipState(chip, label, 'failed', 'failed');
+    appendLive({ source: 'branch_control', action: payload.action, ok: false, error: msg });
+    return { ok: false, error: msg };
+  } finally {
+    for (const b of buttons) setButtonBusy(b, false, null);
+  }
+}
+
+function branchCreatePreview() {
+  runBranchAction(branchCreatePayload(true), {
+    label: 'Create',
+    chip: branchCreateChip,
+    buttons: [branchCreatePreviewBtn, branchCreateExecBtn],
+    runningLabel: 'Running...'
   });
 }
-function branchStatus() { run('pilot.branch.status', { group: null, tags: [] }); }
+
+function branchCreateExecute() {
+  runBranchAction(branchCreatePayload(false), {
+    label: 'Create',
+    chip: branchCreateChip,
+    buttons: [branchCreatePreviewBtn, branchCreateExecBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function branchSyncPreview() {
+  runBranchAction(branchSyncPayload(true), {
+    label: 'Sync',
+    chip: branchSyncChip,
+    buttons: [branchSyncPreviewBtn, branchSyncExecBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function branchSyncExecute() {
+  runBranchAction(branchSyncPayload(false), {
+    label: 'Sync',
+    chip: branchSyncChip,
+    buttons: [branchSyncPreviewBtn, branchSyncExecBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function branchPrunePreview() {
+  runBranchAction(branchPrunePayload(true), {
+    label: 'Prune',
+    chip: branchPruneChip,
+    buttons: [branchPrunePreviewBtn, branchPruneExecBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function branchPruneExecute() {
+  runBranchAction(branchPrunePayload(false), {
+    label: 'Prune',
+    chip: branchPruneChip,
+    buttons: [branchPrunePreviewBtn, branchPruneExecBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function branchStatus() {
+  const selectors = branchScopeFilters();
+  runBranchAction({
+    action: 'status',
+    dry_run: true,
+    group: selectors.group,
+    tags: selectors.tags,
+    selected_repo_ids: branchSelectedIdsArray()
+  }, {
+    label: 'Status',
+    chip: branchStatusChip,
+    buttons: [branchStatusBtn],
+    runningLabel: 'Running...'
+  });
+}
 
 function oracleScan() {
   run('pilot.oracle.scan', {}, {
@@ -1364,49 +1644,49 @@ async function agorgList() {
   if (agorgRegistryList) {
     agorgRegistryList.innerHTML = '<div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">Loading backend properties...</div>';
   }
-  const snapshot = await hydrateScopeSnapshot(true);
-  const data = { ok: true, agorgs: snapshot.items || [] };
-  const text = JSON.stringify(data, null, 2);
-  if (agorgOut) agorgOut.textContent = text;
-  if (data.ok) {
+  try {
+    const snapshot = await hydrateScopeSnapshot(true);
+    const data = { ok: true, agorgs: snapshot.items || [] };
+    const text = JSON.stringify(data, null, 2);
+    if (agorgOut) agorgOut.textContent = text;
     renderAgorgRegistry(data.agorgs);
-    
-    // Attempt to mix in AGOs from the active tree to the registry view
+
+    // Attempt to mix in AGOs from the active tree to the registry view.
     const treeData = await fetchJsonSafe('/api/agorg/tree');
     if (treeData.ok && treeData.tree && treeData.tree.length > 0) {
-       const agos = [];
-       const walk = (node) => {
-         (node.agos || []).forEach(a => agos.push(a));
-         (node.child_agorgs || []).forEach(walk);
-       };
-       treeData.tree.forEach(walk);
-       
-       const seen = new Set();
-       const uniqueAgos = agos.filter(a => {
-         if (seen.has(a.id)) return false;
-         seen.add(a.id);
-         return true;
-       });
-       
-       uniqueAgos.forEach(ago => {
-         const el = document.createElement('div');
-         el.className = 'agorg-reg-item agorg-tree-node';
-         el.style = 'display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem; margin-left:16px; border-left:1px solid #1c2635;';
-         el.innerHTML = `
-           <div style="display:flex; align-items:center;">
-             <span style="margin-right:8px; display:inline-flex; width:1.2rem;">🤖</span>
-             <span style="font-weight:600;">${ago.name}</span>
-           </div>
-           <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#6a7dff;">AGO</span>
-         `;
-         el.onclick = () => switchAgorgScope(ago.id);
-         if (agorgRegistryList) agorgRegistryList.appendChild(el);
-       });
+      const agos = [];
+      const walk = (node) => {
+        (node.agos || []).forEach(a => agos.push(a));
+        (node.child_agorgs || []).forEach(walk);
+      };
+      treeData.tree.forEach(walk);
 
+      const seen = new Set();
+      const uniqueAgos = agos.filter(a => {
+        if (seen.has(a.id)) return false;
+        seen.add(a.id);
+        return true;
+      });
+
+      uniqueAgos.forEach(ago => {
+        const el = document.createElement('div');
+        el.className = 'agorg-reg-item agorg-tree-node';
+        el.style = 'display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem; margin-left:16px; border-left:1px solid #1c2635;';
+        el.innerHTML = `
+          <div style="display:flex; align-items:center;">
+            <span style="margin-right:8px; display:inline-flex; width:1.2rem;">🤖</span>
+            <span style="font-weight:600;">${ago.name}</span>
+          </div>
+          <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#6a7dff;">AGO</span>
+        `;
+        if (agorgRegistryList) agorgRegistryList.appendChild(el);
+      });
     }
-  } else {
+  } catch (err) {
+    const msg = (err && err.message) ? err.message : String(err);
+    if (agorgOut) agorgOut.textContent = JSON.stringify({ ok: false, error: msg }, null, 2);
     if (agorgRegistryList) {
-      agorgRegistryList.innerHTML = `<div style="padding:10px; color:#ff6b6b; font-size:0.8rem;">Load Failed: ${data.error}</div>`;
+      agorgRegistryList.innerHTML = `<div style="padding:10px; color:#ff6b6b; font-size:0.8rem;">Load Failed: ${msg}</div>`;
     }
   }
 }
@@ -2825,6 +3105,14 @@ async function bootUi() {
   document.querySelectorAll('input, textarea, select').forEach((el) => {
     el.addEventListener('change', () => queueUiSessionSave());
   });
+  ['branch-matrix-group', 'branch-matrix-tags', 'branch-matrix-search', 'branch-matrix-base']
+    .forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('change', () => {
+        if (currentTab === 'branch') branchLoadMatrix();
+      });
+    });
 }
 
 bootUi();

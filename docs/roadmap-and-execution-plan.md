@@ -4,6 +4,12 @@
 
 This is the canonical execution plan for ArqonPilot. It merges product delivery, guardrails, testing, and documentation into one system plan so work does not fragment across sessions.
 
+## Related Plans
+
+1. Branch Control execution source of truth: `docs/branch-control-master-plan.md`
+2. AGOrg control-plane execution source of truth: `docs/agorg-control-plane-plan.md`
+3. Failure signatures and recoveries: `docs/gotcha-registry.md`
+
 ## Frozen Policy (Non-Negotiable)
 
 1. Core lane Rust/Cargo: `1.82.0`
@@ -55,6 +61,7 @@ ArqonPilot becomes a centralized control system:
 2. Deep specialist tabs.
 3. Codex action planner/executor.
 4. Cross-repo dependency/branch orchestration.
+5. Branch Control unification and hardening (see `docs/branch-control-master-plan.md`).
 
 ### Track B: Guardrails and Drift Immunity
 1. Frozen policy enforcement.

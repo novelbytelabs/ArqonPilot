@@ -59,6 +59,22 @@ This runbook defines the standard operating procedure for running Arqon Pilot ac
 
 Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
 
+### Tab Interop Quick Reference (Dependencies/Branch/Multi)
+
+| Task | Primary Tab | Secondary Tab | Why |
+|---|---|---|---|
+| Toolchain/hook/gate/drift diagnosis | Dependencies | Dashboard (System Status) | Dependencies is authoritative for policy/gate/push readiness. |
+| Fleet branch create/sync/prune/status | Branch | Dashboard (shortcut only) | Branch is authoritative for branch lifecycle operations. |
+| Dependency-aware staged branch apply | Branch | Multi | Branch owns branch mutation UX; Multi supports orchestration primitives. |
+| DAG/order/PR plan without branch mutation | Multi | Branch | Multi is authoritative for non-branch orchestration planning. |
+| Push-safe decision after branch operations | Dependencies | Branch | Dependencies computes gate/push readiness used by Branch workflow. |
+
+Branch tab BC-2 workflow:
+- `Refresh Matrix` -> inspect branch health/ahead/behind.
+- Select target repos directly in matrix (or use group/tags filter).
+- Run `Create/Sync/Prune` as `Preview` first, then `Execute`.
+- Use `Branch Action Output` + timeline for evidence and failures.
+
 1. `Dashboard -> System Status`
 
     - Run `Policy`, `Hook Policy`, and `Gate` before branch/release operations.
