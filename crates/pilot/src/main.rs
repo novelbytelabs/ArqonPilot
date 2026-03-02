@@ -76,6 +76,8 @@ enum Commands {
     Serve(ServeArgs),
     /// Governance and Settings operations
     Settings(SettingsArgs),
+    /// Governance Policy operations
+    Policy(PolicyArgs),
 }
 
 #[derive(Args)]
@@ -464,6 +466,122 @@ enum SettingsCommands {
         #[arg(long)]
         show: bool,
     },
+}
+
+#[derive(Args)]
+struct PolicyArgs {
+    #[command(subcommand)]
+    command: PolicyCommands,
+}
+
+#[derive(Subcommand)]
+enum PolicyCommands {
+    /// Get effective policy
+    Get {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        ago_path: Option<String>,
+    },
+    /// Save draft policy
+    SetDraft {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// Preview/simulate draft policy
+    Preview {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        version: u32,
+    },
+    /// Approve draft policy
+    Approve {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        version: u32,
+        #[arg(long)]
+        simulation_artifact: PathBuf,
+    },
+    /// Activate approved policy
+    Activate {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        version: u32,
+    },
+    /// Resolve policy for a repository
+    Resolve {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        repo_path: PathBuf,
+    },
+    /// Run compliance scan
+    Scan {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        group: Option<String>,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+    },
+    /// Manage policy exceptions
+    Exceptions(PolicyExceptionsArgs),
+    /// Query policy decisions
+    Decisions {
+        #[arg(long)]
+        kind: String,
+        #[arg(long, default_value = "100")]
+        limit: usize,
+    },
+}
+
+#[derive(Args)]
+struct PolicyExceptionsArgs {
+    #[command(subcommand)]
+    command: PolicyExceptionsCommands,
+}
+
+#[derive(Subcommand)]
+enum PolicyExceptionsCommands {
+    /// List active exceptions
+    List {
+        #[arg(long)]
+        kind: String,
+    },
+    /// Add an exception
+    Add(PolicyExceptionsAddArgs),
+    /// Delete an exception
+    Delete {
+        #[arg(long)]
+        id: String,
+    },
+}
+
+#[derive(Args, Clone)]
+struct PolicyExceptionsAddArgs {
+    #[arg(long)]
+    kind: String,
+    #[arg(long)]
+    ago_path: Option<String>,
+    #[arg(long)]
+    rule_path: String,
+    #[arg(long)]
+    operation_scope: String,
+    #[arg(long)]
+    mode: String,
+    #[arg(long)]
+    owner: String,
+    #[arg(long)]
+    ticket: String,
+    #[arg(long)]
+    reason: String,
+    #[arg(long)]
+    expires_at: i64,
 }
 
 #[derive(Args)]
@@ -1990,6 +2108,7 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                 ),
             ))
         }
+        Commands::Policy(args) => run_policy(args).await,
     }
 }
 
@@ -2359,6 +2478,48 @@ fn command_name(command: &Commands) -> &'static str {
         }) => "db.status",
         Commands::Serve(_) => "serve",
         Commands::Settings(_) => "settings.branch",
+        Commands::Policy(PolicyArgs {
+            command: PolicyCommands::Get { .. },
+        }) => "policy.get",
+        Commands::Policy(PolicyArgs {
+            command: PolicyCommands::SetDraft { .. },
+        }) => "policy.set_draft",
+        Commands::Policy(PolicyArgs {
+            command: PolicyCommands::Preview { .. },
+        }) => "policy.preview",
+        Commands::Policy(PolicyArgs {
+            command: PolicyCommands::Approve { .. },
+        }) => "policy.approve",
+        Commands::Policy(PolicyArgs {
+            command: PolicyCommands::Activate { .. },
+        }) => "policy.activate",
+        Commands::Policy(PolicyArgs {
+            command: PolicyCommands::Resolve { .. },
+        }) => "policy.resolve",
+        Commands::Policy(PolicyArgs {
+            command: PolicyCommands::Scan { .. },
+        }) => "policy.scan",
+        Commands::Policy(PolicyArgs {
+            command: PolicyCommands::Decisions { .. },
+        }) => "policy.decisions",
+        Commands::Policy(PolicyArgs {
+            command:
+                PolicyCommands::Exceptions(PolicyExceptionsArgs {
+                    command: PolicyExceptionsCommands::List { .. },
+                }),
+        }) => "policy.exceptions.list",
+        Commands::Policy(PolicyArgs {
+            command:
+                PolicyCommands::Exceptions(PolicyExceptionsArgs {
+                    command: PolicyExceptionsCommands::Add(_),
+                }),
+        }) => "policy.exceptions.add",
+        Commands::Policy(PolicyArgs {
+            command:
+                PolicyCommands::Exceptions(PolicyExceptionsArgs {
+                    command: PolicyExceptionsCommands::Delete { .. },
+                }),
+        }) => "policy.exceptions.delete",
     }
 }
 
@@ -2714,6 +2875,23 @@ async fn resolve_agorg_ref_optional(
     }
 }
 
+fn canonicalize_path_lossy(path: &Path) -> String {
+    fs::canonicalize(path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| path.display().to_string())
+}
+
+fn path_in_any_root(path: &str, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| {
+        let root_s = canonicalize_path_lossy(root);
+        path == root_s || path.starts_with(&(root_s + "/"))
+    })
+}
+
+fn now_stamp() -> String {
+    chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
+}
+
 fn handle_init(config_path: &Path) -> Result<()> {
     if config_path.exists() {
         println!("Config file already exists at {:?}", config_path);
@@ -2737,4 +2915,361 @@ fn handle_init(config_path: &Path) -> Result<()> {
 
     println!("Initialized ArqonPilot configuration at {:?}", config_path);
     Ok(())
+}
+
+async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
+    let agorg_store = AgorgStore::from_env();
+    agorg_store.initialize().await?;
+    let active = agorg_store
+        .get_active_agorg()
+        .await?
+        .ok_or_else(|| miette::miette!("No active AGOrg"))?;
+    let gov_store = governance::store::GovernanceStore::new(agorg_store.dsn());
+
+    match &args.command {
+        PolicyCommands::Get { kind, ago_path } => {
+            let record = if let Some(path) = ago_path {
+                gov_store
+                    .get_ago_policy_override(active.id, path, kind)
+                    .await?
+            } else {
+                gov_store.get_policy(active.id, kind).await?
+            };
+            if let Some(r) = record {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&r.policy_json).into_diagnostic()?
+                );
+            } else {
+                println!("No {} policy found (ago_path: {:?})", kind, ago_path);
+            }
+            Ok(CommandReport::ok(
+                "policy.get",
+                format!("Fetched {} policy", kind),
+            ))
+        }
+        PolicyCommands::SetDraft { kind, file } => {
+            let content = std::fs::read_to_string(file).into_diagnostic()?;
+            let json: serde_json::Value = serde_json::from_str(&content).into_diagnostic()?;
+            let saved = gov_store
+                .save_policy(active.id, None, kind, &json, "draft", "pilot-cli")
+                .await?;
+            println!("Saved draft policy {} version {}", kind, saved.version);
+            let report = CommandReport::ok(
+                "policy.set_draft",
+                format!("Saved draft v{}", saved.version),
+            );
+            persist_mutation_audit("policy.set_draft", false, &report.summary, vec![]);
+            Ok(report)
+        }
+        PolicyCommands::Preview { kind, version } => {
+            let record = gov_store
+                .get_policy_by_version(active.id, None, kind, *version as i32)
+                .await?
+                .ok_or_else(|| miette::miette!("No {} policy version {} found", kind, version))?;
+            if kind != "branch" {
+                return Err(miette::miette!(
+                    "Preview currently supports only kind=branch"
+                ));
+            }
+            let policy: governance::model::BranchPolicy =
+                serde_json::from_value(record.policy_json.clone()).into_diagnostic()?;
+
+            let roots = vec![std::path::PathBuf::from(&active.root_path)];
+            let registry = multi::MultiRegistry::open(&multi::MultiRegistry::default_db_path())
+                .map_err(|e| miette::miette!("Failed to open multi registry: {}", e))?;
+            let mut repos = registry
+                .list_repos(&multi::RepoFilter::default())
+                .map_err(|e| miette::miette!("Failed listing repos for preview: {}", e))?;
+            repos.retain(|repo| {
+                let path = canonicalize_path_lossy(&repo.path);
+                path_in_any_root(&path, &roots)
+            });
+            let exceptions = gov_store.get_exceptions(active.id, "branch").await?;
+            let statuses = branch::branch_status(&repos);
+            let mut violations = 0usize;
+            let mut warnings = 0usize;
+            let mut blocked = 0usize;
+            let evaluations: Vec<serde_json::Value> = statuses
+                .iter()
+                .map(|st| {
+                    let eval = governance::eval::evaluate_branch_policy(
+                        &policy,
+                        "create",
+                        &st.current_branch,
+                        &exceptions,
+                    );
+                    violations += eval.violations.len();
+                    warnings += eval.warnings.len();
+                    if eval.blocked {
+                        blocked += 1;
+                    }
+                    serde_json::json!({
+                        "repo": st.repo,
+                        "path": st.path,
+                        "branch": st.current_branch,
+                        "blocked": eval.blocked,
+                        "violations": eval.violations.len(),
+                        "warnings": eval.warnings.len()
+                    })
+                })
+                .collect();
+
+            let report_json = serde_json::json!({
+                "ok": true,
+                "kind": kind,
+                "version": version,
+                "status": if blocked > 0 { "blocked" } else { "pass" },
+                "evaluated_branches": evaluations.len(),
+                "violations": violations,
+                "warnings": warnings,
+                "blocked": blocked,
+                "evaluations": evaluations,
+            });
+            let reports_root = std::env::var("PILOT_REPORTS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                    PathBuf::from(home).join(".pilot").join("reports")
+                });
+            std::fs::create_dir_all(&reports_root).into_diagnostic()?;
+            let out_file = reports_root.join(format!(
+                "policy_preview_{}_v{}_{}.json",
+                kind,
+                version,
+                now_stamp()
+            ));
+            std::fs::write(
+                &out_file,
+                serde_json::to_string_pretty(&report_json).into_diagnostic()?,
+            )
+            .into_diagnostic()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report_json).into_diagnostic()?
+            );
+            println!("Artifact: {}", out_file.display());
+            Ok(CommandReport::ok(
+                "policy.preview",
+                format!(
+                    "Previewed {} v{} (artifact: {})",
+                    kind,
+                    version,
+                    out_file.display()
+                ),
+            ))
+        }
+        PolicyCommands::Approve {
+            kind,
+            version,
+            simulation_artifact,
+        } => {
+            if !simulation_artifact.exists() {
+                return Err(miette::miette!(
+                    "Simulation artifact not found at {}",
+                    simulation_artifact.display()
+                ));
+            }
+            let current = gov_store
+                .get_policy_by_version(active.id, None, kind, *version as i32)
+                .await?
+                .ok_or_else(|| {
+                    miette::miette!("No {} policy v{} found to approve", kind, version)
+                })?;
+            gov_store
+                .update_policy_status(current.id, "approved", "pilot-cli")
+                .await?
+                .ok_or_else(|| miette::miette!("Failed to update approved status"))?;
+            println!(
+                "Approved {} v{} using artifact {}",
+                kind,
+                version,
+                simulation_artifact.display()
+            );
+            let report = CommandReport::ok("policy.approve", format!("Approved v{}", version));
+            persist_mutation_audit("policy.approve", false, &report.summary, vec![]);
+            Ok(report)
+        }
+        PolicyCommands::Activate { kind, version } => {
+            let current = gov_store
+                .get_policy_by_version(active.id, None, kind, *version as i32)
+                .await?
+                .ok_or_else(|| {
+                    miette::miette!("No {} policy v{} found to activate", kind, version)
+                })?;
+            gov_store
+                .update_policy_status(current.id, "active", "pilot-cli")
+                .await?
+                .ok_or_else(|| miette::miette!("Failed to update active status"))?;
+            println!("Activated {} v{}", kind, version);
+            let report = CommandReport::ok("policy.activate", format!("Activated v{}", version));
+            persist_mutation_audit("policy.activate", false, &report.summary, vec![]);
+            Ok(report)
+        }
+        PolicyCommands::Resolve { kind, repo_path } => {
+            let canonical = canonicalize_path_lossy(repo_path);
+            let override_record = gov_store
+                .get_ago_policy_override(active.id, &canonical, kind)
+                .await?;
+            let (source, policy_json) = if let Some(r) = override_record {
+                ("ago", r.policy_json)
+            } else {
+                match gov_store.get_policy(active.id, kind).await? {
+                    Some(r) => ("agorg", r.policy_json),
+                    None => (
+                        "fallback_default",
+                        serde_json::to_value(governance::model::BranchPolicy::default())
+                            .into_diagnostic()?,
+                    ),
+                }
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "kind": kind,
+                    "repo_path": canonical,
+                    "source": source,
+                    "policy": policy_json
+                }))
+                .into_diagnostic()?
+            );
+            Ok(CommandReport::ok(
+                "policy.resolve",
+                "Resolved policy".to_string(),
+            ))
+        }
+        PolicyCommands::Scan { kind, group, tags } => {
+            if kind != "branch" {
+                return Err(miette::miette!("Scan currently supports only kind=branch"));
+            }
+            let record = gov_store
+                .get_policy(active.id, kind)
+                .await?
+                .map(|r| r.policy_json)
+                .unwrap_or_else(|| {
+                    serde_json::to_value(governance::model::BranchPolicy::default())
+                        .unwrap_or(serde_json::json!({}))
+                });
+            let policy: governance::model::BranchPolicy =
+                serde_json::from_value(record).into_diagnostic()?;
+            let filter = multi::RepoFilter {
+                group: group.clone(),
+                tags: tags.clone(),
+            };
+            let registry = multi::MultiRegistry::open(&multi::MultiRegistry::default_db_path())
+                .map_err(|e| miette::miette!("Failed to open multi registry: {}", e))?;
+            let mut repos = registry
+                .list_repos(&filter)
+                .map_err(|e| miette::miette!("Failed listing repos for scan: {}", e))?;
+            let roots = vec![std::path::PathBuf::from(&active.root_path)];
+            repos.retain(|repo| {
+                let path = canonicalize_path_lossy(&repo.path);
+                path_in_any_root(&path, &roots)
+            });
+            let exceptions = gov_store.get_exceptions(active.id, "branch").await?;
+            let statuses = branch::branch_status(&repos);
+            let mut issues = 0usize;
+            let mut off_policy = 0usize;
+            let details: Vec<serde_json::Value> = statuses
+                .iter()
+                .map(|st| {
+                    let eval = governance::eval::evaluate_branch_policy(
+                        &policy,
+                        "create",
+                        &st.current_branch,
+                        &exceptions,
+                    );
+                    let issue_count = eval.violations.len() + eval.warnings.len();
+                    issues += issue_count;
+                    if issue_count > 0 {
+                        off_policy += 1;
+                    }
+                    serde_json::json!({
+                        "repo": st.repo,
+                        "path": st.path,
+                        "branch": st.current_branch,
+                        "blocked": eval.blocked,
+                        "violations": eval.violations.len(),
+                        "warnings": eval.warnings.len()
+                    })
+                })
+                .collect();
+            let summary = serde_json::json!({
+                "kind": kind,
+                "scanned": details.len(),
+                "issues": issues,
+                "off_policy": off_policy,
+                "details": details
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&summary).into_diagnostic()?
+            );
+            Ok(CommandReport::ok(
+                "policy.scan",
+                "Scan completed".to_string(),
+            ))
+        }
+        PolicyCommands::Decisions { kind, limit } => {
+            let decisions = gov_store.get_decisions(active.id, kind, *limit).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&decisions).into_diagnostic()?
+            );
+            Ok(CommandReport::ok(
+                "policy.decisions",
+                format!("Returned {} decisions", decisions.len()),
+            ))
+        }
+        PolicyCommands::Exceptions(ex) => match &ex.command {
+            PolicyExceptionsCommands::List { kind } => {
+                let list = gov_store.get_exceptions(active.id, kind).await?;
+                for e in list {
+                    println!(
+                        "{} | {} | {} | expr: {}",
+                        e.id, e.rule_path, e.owner, e.expires_at
+                    );
+                }
+                Ok(CommandReport::ok(
+                    "policy.exceptions.list",
+                    "Listed exceptions".to_string(),
+                ))
+            }
+            PolicyExceptionsCommands::Add(add) => {
+                let ago_path_val = add.ago_path.clone().unwrap_or_else(|| "".to_string());
+                let e = governance::model::PolicyException {
+                    id: uuid::Uuid::new_v4(),
+                    agorg_id: active.id,
+                    ago_path: if ago_path_val.is_empty() {
+                        None
+                    } else {
+                        Some(ago_path_val)
+                    },
+                    policy_kind: add.kind.clone(),
+                    rule_path: add.rule_path.clone(),
+                    reason: add.reason.clone(),
+                    ticket_ref: Some(add.ticket.clone()),
+                    owner: add.owner.clone(),
+                    expires_at: chrono::DateTime::from_timestamp(add.expires_at, 0)
+                        .unwrap_or_else(chrono::Utc::now),
+                    created_at: chrono::Utc::now(),
+                };
+                gov_store.add_exception(e).await?;
+                println!("Added exception for {}/{}", add.kind, add.rule_path);
+                let report =
+                    CommandReport::ok("policy.exceptions.add", "Added exception".to_string());
+                persist_mutation_audit("policy.exceptions.add", false, &report.summary, vec![]);
+                Ok(report)
+            }
+            PolicyExceptionsCommands::Delete { id } => {
+                let u = uuid::Uuid::parse_str(id).into_diagnostic()?;
+                gov_store.delete_exception(u).await?;
+                println!("Deleted exception {}", id);
+                let report =
+                    CommandReport::ok("policy.exceptions.delete", "Deleted exception".to_string());
+                persist_mutation_audit("policy.exceptions.delete", false, &report.summary, vec![]);
+                Ok(report)
+            }
+        },
+    }
 }

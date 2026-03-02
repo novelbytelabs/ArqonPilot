@@ -236,10 +236,35 @@ Keep this file current whenever a new failure class appears.
 - Cause:
   - discovery guardrails affect new scans but do not retroactively delete already imported AGO rows.
 - Recovery:
- 1. Reconcile import with prune:
+1. Reconcile import with prune:
      - `./scripts/pilot_local.sh agorg discover --root /home/irbsurfer/Projects/arqon --depth 4 --import-to Arqon --prune-missing`
 
-## G-017: Reconcile Apply blocked in UI with "read-only mode"
+## G-017: "Feature complete" claim but governance paths still stubbed
+
+- Signature:
+  - new CLI/API routes exist, but behaviors are static/non-contextual:
+    - compliance scan returns constant zero counts
+    - policy resolve ignores `repo_path`
+    - CLI preview/scan/decisions output placeholder payloads
+- Cause:
+  - route/command scaffolding was merged without full integration to governance store + repo status evaluation.
+- Detection:
+  1. Run:
+     - `cargo check -p pilot --locked`
+     - `cargo test -p pilot --locked`
+     - `node -c crates/pilot/src/pilot_ui.js`
+  2. Spot-check runtime behavior:
+     - `pilot policy scan --kind branch`
+     - `pilot policy resolve --kind branch --repo-path <abs-path>`
+     - `curl -sS http://127.0.0.1:7788/api/settings/compliance_scan -X POST ...`
+  3. Fail if outputs remain static regardless of scope/repo state.
+- Recovery:
+  1. Wire handlers to real governance store/evaluator flows.
+  2. Ensure resolve uses canonical `repo_path` override lookup before AGOrg fallback.
+  3. Ensure scan/simulate evaluate current registry branch status under AGOrg scope.
+  4. Re-run full evidence commands and record outputs in release evidence.
+
+## G-018: Reconcile Apply blocked in UI with "read-only mode"
 
 - Signature:
   - UI/API returns:
@@ -258,7 +283,7 @@ Keep this file current whenever a new failure class appears.
   - default discovery is flat-fleet (nested repos skipped, `archive/` skipped).
   - set `PILOT_AGORG_ALLOW_NESTED_REPOS=1` only when nested-repo discovery is intentionally required.
 
-## G-018: Acceptance Matrix API returns 500 with "output was not valid JSON"
+## G-019: Acceptance Matrix API returns 500 with "output was not valid JSON"
 
 - Signature:
   - `POST /api/system/acceptance_matrix/run` returns:
@@ -274,7 +299,7 @@ Keep this file current whenever a new failure class appears.
      - `ok=true`
      - `failed_checks=[]`
 
-## G-019: Acceptance matrix/gate appears hung due concurrent stale runs
+## G-020: Acceptance matrix/gate appears hung due concurrent stale runs
 
 - Signature:
   - UI/API matrix call appears to hang indefinitely.
@@ -287,7 +312,7 @@ Keep this file current whenever a new failure class appears.
   3. If needed, stop stale runs, then re-run one clean command:
      - `./scripts/wave_acceptance_matrix.sh --wave I --profile full`
 
-## G-017: AGOrg looks clean but policy drift still exists
+## G-021: AGOrg looks clean but policy drift still exists
 
 - Signature:
   - Discovery/import succeeds, but downstream operations still fail scope expectations.
@@ -298,7 +323,7 @@ Keep this file current whenever a new failure class appears.
   2. Fix reported issues (or prune/reimport for off-policy paths).
   3. Re-run reconcile until issue count is acceptable.
 
-## G-018: Scope guard rejects command as unscoped
+## G-022: Scope guard rejects command as unscoped
 
 - Signature:
   - `No active AGOrg scope selected`
@@ -314,7 +339,7 @@ Keep this file current whenever a new failure class appears.
 3. For `pilot.multi.*`, set `group` and/or `tags` in UI/CLI payload.
 4. For Dashboard dependency actions above, run Pilot from a repo path inside the active AGOrg root.
 
-## G-019: Live Event Stream shows `agorg_scope: null`
+## G-023: Live Event Stream shows `agorg_scope: null`
 
 - Signature:
   - SSE telemetry payloads include `agorg_scope: null`.
@@ -326,7 +351,7 @@ Keep this file current whenever a new failure class appears.
  2. Confirm:
      - `./scripts/pilot_local.sh agorg show`
 
-## G-020: Two UI windows show different active AGOrg/tab state
+## G-024: Two UI windows show different active AGOrg/tab state
 
 - Signature:
   - Separate UI windows disagree on active scope or restored tab/context.
@@ -337,7 +362,7 @@ Keep this file current whenever a new failure class appears.
      - `pilot serve --ui-port 7788 --ui-instance-id pilot-main ...`
   2. Use same id to share state across windows, different ids to isolate intentionally.
 
-## G-021: Temporary component state is unclear during incident triage
+## G-025: Temporary component state is unclear during incident triage
 
 - Signature:
   - Operator cannot quickly tell whether bus shim/editor-gap components are active.
@@ -352,7 +377,7 @@ Keep this file current whenever a new failure class appears.
   - Inventory includes ArqonBus shim live status and current hierarchy-editor path.
   - Use this before attempting manual workaround scripts.
 
-## G-022: `pilot serve` panics with settings exceptions route conflict
+## G-026: `pilot serve` panics with settings exceptions route conflict
 
 - Signature:
   - Startup panic from Axum route registration:

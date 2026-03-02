@@ -218,6 +218,36 @@ echo "$ARQONBUS_WS_URL"
 
 ```bash
 pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788
+
+## 3.1) Governance UI appears present but returns empty/stub-like output
+
+Symptoms:
+- Settings tab buttons respond but `compliance_scan` always reports `0` repos/issues.
+- `policy resolve` ignores `repo_path` and always returns AGOrg/fallback only.
+- CLI `pilot policy preview/scan/decisions` returns non-actionable placeholder payloads.
+
+Checks:
+
+```bash
+cargo check -p pilot --locked
+cargo test -p pilot --locked
+node -c crates/pilot/src/pilot_ui.js
+```
+
+Then verify actual surfaces:
+
+```bash
+pilot --help | rg -n "^\\s+policy\\b"
+curl -sS http://127.0.0.1:7788/api/settings/decisions?kind=branch
+```
+
+Expected:
+1. `pilot policy ...` command group is visible.
+2. Settings routes exist and return structured payloads:
+   - `/api/settings/policy/resolve`
+   - `/api/settings/compliance_scan`
+   - `/api/settings/decisions`
+3. Compliance scan/resolve output varies by scope and repository state (not static zeros).
 ```
 
 Note:

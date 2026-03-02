@@ -65,6 +65,18 @@ This is the standard operator launch command for local AGOrg/Branch/Dependencies
     - `pilot create feature <name> --dry-run` 
     - `pilot know record --title ... --context ... --decision ...`
 
+6. Governance policy lifecycle (CLI)
+
+   - `pilot policy get --kind branch`
+   - `pilot policy set-draft --kind branch --file <policy.json>`
+   - `pilot policy preview --kind branch --version <n>`
+   - `pilot policy approve --kind branch --version <n> --simulation-artifact <path>`
+   - `pilot policy activate --kind branch --version <n>`
+   - `pilot policy resolve --kind branch --repo-path <abs-path>`
+   - `pilot policy scan --kind branch [--group <g>] [--tag <t>]`
+   - `pilot policy exceptions list --kind branch`
+   - `pilot policy decisions --kind branch --limit 100`
+
 ## 3. Dashboard-First Operational Flow
 
 Use the UI (`pilot serve --ui-port 7788`) as the primary control surface.
@@ -193,6 +205,10 @@ Branch tab BC-2 workflow:
     - Use `Reconcile Apply` only after reviewing dry-run output.
     - Use `Refresh Policy Artifacts` to list persisted reconciliation artifacts.
     - Use `pilot settings branch --show` on the CLI to inspect the active policy engine logic.
+    - Settings tab governance APIs now include:
+      - `/api/settings/policy/resolve`
+      - `/api/settings/compliance_scan`
+      - `/api/settings/decisions`
     - Use `List AGOrgs` and `Show Active` to verify current scope.
     - Use `Use Scope` to switch Control Panel context.
     - Use `Discover` to scan a root path with configurable depth.

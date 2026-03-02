@@ -3851,4 +3851,75 @@ async function settingsAddException() {
   settingsLoadExceptions();
 }
 
+async function settingsComplianceScan() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  
+  settingsSetStatus("Running compliance scan...", "info");
+  
+  const res = await fetchJsonSafe(`/api/settings/compliance_scan`, {
+     method: 'POST',
+     headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({
+        ago_path: target === "" ? null : target,
+        kind: kind
+     })
+  });
+  
+  if(!res.ok) {
+     settingsShowError("Scan failed: " + (res.error || 'unknown error'), res);
+     return;
+  }
+  
+  settingsSetStatus(res, 'success');
+}
+
+async function settingsExploreDecisions() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const limit = 50;
+  
+  settingsSetStatus("Loading recent decisions...", "info");
+  
+  const res = await fetchJsonSafe(`/api/settings/decisions?kind=${kind}&limit=${limit}`);
+  
+  if(!res.ok) {
+     settingsShowError("Failed to fetch decisions: " + (res.error || 'unknown error'), res);
+     return;
+  }
+  
+  if (res.decisions && res.decisions.length === 0) {
+     settingsSetStatus("No decisions found for this policy kind.", "warn");
+     return;
+  }
+  settingsSetStatus(res, 'success');
+}
+
+async function settingsResolvePolicy() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const target = document.getElementById('settings-policy-target').value.trim();
+  
+  if(!target) {
+      settingsShowError("Target (repo path) is required to resolve policy");
+      return;
+  }
+  
+  settingsSetStatus(`Resolving policy for ${target}...`, "info");
+  
+  const res = await fetchJsonSafe(`/api/settings/policy/resolve`, {
+     method: 'POST',
+     headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({
+        repo_path: target,
+        kind: kind
+     })
+  });
+  
+  if(!res.ok) {
+     settingsShowError("Resolve failed: " + (res.error || 'unknown error'), res);
+     return;
+  }
+  
+  settingsSetStatus(res, 'success');
+}
+
 bootUi();

@@ -560,6 +560,15 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
             "/api/settings/exceptions/delete/:id",
             post(api_settings_delete_exception),
         )
+        .route(
+            "/api/settings/compliance_scan",
+            post(api_settings_compliance_scan),
+        )
+        .route("/api/settings/decisions", get(api_settings_decisions))
+        .route(
+            "/api/settings/policy/resolve",
+            post(api_settings_policy_resolve),
+        )
         .route("/api/codex/action", post(run_codex_action))
         .route("/api/ui/session", get(api_ui_session_get))
         .route("/api/ui/session", post(api_ui_session_set))
@@ -6575,6 +6584,17 @@ Recommended flow:
          </div>
 
       </div>
+
+      <div class="card">
+         <h3>Compliance & Auditing</h3>
+         <p class="helper">Run on-demand branch compliance scans, resolve local policies for current context, and explore decision logs.</p>
+         
+         <div class="row">
+           <button class="btn secondary" onclick="settingsComplianceScan()">Run Compliance Scan</button>
+           <button class="btn secondary" onclick="settingsResolvePolicy()">Resolve Local Policy</button>
+           <button class="btn secondary" onclick="settingsExploreDecisions()">Explore Decisions</button>
+         </div>
+      </div>
     </div>
   </section>
 
@@ -7077,4 +7097,205 @@ async fn api_settings_delete_exception(
         }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ComplianceScanRequest {
+    ago_path: Option<String>,
+    kind: String,
+}
+
+async fn api_settings_compliance_scan(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<ComplianceScanRequest>,
+) -> Response {
+    if req.kind != "branch" {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Compliance scan currently supports only kind=branch",
+        );
+    }
+
+    let active_scope = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return error_response(StatusCode::PRECONDITION_FAILED, "No active AGOrg scope")
+        }
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let roots = scope_roots(&active_scope);
+    let registry = match branch_registry() {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let mut repos = match registry.list_repos(&multi::RepoFilter::default()) {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    repos.retain(|repo| {
+        let path = canonicalize_path_lossy(&repo.path);
+        path_in_any_root(&path, &roots)
+    });
+    if let Some(target) = req
+        .ago_path
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        repos.retain(|repo| {
+            repo.name.eq_ignore_ascii_case(target)
+                || repo.path.display().to_string().contains(target)
+        });
+    }
+    let statuses = branch::branch_status(&repos);
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    let exceptions = match gov_store.get_exceptions(active_scope.id, "branch").await {
+        Ok(v) => v,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let default_policy_json = serde_json::to_value(BranchPolicy::default()).unwrap_or(json!({}));
+    let mut issues = 0usize;
+    let mut off_policy = 0usize;
+    let mut details: Vec<Value> = Vec::with_capacity(statuses.len());
+    for st in &statuses {
+        let repo_path = canonicalize_path_lossy(Path::new(&st.path))
+            .display()
+            .to_string();
+        let (source, policy_json) = match gov_store
+            .get_ago_policy_override(active_scope.id, repo_path.as_str(), "branch")
+            .await
+        {
+            Ok(Some(p)) => ("ago", p.policy_json),
+            Ok(None) => match gov_store.get_policy(active_scope.id, "branch").await {
+                Ok(Some(p)) => ("agorg", p.policy_json),
+                _ => ("fallback_default", default_policy_json.clone()),
+            },
+            Err(_) => ("fallback_default", default_policy_json.clone()),
+        };
+        let policy: BranchPolicy =
+            serde_json::from_value(policy_json).unwrap_or_else(|_| BranchPolicy::default());
+        let eval = evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions);
+        let issue_count = eval.violations.len() + eval.warnings.len();
+        issues += issue_count;
+        if issue_count > 0 {
+            off_policy += 1;
+        }
+        details.push(json!({
+            "repo": st.repo,
+            "path": st.path,
+            "branch": st.current_branch,
+            "policy_source": source,
+            "blocked": eval.blocked,
+            "violations": eval.violations.len(),
+            "warnings": eval.warnings.len()
+        }));
+    }
+    let payload = json!({
+        "ok": true,
+        "status": if off_policy > 0 { "issues_found" } else { "pass" },
+        "kind": req.kind,
+        "scope_target": req.ago_path,
+        "scanned": details.len(),
+        "issues": issues,
+        "off_policy": off_policy,
+        "details": details
+    });
+    Json(payload).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct DecisionsQuery {
+    limit: Option<usize>,
+    kind: Option<String>,
+}
+
+async fn api_settings_decisions(
+    State(state): State<Arc<UiState>>,
+    Query(q): Query<DecisionsQuery>,
+) -> Response {
+    let active_scope = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return error_response(StatusCode::PRECONDITION_FAILED, "No active AGOrg scope")
+        }
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    let kind = q.kind.unwrap_or_else(|| "branch".to_string());
+    match gov_store
+        .get_decisions(active_scope.id, &kind, q.limit.unwrap_or(100))
+        .await
+    {
+        Ok(decisions) => Json(json!({"decisions": decisions, "kind": kind})).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PolicyResolveRequest {
+    repo_path: String,
+    kind: String,
+}
+
+async fn api_settings_policy_resolve(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<PolicyResolveRequest>,
+) -> Response {
+    let active_scope = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return error_response(StatusCode::PRECONDITION_FAILED, "No active AGOrg scope")
+        }
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    let canonical_repo = canonicalize_path_lossy(Path::new(&req.repo_path))
+        .display()
+        .to_string();
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+
+    let ago_record = match gov_store
+        .get_ago_policy_override(active_scope.id, canonical_repo.as_str(), &req.kind)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if let Some(r) = ago_record {
+        return Json(json!({
+            "ok": true,
+            "repo_path": canonical_repo,
+            "kind": req.kind,
+            "source": "ago_policy",
+            "version": r.version,
+            "status": r.status,
+            "resolved_policy": r.policy_json
+        }))
+        .into_response();
+    }
+    let agorg_record = match gov_store.get_policy(active_scope.id, &req.kind).await {
+        Ok(v) => v,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if let Some(r) = agorg_record {
+        return Json(json!({
+            "ok": true,
+            "repo_path": canonical_repo,
+            "kind": req.kind,
+            "source": "agorg_policy",
+            "version": r.version,
+            "status": r.status,
+            "resolved_policy": r.policy_json
+        }))
+        .into_response();
+    }
+    Json(json!({
+        "ok": true,
+        "repo_path": canonical_repo,
+        "kind": req.kind,
+        "source": "fallback_default",
+        "resolved_policy": BranchPolicy::default()
+    }))
+    .into_response()
 }

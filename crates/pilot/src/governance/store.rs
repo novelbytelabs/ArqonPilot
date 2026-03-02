@@ -118,6 +118,78 @@ impl GovernanceStore {
         }
     }
 
+    pub async fn get_policy_by_version(
+        &self,
+        agorg_id: Uuid,
+        ago_path: Option<&str>,
+        policy_kind: &str,
+        version: i32,
+    ) -> Result<Option<AgorgPolicyRecord>> {
+        let client = self.connect().await?;
+        let row = client
+            .query_opt(
+                "SELECT id, agorg_id, ago_path, policy_kind, version, policy_json, status, updated_at, updated_by
+                 FROM agorg_policies
+                 WHERE agorg_id = $1
+                   AND policy_kind = $2
+                   AND ago_path IS NOT DISTINCT FROM $3
+                   AND version = $4
+                 LIMIT 1",
+                &[&agorg_id, &policy_kind, &ago_path, &version],
+            )
+            .await
+            .into_diagnostic()?;
+
+        match row {
+            Some(r) => Ok(Some(AgorgPolicyRecord {
+                id: r.get(0),
+                agorg_id: r.get(1),
+                ago_path: r.get(2),
+                policy_kind: r.get(3),
+                version: r.get(4),
+                policy_json: r.get(5),
+                status: r.get(6),
+                updated_at: r.get(7),
+                updated_by: r.get(8),
+            })),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn update_policy_status(
+        &self,
+        policy_id: Uuid,
+        status: &str,
+        operator: &str,
+    ) -> Result<Option<AgorgPolicyRecord>> {
+        let client = self.connect().await?;
+        let row = client
+            .query_opt(
+                "UPDATE agorg_policies
+                 SET status = $2, updated_by = $3, updated_at = NOW()
+                 WHERE id = $1
+                 RETURNING id, agorg_id, ago_path, policy_kind, version, policy_json, status, updated_at, updated_by",
+                &[&policy_id, &status, &operator],
+            )
+            .await
+            .into_diagnostic()?;
+
+        match row {
+            Some(r) => Ok(Some(AgorgPolicyRecord {
+                id: r.get(0),
+                agorg_id: r.get(1),
+                ago_path: r.get(2),
+                policy_kind: r.get(3),
+                version: r.get(4),
+                policy_json: r.get(5),
+                status: r.get(6),
+                updated_at: r.get(7),
+                updated_by: r.get(8),
+            })),
+            None => Ok(None),
+        }
+    }
+
     pub async fn save_policy(
         &self,
         agorg_id: Uuid,
@@ -214,13 +286,34 @@ impl GovernanceStore {
     }
 
     pub async fn add_exception(&self, exception: PolicyException) -> Result<()> {
-        let client = self.connect().await?;
-        client
+        let mut client = self.connect().await?;
+        let tx = client.transaction().await.into_diagnostic()?;
+        let updated = tx
             .execute(
+                "UPDATE policy_exceptions
+                 SET reason = $6, ticket_ref = $7, owner = $8, expires_at = $9
+                 WHERE agorg_id = $2
+                   AND ago_path IS NOT DISTINCT FROM $3
+                   AND policy_kind = $4
+                   AND rule_path = $5",
+                &[
+                    &exception.id,
+                    &exception.agorg_id,
+                    &exception.ago_path,
+                    &exception.policy_kind,
+                    &exception.rule_path,
+                    &exception.reason,
+                    &exception.ticket_ref,
+                    &exception.owner,
+                    &exception.expires_at,
+                ],
+            )
+            .await
+            .into_diagnostic()?;
+        if updated == 0 {
+            tx.execute(
                 "INSERT INTO policy_exceptions (id, agorg_id, ago_path, policy_kind, rule_path, reason, ticket_ref, owner, expires_at, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                 ON CONFLICT (agorg_id, ago_path, policy_kind, rule_path) 
-                 DO UPDATE SET reason = EXCLUDED.reason, ticket_ref = EXCLUDED.ticket_ref, owner = EXCLUDED.owner, expires_at = EXCLUDED.expires_at",
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
                 &[
                     &exception.id,
                     &exception.agorg_id,
@@ -236,6 +329,8 @@ impl GovernanceStore {
             )
             .await
             .into_diagnostic()?;
+        }
+        tx.commit().await.into_diagnostic()?;
         Ok(())
     }
 
@@ -271,6 +366,30 @@ impl GovernanceStore {
             .await
             .into_diagnostic()?;
         Ok(())
+    }
+
+    pub async fn get_decisions(
+        &self,
+        agorg_id: Uuid,
+        policy_kind: &str,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT decision_json FROM policy_decisions
+                 WHERE agorg_id = $1 AND policy_kind = $2
+                 ORDER BY created_at DESC LIMIT $3",
+                &[&agorg_id, &policy_kind, &(limit as i64)],
+            )
+            .await
+            .into_diagnostic()?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            results.push(r.get(0));
+        }
+        Ok(results)
     }
 
     pub async fn get_idempotency_response(

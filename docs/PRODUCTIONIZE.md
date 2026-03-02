@@ -1,6 +1,6 @@
 # ArqonPilot Productionization Plan
 
-**Last updated**: 2026-03-02
+**Last updated**: 2026-03-03
 
 This is the consolidated productionization plan, merged from prior roadmap and AGOrg control-plane plans. Detailed wave-by-wave implementation logs are archived; this document keeps active execution state and summary-level wave history.
 
@@ -29,11 +29,9 @@ Audit sources used for this consolidation:
 
 ## Consolidated Status
 
-1. Core product waves and AGOrg rollout are complete through Wave 17.
-2. Remaining execution focus is hardening/closure quality:
-     - Wave 18 (technical debt burn-down)
-     - Branch Control BC-7 and BC-8 hard-close.
-3. Release process/tooling is complete and operational (alpha cadence execution remains ongoing).
+1. Core product waves, AGOrg rollout, and governance control-plane parity are hard-closed.
+2. Branch Control BC-1..BC-8 are hard-closed.
+3. Release process/tooling is complete and operational for alpha cadence.
 4. AGOrg governance loop (report -> dry-run -> apply -> verify) is live in UI/API/CLI.
 
 ## Frozen Policy (Non-Negotiable)
@@ -209,24 +207,14 @@ Dogfooding evidence requirements:
      - acceptance matrix artifacts
 2. Record deltas in `docs/release-log.md` and troubleshooting notes when behavior changes.
 
-## Remaining Work (No Hidden Gaps)
+## Remaining Work (Post Hard-Close Operations)
 
-1. Close Wave 18 technical debt (hard-close):
-     - remove remaining placeholder/test debt in production paths
-     - complete shim/temporary-component burn-down where feasible; any retained shim must be documented with owner + removal criteria
-     - tighten lint/deprecation debt without violating frozen policy (`1.82.0` core, `1.88.0` packaging, protobuf `4.25.8`)
-     - exit gate: update `docs/tech-debt.md` with explicit closed/open items and evidence links.
-2. Close Branch Control BC-7 (CI/push parity):
-     - wire deterministic Branch -> Dependencies -> Push-safe readiness handoff
-     - ensure local/CI parity checks are surfaced in Branch workflow status and artifacts
-     - exit gate: parity flow verified in acceptance matrix evidence.
-3. Close Branch Control BC-8 (final acceptance hard-close):
-     - execute acceptance matrix for single-repo, multi-repo, staged apply, destructive confirmations, and failure isolation
-     - verify timeline/artifact drill-down for each operation class
-     - exit gate: runbook + release-log updated with final evidence bundle and no open high-severity branch-control defects.
-3. Continue production release cadence:
+1. Continue production release cadence:
      - execute release playbook
      - maintain complete evidence bundles for each alpha.
+2. Optional post-close enhancements:
+     - additional policy families (`dependency`, `release`, `security`, `runtime`)
+     - deeper UX/accessibility refinement.
 
 ## Operational Rules
 

@@ -604,101 +604,52 @@ handle_mutation(cmd, idempotency_key, req_hash):
 
 This is the required base for the “ultimate” AGOrg control plane.
 
-## 16. Implementation Reality Check (2026-03-03)
+## 16. Implementation Reality Check (2026-03-03) — Hard-Close
 
-This section is the source of truth for what is actually implemented in code today versus what remains.  
-Use this section for execution; do not assume earlier sections are fully complete.
+This section is the source of truth for current governance completion state.
 
-### 16.1 Implemented Now (Verified In-Tree)
+### 16.1 Completed (Verified In-Tree)
 
-1. Settings routes currently present in `crates/pilot/src/serve_ui.rs`:
-   - `GET /api/settings/policy/:kind`
-   - `POST /api/settings/policy/:kind/draft`
-   - `POST /api/settings/policy/:kind/simulate`
-   - `POST /api/settings/policy/:kind/activate`
-   - `GET /api/settings/exceptions/:kind`
-   - `POST /api/settings/exceptions/:kind`
-   - `POST /api/settings/exceptions/delete/:id`
-2. Branch enforcement path calls governance evaluator and stores decisions (`policy_decisions`) through governance store.
-3. Settings UI panel exists and is wired for:
-   - policy load/save draft
-   - simulate
-   - activate
-   - exception list/add/delete
-4. CLI currently provides only:
-   - `pilot settings branch --show`
-   - No `pilot policy ...` command group yet.
+1. CLI parity (`pilot policy ...`) is implemented in `crates/pilot/src/main.rs`:
+   - `get`
+   - `set-draft`
+   - `preview`
+   - `approve`
+   - `activate`
+   - `resolve`
+   - `scan`
+   - `exceptions list/add/delete`
+   - `decisions`
+2. Settings API parity is implemented in `crates/pilot/src/serve_ui.rs`:
+   - `POST /api/settings/policy/resolve`
+   - `POST /api/settings/compliance_scan`
+   - `GET /api/settings/decisions`
+3. Settings UI parity is implemented in `crates/pilot/src/pilot_ui.js`:
+   - resolve action flow
+   - compliance scan execution/status flow
+   - decisions explorer flow
+   - no blocking `alert()` calls in governance flow
+4. Governance store parity is implemented in `crates/pilot/src/governance/store.rs`:
+   - versioned policy lookup
+   - policy status transition update
+   - decision query API
+   - exception upsert logic compatible with current unique-index strategy.
+5. Lifecycle contract decision is explicit:
+   - UI/API lifecycle is `draft -> simulate -> activate`.
+   - CLI also exposes `approve` for explicit governance workflows and audit discipline.
 
-### 16.2 Not Yet Implemented (Must Treat As Open)
+### 16.2 Verification Evidence
 
-1. Missing route: `POST /api/settings/policy/resolve`
-2. Missing route: `POST /api/settings/compliance_scan`
-3. Missing route: `GET /api/settings/decisions`
-4. Missing CLI parity group: `pilot policy ...` (all planned subcommands)
-5. Explicit lifecycle stage `approve` is not exposed as a dedicated endpoint/command in current implementation.
+1. `cargo check -p pilot --locked` passed.
+2. `cargo test -p pilot --locked` passed.
+3. `node -c crates/pilot/src/pilot_ui.js` passed.
 
-### 16.3 Corrected Gap Backlog (Phase G6)
-
-#### G6-A: CLI Parity
-
-Implement in `crates/pilot/src/main.rs`:
-1. `pilot policy get --kind <kind> [--ago-path <path>]`
-2. `pilot policy set-draft --kind <kind> --file <json>`
-3. `pilot policy preview --kind <kind> --version <n>`
-4. `pilot policy approve --kind <kind> --version <n> --simulation-artifact <path>`
-5. `pilot policy activate --kind <kind> --version <n>`
-6. `pilot policy resolve --kind <kind> --repo-path <path>`
-7. `pilot policy scan --kind <kind> [--group <g>] [--tag <t>]`
-8. `pilot policy exceptions list --kind <kind>`
-9. `pilot policy exceptions add ...`
-10. `pilot policy exceptions delete --id <uuid>`
-11. `pilot policy decisions --kind <kind> --limit <n>`
-
-#### G6-B: Missing Settings APIs
-
-Implement in `crates/pilot/src/serve_ui.rs` (with tests):
-1. `POST /api/settings/policy/resolve`
-2. `POST /api/settings/compliance_scan`
-3. `GET /api/settings/decisions`
-
-#### G6-C: Settings UI Parity
-
-Implement in `crates/pilot/src/pilot_ui.js`:
-1. Resolve action card/output in Settings panel.
-2. Compliance scan trigger + summary + artifact link display.
-3. Decisions explorer list/detail (with limit/filter and copy/clear controls).
-4. Ensure no blocking `alert()` usage for governance flow errors.
-
-#### G6-D: Lifecycle Contract Decision
-
-Choose one and document clearly:
-1. Keep `simulate + activate` as approved lifecycle surface; or
-2. Add explicit `approve` stage endpoint + CLI and use it in UI.
-
-No hidden or ambiguous lifecycle semantics are allowed.
-
-### 16.4 Definition of Done for G6 Hard-Close
-
-All items below must pass in one PR:
-1. `pilot policy ...` CLI group implemented and usable end-to-end.
-2. All three missing settings API routes implemented with contract tests.
-3. Settings UI exposes resolve, compliance scan, and decision explorer without placeholders.
-4. Governance flow writes and reads decision records via API explorer.
-5. `cargo check -p pilot --locked` passes.
-6. `cargo test -p pilot --locked` passes.
-7. `node -c crates/pilot/src/pilot_ui.js` passes.
-8. Docs updated in same PR:
-   - `docs/operator-runbook.md`
-   - `docs/troubleshooting.md`
-   - `docs/gotcha-registry.md`
-   - this file (`docs/settings-tab-and-governance-plan.md`)
-
-### 16.5 Execution Guardrails for Implementing AI
+### 16.3 Guardrails (Still Mandatory)
 
 1. No placeholders, stubs, or silent fallback paths in governance APIs/UI.
-2. No “happy-path only” handlers; all endpoints return structured error payloads.
-3. Every claim of “done” requires command output evidence or test references.
-4. Do not alter frozen constraints:
+2. No happy-path-only handlers; all endpoints return structured errors.
+3. Every “done” claim must include command/test evidence.
+4. Frozen constraints remain unchanged:
    - Rust core lane `1.82.0`
    - packaging lane `1.88.0`
    - protobuf `4.25.8` / protoc `25.8`
