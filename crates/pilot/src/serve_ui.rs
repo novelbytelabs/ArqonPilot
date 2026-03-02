@@ -374,6 +374,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/agorg/create_project", post(api_agorg_create_project))
         .route("/api/agorg/update", post(api_agorg_update))
         .route("/api/agorg/delete", post(api_agorg_delete))
+        .route("/api/agorg/reset", post(api_agorg_reset))
         .route("/api/agorg/use", post(api_agorg_use))
         .route("/api/agorg/discover", post(api_agorg_discover))
         .route(
@@ -1044,7 +1045,7 @@ async fn api_agorg_import_selected(
             let approved_paths: Vec<String> = discovery
                 .candidates
                 .iter()
-                .filter(|c| c.kind == "ago")
+                .filter(|c| c.kind == "ago" || c.kind == "folder")
                 .map(|c| c.path.clone())
                 .collect();
             let review_record = AgorgReviewRecord {
@@ -1474,6 +1475,22 @@ async fn api_agorg_delete(
 ) -> Response {
     match state.agorg_store.delete_agorg(req.id).await {
         Ok(count) => Json(json!({"ok": true, "deleted_count": count})).into_response(),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+async fn api_agorg_reset(
+    State(state): State<Arc<UiState>>,
+) -> Response {
+    if !state.allow_mutations {
+        return error_response(StatusCode::FORBIDDEN, "reset blocked in read-only UI mode");
+    }
+    match state.agorg_store.reset_all().await {
+        Ok((agorgs, agos)) => Json(json!({
+            "ok": true,
+            "deleted_agorgs": agorgs,
+            "deleted_agos": agos
+        })).into_response(),
         Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     }
 }
@@ -5156,12 +5173,10 @@ Recommended flow:
         <div class="grid" style="margin-top:16px; grid-template-columns: 1fr;">
           <!-- Section 1: Target Definition -->
           <div class="section-box">
-            <h4>Target Definition</h4>
-            <label class="field-label" for="agorg-name">Name</label>
-            <input id="agorg-name" placeholder="Arqon" value="Arqon" />
+            <h4>1) TARGET</h4>
             <label class="field-label" for="agorg-master">Directory</label>
             <div class="row">
-              <input id="agorg-master" placeholder="/path/to/parent/dir" value="/home/irbsurfer/Projects/arqon" />
+              <input id="agorg-master" placeholder="/path/to/parent/dir" value="" />
               <button class="btn secondary" onclick="browseAgorgMaster()">Browse…</button>
             </div>
           </div>
@@ -5169,13 +5184,12 @@ Recommended flow:
 
         <!-- Section: Discovery Review -->
         <div class="section-box" style="margin-top:16px;">
-          <h4>Discovery Review (Approve / Reject)</h4>
+          <h4>2) DISCOVERY REVIEW</h4>
           <div class="row" style="justify-content: space-between;">
             <div class="row">
               <button class="btn" onclick="agorgDiscoverPreview()">Discover</button>
               <button class="btn secondary" onclick="agorgSelectAllReview(true)">Select All</button>
               <button class="btn secondary" onclick="agorgSelectAllReview(false)">Deselect All</button>
-              <button class="btn secondary" onclick="agorgLoadReviews()">Load Review</button>
             </div>
             <div class="row">
                <div class="btn-glow-wrap" style="margin-left:auto;">
@@ -5183,7 +5197,7 @@ Recommended flow:
                </div>
             </div>
           </div>
-          <div class="row" style="margin-top:8px;">
+          <div class="row" style="margin-top:8px; display:none;">
             <label class="field-label" for="agorg-review-select">Saved Review Sessions</label>
             <select id="agorg-review-select" style="max-width: 300px; display: inline-block;"></select>
             <button class="btn secondary" onclick="agorgLoadSelectedReview()">Load</button>
@@ -5196,7 +5210,7 @@ Recommended flow:
 
         <!-- Section 3: Governance & Policy -->
         <div class="section-box" style="margin-top:16px;">
-          <h4>Governance & Policy</h4>
+          <h4>3) GOVERNANCE & POLICY</h4>
           <div class="row">
             <select id="agorg-reconcile-class">
               <option value="">all classes</option>
@@ -5213,6 +5227,9 @@ Recommended flow:
             <button class="btn secondary" onclick="agorgLoadPolicyReports()">Refresh Policy Artifacts</button>
             <select id="agorg-policy-report-select"></select>
             <button class="btn secondary" onclick="agorgOpenPolicyReport()">Open</button>
+          </div>
+          <div class="row" style="margin-top:12px; border-top:1px solid rgba(255,46,46,0.2); padding-top:12px;">
+            <button class="btn" style="background:rgba(255,46,46,0.15); border-color:rgba(255,46,46,0.4); color:#ff4444;" onclick="agorgResetDb()" title="Wipe all AGOrg and AGO records from the database. This is for testing only.">⚠️ Reset Database</button>
           </div>
         </div>
 

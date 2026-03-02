@@ -1508,19 +1508,21 @@ function renderAgorgDiscoveryReview() {
     agorgDiscoveryReview.innerHTML = '<div class="tl-empty">Run Discover Preview to populate candidates.</div>';
     return;
   }
-  const agoCount = candidates.filter(c => c.kind === 'ago').length;
-  const approvedCount = candidates.filter(c => c.kind === 'ago' && agorgApprovedPaths.has(c.path)).length;
+  const selectableCount = candidates.filter(c => c.kind === 'ago' || c.kind === 'folder').length;
+  const approvedCount = candidates.filter(c => (c.kind === 'ago' || c.kind === 'folder') && agorgApprovedPaths.has(c.path)).length;
   const rows = candidates.map((c) => {
-    const disabled = c.kind !== 'ago' ? 'disabled' : '';
-    const checked = c.kind === 'ago' && agorgApprovedPaths.has(c.path) ? 'checked' : '';
+    const selectable = c.kind === 'ago' || c.kind === 'folder';
+    const disabled = selectable ? '' : 'disabled';
+    const checked = selectable && agorgApprovedPaths.has(c.path) ? 'checked' : '';
     const isDefault = agorgDefaultScopeCandidate === c.path;
     const defaultChecked = isDefault ? 'checked' : '';
     
-    let icon = '📁';
+    let icon = '📄';
     let kindTag = 'OTHER';
     let chipClass = 'neutral';
     if (c.kind === 'agorg') { icon = '🏢'; kindTag = 'ORG'; chipClass = 'warn'; }
     else if (c.kind === 'ago') { icon = '📦'; kindTag = 'AGO'; chipClass = 'ok'; }
+    else if (c.kind === 'folder') { icon = '📁'; kindTag = 'DIR'; chipClass = 'neutral'; }
 
     const designationHtml = isDefault 
       ? `<span class="chip" style="background:rgba(255,234,0,0.15); color:#ffea00; border-color:rgba(255,234,0,0.5); box-shadow:0 0 10px rgba(255,234,0,0.3);">⭐ DEFAULT</span>`
@@ -1542,7 +1544,7 @@ function renderAgorgDiscoveryReview() {
   }).join('');
   agorgDiscoveryReview.innerHTML = `
     <div style="padding:6px 4px;color:#a8b9e3;font-size:0.82rem;display:flex;justify-content:space-between;">
-      <span>Approved ${approvedCount}/${agoCount} AGO candidates</span>
+      <span>Approved ${approvedCount}/${selectableCount} candidates</span>
       ${agorgDefaultScopeCandidate ? `<span style="color:#ffea00;font-weight:600;">⭐ Default Scope Selected</span>` : `<span style="color:var(--dim);">No Default Scope Selected</span>`}
     </div>
     ${rows}
@@ -1589,6 +1591,10 @@ async function agorgDiscoverPreview() {
   out.textContent = JSON.stringify(data, null, 2);
   if (data.ok && data.discovery) {
     setDiscoveryCache(data.discovery);
+
+    // Auto-set the root directory as the default scope candidate
+    agorgDefaultScopeCandidate = root;
+
     if (data.review && data.review.review_id) {
       currentAgorgReviewId = data.review.review_id;
       if (Array.isArray(data.review.approved_paths)) {
@@ -1605,80 +1611,117 @@ async function agorgDiscoverPreview() {
 }
 
 async function agorgImportApproved() {
-  const nameVal = document.getElementById('agorg-name').value.trim();
-  const masterVal = document.getElementById('agorg-master').value.trim();
-  
-  if (!nameVal || !masterVal) {
-    agorgOut.textContent = JSON.stringify({ ok: false, error: 'Name and Directory are required.' }, null, 2);
-    return;
+  try {
+    const masterVal = document.getElementById('agorg-master').value.trim();
+    
+    if (!masterVal) {
+      agorgOut.textContent = JSON.stringify({ ok: false, error: 'Directory is required.' }, null, 2);
+      return;
+    }
+    if (!agorgDefaultScopeCandidate) {
+      agorgOut.textContent = JSON.stringify({ ok: false, error: 'You must designate a Default (⭐) directory first. This directory becomes the AGOrg.' }, null, 2);
+      return;
+    }
+    
+    // The AGOrg name comes from the default directory name
+    const agorgName = agorgDefaultScopeCandidate.split('/').filter(Boolean).pop() || 'AGOrg';
+    
+    // Separate AGOrg candidate from AGO candidates
+    const candidates = Array.isArray(agorgDiscoveryCache?.candidates) ? agorgDiscoveryCache.candidates : [];
+    const agoCandidates = candidates.filter(c => 
+      c.path !== agorgDefaultScopeCandidate && agorgApprovedPaths.has(c.path)
+    );
+    
+    // 1. Create the AGOrg from the default directory
+    const createReq = {
+      name: agorgName,
+      root: agorgDefaultScopeCandidate,
+      master: masterVal,
+      parent: null,
+      scan_depth: 4,
+      autoscan: false,
+      import: false,
+      prune_missing: false,
+      default_scope: true
+    };
+    
+    agorgOut.textContent = `Creating AGOrg "${agorgName}" from ${agorgDefaultScopeCandidate}...`;
+    const createRes = await fetchJsonSafe('/api/agorg/create_project', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify(createReq)
+    });
+    
+    if (!createRes.ok || !createRes.agorg) {
+      agorgOut.textContent = "Failed to create AGOrg: " + JSON.stringify(createRes, null, 2);
+      return;
+    }
+    
+    const activeId = createRes.agorg.id;
+    agorgOut.textContent += `\nAGOrg created: ${activeId}\nImporting ${agoCandidates.length} AGO candidates...`;
+    
+    // 2. Import the checked AGO candidates (NOT the default directory — that IS the AGOrg)
+    //    Tag each candidate with the AGOrg name so the backend can write proper pyproject.toml
+    const taggedCandidates = agoCandidates.map(c => ({
+      ...c,
+      parent_hint: agorgName
+    }));
+    
+    const req = {
+      agorg: activeId,
+      root: masterVal,
+      depth: 4,
+      candidates: taggedCandidates,
+      prune_missing: false,
+      review_id: currentAgorgReviewId || null,
+      default_scope_path: null,
+      agorg_name: agorgName
+    };
+    
+    const data = await fetchJsonSafe('/api/agorg/import_selected', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify(req)
+    });
+    
+    const text = JSON.stringify(data, null, 2);
+    agorgOut.textContent = text;
+    out.textContent = text;
+    
+    if (data.ok) {
+      if (data.review && data.review.review_id) {
+        currentAgorgReviewId = data.review.review_id;
+      }
+      await agorgTree();
+      await agorgList();
+      await agorgShowActive();
+      await agorgLoadReviews();
+    }
+  } catch (err) {
+    agorgOut.textContent = 'JS ERROR in agorgImportApproved: ' + err.message + '\n' + err.stack;
   }
+}
 
-  // 1. Create the AGOrg without auto-import
-  const createReq = {
-    name: nameVal,
-    root: masterVal,
-    master: masterVal,
-    parent: null,
-    scan_depth: 4,
-    autoscan: true, 
-    import: false, 
-    prune_missing: true,
-    default_scope: true
-  };
-
-  agorgOut.textContent = "Creating AGOrg...";
-  const createRes = await fetchJsonSafe('/api/agorg/create_project', {
+async function agorgResetDb() {
+  if (!confirm('This will DELETE all AGOrg and AGO records from the database. Are you sure?')) return;
+  agorgOut.textContent = 'Resetting database...';
+  const data = await fetchJsonSafe('/api/agorg/reset', {
     method: 'POST',
     headers: {'content-type':'application/json'},
-    body: JSON.stringify(createReq)
+    body: '{}'
   });
-
-  if (!createRes.ok || !createRes.agorg) {
-    agorgOut.textContent = "Failed to create AGOrg: " + JSON.stringify(createRes, null, 2);
-    return;
-  }
-
-  const activeId = createRes.agorg.id;
-
-  // 2. Import the approved candidates
-  const candidates = Array.isArray(agorgDiscoveryCache?.candidates) ? agorgDiscoveryCache.candidates : [];
-  if (!candidates.length) {
-    agorgOut.textContent = JSON.stringify({ ok: true, note: 'AGOrg created, but no candidates to import.' }, null, 2);
-    await refreshAgorgHeader();
-    return;
-  }
-  
-  const approved = candidates.filter(c => c.kind !== 'ago' || agorgApprovedPaths.has(c.path));
-  
-  const req = {
-    agorg: activeId,
-    root: agorgDiscoveryCache.root || masterVal,
-    depth: 4,
-    candidates: approved,
-    prune_missing: true,
-    review_id: currentAgorgReviewId || null,
-    default_scope_path: agorgDefaultScopeCandidate || null
-  };
-  
-  agorgOut.textContent = "Importing approved repositories...";
-  const data = await fetchJsonSafe('/api/agorg/import_selected', {
-    method: 'POST',
-    headers: {'content-type':'application/json'},
-    body: JSON.stringify(req)
-  });
-  
   const text = JSON.stringify(data, null, 2);
   agorgOut.textContent = text;
   out.textContent = text;
-  
   if (data.ok) {
-    if (data.review && data.review.review_id) {
-      currentAgorgReviewId = data.review.review_id;
-    }
+    agorgDiscoveryCache = null;
+    agorgApprovedPaths = new Set();
+    agorgDefaultScopeCandidate = null;
+    currentAgorgReviewId = null;
+    renderAgorgDiscoveryReview();
     await agorgTree();
     await agorgList();
-    await agorgShowActive();
-    await agorgLoadReviews();
+    await refreshAgorgHeader();
   }
 }
 

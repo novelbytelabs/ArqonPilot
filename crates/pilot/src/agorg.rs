@@ -283,6 +283,17 @@ impl AgorgStore {
         Ok(deleted)
     }
 
+    /// Wipe all AGOrg and AGO records from the database (for testing).
+    pub async fn reset_all(&self) -> Result<(u64, u64)> {
+        self.initialize().await?;
+        let client = self.connect().await?;
+        let agos = client.execute("DELETE FROM agos", &[]).await.into_diagnostic()?;
+        let agorgs = client.execute("DELETE FROM agorgs", &[]).await.into_diagnostic()?;
+        let key = self.app_state_key(ACTIVE_AGORG_KEY_BASE);
+        let _ = client.execute("DELETE FROM app_state WHERE key = $1", &[&key]).await;
+        Ok((agorgs, agos))
+    }
+
     pub async fn list_agorgs(&self) -> Result<Vec<Agorg>> {
         self.initialize().await?;
         let client = self.connect().await?;
@@ -893,15 +904,31 @@ impl AgorgStore {
                 let path = PathBuf::from(&c.path);
                 keep_paths.push(canonicalize_or_input(&path));
                 
-                // If it was just a plain folder, let's bootstrap an AGO marker
-                if c.kind == "folder" && path.exists() {
+                // Bootstrap pyproject.toml with parent hierarchy if missing
+                if path.exists() {
                     let pyproject = path.join("pyproject.toml");
                     if !pyproject.exists() {
+                        let parent_name = c.parent_hint.as_deref().unwrap_or("");
                         let content = format!(
                             "[tool.arqon.relationships]\nparent = \"{}\"\nchildren = []\n",
-                            c.parent_hint.as_deref().unwrap_or("")
+                            parent_name
                         );
-                        let _ = fs::write(pyproject, content);
+                        if let Err(e) = fs::write(&pyproject, &content) {
+                            eprintln!("[agorg] Failed to write pyproject.toml at {:?}: {}", pyproject, e);
+                        } else {
+                            eprintln!("[agorg] Created pyproject.toml at {:?} with parent={}", pyproject, parent_name);
+                        }
+                    }
+                    // Init git if needed
+                    if !path.join(".git").exists() {
+                        match std::process::Command::new("git")
+                            .arg("init")
+                            .current_dir(&path)
+                            .output()
+                        {
+                            Ok(out) => eprintln!("[agorg] git init in {:?}: {}", path, String::from_utf8_lossy(&out.stdout)),
+                            Err(e) => eprintln!("[agorg] git init failed in {:?}: {}", path, e),
+                        }
                     }
                 }
 
