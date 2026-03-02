@@ -9,6 +9,12 @@ use tokio::process::Command;
 const DEFAULT_DB_NAME: &str = "pilot_local";
 const DEFAULT_PORT: u16 = 9132;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DbMode {
+    Tcp,
+    UnixSocket,
+}
+
 #[derive(Debug, Clone)]
 pub struct PilotDbManager {
     pub root_dir: PathBuf,
@@ -33,6 +39,18 @@ pub struct DbStatus {
 }
 
 impl PilotDbManager {
+    fn db_mode(&self) -> DbMode {
+        match std::env::var("PILOT_DB_MODE")
+            .ok()
+            .map(|v| v.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("unix") | Some("unix_socket") | Some("socket") => DbMode::UnixSocket,
+            Some("tcp") => DbMode::Tcp,
+            _ => DbMode::Tcp,
+        }
+    }
+
     pub fn from_env() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let pilot_home = std::env::var("PILOT_HOME")
@@ -67,43 +85,48 @@ impl PilotDbManager {
     }
 
     pub fn endpoint_mode(&self) -> &'static str {
-        if cfg!(windows) {
-            "tcp"
-        } else {
-            "unix_socket"
+        match self.db_mode() {
+            DbMode::Tcp => "tcp",
+            DbMode::UnixSocket => "unix_socket",
         }
     }
 
     pub fn target_dsn(&self) -> String {
-        if cfg!(windows) {
-            format!(
-                "host=127.0.0.1 port={} user={} dbname={}",
-                self.port, self.user, self.db_name
-            )
-        } else {
-            format!(
-                "host={} port={} user={} dbname={}",
-                self.socket_dir.display(),
-                self.port,
-                self.user,
-                self.db_name
-            )
+        match self.db_mode() {
+            DbMode::Tcp => {
+                format!(
+                    "host=127.0.0.1 port={} user={} dbname={}",
+                    self.port, self.user, self.db_name
+                )
+            }
+            DbMode::UnixSocket => {
+                format!(
+                    "host={} port={} user={} dbname={}",
+                    self.socket_dir.display(),
+                    self.port,
+                    self.user,
+                    self.db_name
+                )
+            }
         }
     }
 
     pub fn maintenance_dsn(&self) -> String {
-        if cfg!(windows) {
-            format!(
-                "host=127.0.0.1 port={} user={} dbname=postgres",
-                self.port, self.user
-            )
-        } else {
-            format!(
-                "host={} port={} user={} dbname=postgres",
-                self.socket_dir.display(),
-                self.port,
-                self.user
-            )
+        match self.db_mode() {
+            DbMode::Tcp => {
+                format!(
+                    "host=127.0.0.1 port={} user={} dbname=postgres",
+                    self.port, self.user
+                )
+            }
+            DbMode::UnixSocket => {
+                format!(
+                    "host={} port={} user={} dbname=postgres",
+                    self.socket_dir.display(),
+                    self.port,
+                    self.user
+                )
+            }
         }
     }
 
@@ -187,10 +210,9 @@ impl PilotDbManager {
         } else {
             false
         };
-        let endpoint = if cfg!(windows) {
-            format!("127.0.0.1:{}", self.port)
-        } else {
-            format!("{}/.s.PGSQL.{}", self.socket_dir.display(), self.port)
+        let endpoint = match self.db_mode() {
+            DbMode::Tcp => format!("127.0.0.1:{}", self.port),
+            DbMode::UnixSocket => format!("{}/.s.PGSQL.{}", self.socket_dir.display(), self.port),
         };
         Ok(DbStatus {
             initialized,
@@ -263,15 +285,23 @@ impl PilotDbManager {
     }
 
     fn postgres_opts(&self) -> String {
-        if cfg!(windows) {
-            // Keep local-only TCP on Windows, using deterministic high port.
-            format!("-p {} -c listen_addresses=127.0.0.1", self.resolve_port())
-        } else {
-            format!(
-                "-k {} -p {} -c listen_addresses='' -c unix_socket_permissions=0700",
-                self.socket_dir.display(),
-                self.port
-            )
+        match self.db_mode() {
+            DbMode::Tcp => {
+                // Keep local-only TCP with deterministic high port.
+                // Force socket directory away from /var/run/postgresql so non-root users can start cleanly.
+                format!(
+                    "-k {} -p {} -c listen_addresses=127.0.0.1",
+                    self.socket_dir.display(),
+                    self.resolve_port()
+                )
+            }
+            DbMode::UnixSocket => {
+                format!(
+                    "-k {} -p {} -c listen_addresses='' -c unix_socket_permissions=0700",
+                    self.socket_dir.display(),
+                    self.port
+                )
+            }
         }
     }
 

@@ -9,7 +9,7 @@ theme:
   logo: assets/favicon.ico
   favicon: assets/favicon.ico
   features:
-#    - navigation.tabs
+    #    - navigation.tabs
     - navigation.sections
     - navigation.expand
     - navigation.tracking
@@ -48,6 +48,7 @@ nav:
   - Troubleshooting: "troubleshooting.md"
   - Testing Strategy: "testing-strategy.md"
   - Operator Runbook: "operator-runbook.md"
+  - Governance & Policy Guide: "governance-guide.md"
   - Branch Management Guide: "branch-management-guide.md"
   - Releases:
       - 0.2.0-alpha.1: "releases/0.2.0-alpha.1.md"

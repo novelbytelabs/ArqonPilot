@@ -192,6 +192,7 @@ Branch tab BC-2 workflow:
     - Use `Reconcile Dry Run` before mutation to preview prune impact.
     - Use `Reconcile Apply` only after reviewing dry-run output.
     - Use `Refresh Policy Artifacts` to list persisted reconciliation artifacts.
+    - Use `pilot settings branch --show` on the CLI to inspect the active policy engine logic.
     - Use `List AGOrgs` and `Show Active` to verify current scope.
     - Use `Use Scope` to switch Control Panel context.
     - Use `Discover` to scan a root path with configurable depth.

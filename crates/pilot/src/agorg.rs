@@ -1138,8 +1138,7 @@ impl AgorgStore {
                   policy_json JSONB NOT NULL,
                   status TEXT NOT NULL DEFAULT 'draft',
                   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                  updated_by TEXT NOT NULL,
-                  UNIQUE NULLS NOT DISTINCT (agorg_id, ago_path, policy_kind, version)
+                  updated_by TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS policy_exceptions (
@@ -1152,9 +1151,14 @@ impl AgorgStore {
                   ticket_ref TEXT NULL,
                   owner TEXT NOT NULL,
                   expires_at TIMESTAMPTZ NOT NULL,
-                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                  UNIQUE NULLS NOT DISTINCT (agorg_id, ago_path, policy_kind, rule_path)
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS agorg_policies_scope_uq
+                  ON agorg_policies (agorg_id, COALESCE(ago_path, '__agorg__'), policy_kind, version);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS policy_exceptions_scope_uq
+                  ON policy_exceptions (agorg_id, COALESCE(ago_path, '__agorg__'), policy_kind, rule_path);
 
                 CREATE TABLE IF NOT EXISTS policy_decisions (
                   decision_id UUID PRIMARY KEY,
