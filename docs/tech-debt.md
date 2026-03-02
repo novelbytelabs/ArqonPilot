@@ -53,7 +53,7 @@ This document tracks identified technical debt, placeholders, and architectural 
 
 ### 9. Low: AGOrg command naming inconsistency in docs
 - **Issue**: Docs mention `create_project` while CLI uses `create-project`.
-- **Ref**: `docs/agorg-control-plane-plan.md:256`
+- **Ref**: `docs/PRODUCTIONIZE.md`
 - **Impact**: Documentation Quality
 
 ---

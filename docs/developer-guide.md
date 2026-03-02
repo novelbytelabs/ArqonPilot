@@ -6,9 +6,9 @@ repositories independent for security and lifecycle isolation.
 
 ## Canonical References
 
-1. Unified roadmap/program plan: `docs/roadmap-and-execution-plan.md`
-2. Branch Control master execution plan: `docs/branch-control-master-plan.md`
-3. AGOrg control-plane plan: `docs/agorg-control-plane-plan.md`
+1. Unified roadmap/program plan: `docs/PRODUCTIONIZE.md`
+2. AGOrg control-plane content is consolidated into: `docs/PRODUCTIONIZE.md`
+3. Branch Control detailed historical plan: `archives/docs/plans/branch-control-master-plan.md`
 4. Gotcha/failure registry: `docs/gotcha-registry.md`
 
 ## Prerequisites

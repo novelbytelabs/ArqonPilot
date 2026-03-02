@@ -1,5 +1,7 @@
 # Arqon Pilot Branch Control Master Plan
 
+> Archived detailed plan snapshot (2026-03-02): BC-1 through BC-6 are hard-closed. BC-7 and BC-8 remain open and are now tracked in `docs/PRODUCTIONIZE.md`.
+
 ## AI Handoff Summary (Copy/Paste First)
 
 Arqon Pilot needs a **single, safe, secure, and powerful Branch Control system** that replaces fragmented Branch/Multi/Dashboard branch actions with one coherent control plane for AGOrg-scoped fleet operations.  
@@ -42,7 +44,7 @@ Relevant files:
 - CLI command wiring: `crates/pilot/src/main.rs`
 - Branch engine: `crates/pilot-branch/src/lib.rs`
 - Multi-repo orchestration engine: `crates/pilot-multi/src/lib.rs`
-- AGOrg plan and context: `docs/agorg-control-plane-plan.md`
+- AGOrg plan and context: `docs/PRODUCTIONIZE.md`
 - Gotchas registry: `docs/gotcha-registry.md`
 
 Current issues to fix:
@@ -420,7 +422,7 @@ Branch Control is only done when **all** are true:
 - `docs/operator-runbook.md` (operator workflows)
 - `docs/developer-guide.md` (internal architecture/extension points)
 - `docs/testing-strategy.md` (test matrix and policy)
-- `docs/roadmap-and-execution-plan.md` (program-level roadmap tie-in)
+- `docs/PRODUCTIONIZE.md` (program-level roadmap tie-in)
 
 ## Recommended Next Session Priority
 

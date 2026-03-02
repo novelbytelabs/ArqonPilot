@@ -108,12 +108,11 @@ pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --teleme
 
 ## Documentation
 
-- [Roadmap & Execution Plan](roadmap-and-execution-plan.md)
-- [AGOrg Control Plane Plan](agorg-control-plane-plan.md)
-- [Branch Control Master Plan](branch-control-master-plan.md)
+- [Productionization Plan (Roadmap + AGOrg merged)](PRODUCTIONIZE.md)
 - [Gotcha Registry](gotcha-registry.md)
 - [Developer Guide](developer-guide.md)
 - [Troubleshooting](troubleshooting.md)
 - [Testing Strategy](testing-strategy.md)
 - [Operator Runbook](operator-runbook.md)
 - [Branch Management Guide](branch-management-guide.md)
+- Archived detailed plans are kept under `archives/docs/plans/` in the repository.

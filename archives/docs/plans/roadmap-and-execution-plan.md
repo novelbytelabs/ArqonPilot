@@ -1,6 +1,6 @@
 # ArqonPilot Unified Master Plan
 
-**Last updated**: 2026-02-28 22:30 EST
+**Last updated**: 2026-03-02 21:35 EST
 
 This is the canonical execution plan for ArqonPilot. It merges product delivery, guardrails, testing, and documentation into one system plan so work does not fragment across sessions.
 
@@ -9,6 +9,26 @@ This is the canonical execution plan for ArqonPilot. It merges product delivery,
 1. Branch Control execution source of truth: `docs/branch-control-master-plan.md`
 2. AGOrg control-plane execution source of truth: `docs/agorg-control-plane-plan.md`
 3. Failure signatures and recoveries: `docs/gotcha-registry.md`
+
+## Audit Snapshot (2026-03-02)
+
+This roadmap was re-audited against current execution sources:
+
+1. `docs/agorg-control-plane-plan.md` (Wave K complete)
+2. `docs/branch-control-master-plan.md` (BC-1..BC-6 hard-closed; stabilization added)
+3. `docs/operator-runbook.md` and release docs under `docs/release-*.md`
+
+### Consolidated Status
+
+1. Waves `0-16`: Completed.
+2. Wave `17` (AGOrg reconciliation/policy conformance): Completed (previously stale as "Planned").
+3. Wave `18` (technical debt burn-down): In progress.
+4. Branch Control BC track:
+   - BC-1..BC-6: Completed.
+   - BC-7..BC-8: Open and tracked in `docs/branch-control-master-plan.md`.
+5. Release track:
+   - Release process/playbook/docs are implemented.
+   - Final alpha publication cadence remains operational work (not a roadmap blocker for core feature completeness).
 
 ## Frozen Policy (Non-Negotiable)
 
@@ -250,7 +270,7 @@ Completion summary:
      - `scripts/push_main.sh` now retries transient network failures for both fetch/push.
      - final summary and failure classification remain deterministic after retry exhaustion.
 
-## Wave 14 (Documentation and Testing Closure)
+## Wave 14 (Documentation and Testing Closure) - Completed
 
 Deliverables:
 
@@ -269,8 +289,20 @@ Progress update:
 1. Added `scripts/ui_smoke_check.sh` for Control Panel + API smoke validation (shim + serve + key endpoint/action checks).
 2. Updated operator/testing documentation to align with tab-level `Recommended Sequence` UX and explicit status-chip workflows.
 3. Added CI `ui-smoke` job in `.github/workflows/ci.yml` to run deterministic panel/API smoke checks on push/PR.
+4. Documentation set is now in place:
+   - `README.md`
+   - `docs/operator-runbook.md`
+   - `docs/developer-guide.md`
+   - `docs/testing-strategy.md`
+   - `docs/troubleshooting.md`
+   - `docs/gotcha-registry.md`
+   - `docs/release-playbook.md` + `docs/release-log.md`
 
-## Wave 15 (Production Release Gate)
+Closure note:
+
+1. Wave 14 is complete as a delivery milestone; docs/tests continue as living maintenance.
+
+## Wave 15 (Production Release Gate) - Completed (Process/Infrastructure)
 
 Deliverables:
 
@@ -282,6 +314,23 @@ Exit criteria:
 
 1. Deterministic release with reproducible artifacts.
 2. Install/runbook validated in clean environment.
+
+Completion notes:
+
+1. Canonical release process is documented end-to-end:
+   - `docs/release-playbook.md`
+   - `docs/release-log.md`
+   - `docs/releases/0.2.0-alpha.1.md`
+2. Release verification scripts are present and referenced in runbooks:
+   - `scripts/release_readiness_check.sh`
+   - `scripts/release_collect_evidence.sh`
+   - `scripts/verify_pypi_release.sh`
+3. Packaging and visibility verification are integrated in workflow guidance.
+
+Scope clarification:
+
+1. This wave closes release gate capability and process.
+2. Individual future alpha tags remain normal operational releases.
 
 ## Wave 16 (AGOrg Scope and Multi-Organization Control Plane) - Completed
 
@@ -341,7 +390,7 @@ Progress update:
    - `DB Start`
    - `DB Stop`
 
-## Wave 17 (AGOrg Reconciliation and Policy Conformance) - Planned
+## Wave 17 (AGOrg Reconciliation and Policy Conformance) - Completed
 
 Deliverables:
 
@@ -363,12 +412,22 @@ Exit criteria:
 3. Operator can apply selected reconciliation actions without destructive defaults.
 4. Reconciliation output is persisted and auditable.
 
+Completion notes:
+
+1. Reconciliation report/dry-run/apply loop is operational from Dashboard + AGOrg panel.
+2. Duplicate resolution controls (winner/loser previews + kind filters) are implemented.
+3. Class-based policy views are implemented (`policy_branch`, `policy_dependency`, `metadata`, `topology`).
+4. Artifacts are persisted and discoverable through report listing endpoints.
+5. Governance hard-close evidence is tracked in `docs/agorg-control-plane-plan.md` (Wave J/K sections).
+
 ## Wave 18 (Technical Debt Burn-Down) - In Progress
 
 Goal:
-1. Remove placeholder behavior, reduce shim fragility, and harden failure paths that can silently regress quality.
+
+**Remove placeholder behavior, reduce shim fragility, and harden failure paths that can silently regress quality.**
 
 Planned deliverables:
+
 1. Replace fake test scaffolds and placeholder tests with real assertions.
 2. Remove panic-prone mutation paths in AGOrg editing APIs.
 3. Consolidate bus shim lifecycle controls behind one runtime path.
@@ -376,30 +435,49 @@ Planned deliverables:
 5. Reduce broad lint suppressions (`allow(dead_code)`, legacy deprecated allowances) where practical.
 
 Current progress (this iteration):
+
 1. Replaced generated scaffold test body in `pilot-create`:
-   - removed `assert!(true)`/TODO template
-   - now asserts expected generated source file exists.
+     - removed `assert!(true)`/TODO template
+     - now asserts expected generated source file exists.
 2. Replaced placeholder vector integration test with real vector insert + search assertions.
 3. Replaced placeholder ship version file test with real `SemVer::from_cargo_toml` assertions.
 4. Hardened `edit_relationship` against malformed TOML table shapes:
-   - removed production `unwrap()` panic risk
-   - returns explicit miette errors instead.
+     - removed production `unwrap()` panic risk
+     - returns explicit miette errors instead.
 5. Added regression test:
-   - `test_edit_relationship_handles_malformed_tool_table`.
+     - `test_edit_relationship_handles_malformed_tool_table`.
 6. Closed TD Wave 3 shim consolidation:
-   - introduced shared runtime adapter `crates/pilot/src/shim_runtime.rs`
-   - unified shim lifecycle command construction for both `main.rs` and `serve_ui.rs`.
+     - introduced shared runtime adapter `crates/pilot/src/shim_runtime.rs`
+     - unified shim lifecycle command construction for both `main.rs` and `serve_ui.rs`.
 7. Closed TD Wave 4 checklist hardening:
-   - replaced temporary-component checklist string probes with semantic payload-contract checks.
+     - replaced temporary-component checklist string probes with semantic payload-contract checks.
 8. Enabled command-lane validation by default in UI smoke:
-   - `scripts/ui_smoke_check.sh` now defaults `PILOT_UI_SMOKE_INCLUDE_COMMANDS=1`
-   - CI `ui-smoke` job sets `PILOT_UI_SMOKE_INCLUDE_COMMANDS: "1"`.
+     - `scripts/ui_smoke_check.sh` now defaults `PILOT_UI_SMOKE_INCLUDE_COMMANDS=1`
+     - CI `ui-smoke` job sets `PILOT_UI_SMOKE_INCLUDE_COMMANDS: "1"`.
 
-Exit criteria:
+**Exit criteria:**
+
 1. No fake/pass-through assertions remain in active non-fixture test paths.
 2. No known panic-on-user-input path remains in AGOrg mutation APIs.
 3. Temporary components and shims are either removed or centralized with explicit inventory contracts.
 4. UI smoke command-lane checks are enabled by default in both local and CI execution.
+
+## Remaining Work (No Hidden Gaps)
+
+The project is **feature-complete** at roadmap level through Wave 17. Remaining work is concentrated in hardening/finalization tracks:
+
+1. Wave 18 technical debt completion:
+     - finish placeholder/shim/lint debt burn-down items still open.
+2. Branch Control BC-7 and BC-8 closure:
+     - CI/push parity integration and final branch-control acceptance hard-close.
+     - source of truth: `docs/branch-control-master-plan.md`.
+3. Ongoing release operations:
+     - execute alpha release cadence using established playbook/evidence flow.
+
+If you are checking "are we leaving features unimplemented?":
+
+1. Core product capability set is implemented.
+2. Open items are hardening/closure quality tracks, not missing foundational feature families.
 
 ## Operational Rules
 

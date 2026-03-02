@@ -7,7 +7,7 @@ This document captures the long-term AGOrg vision and the implementation plan so
 ## Related Plans
 
 1. Branch orchestration hardening and tab unification: `docs/branch-control-master-plan.md`
-2. Program-level roadmap and sequencing: `docs/roadmap-and-execution-plan.md`
+2. Program-level roadmap and sequencing: `docs/PRODUCTIONIZE.md`
 3. Operational failures and recovery recipes: `docs/gotcha-registry.md`
 
 ---
