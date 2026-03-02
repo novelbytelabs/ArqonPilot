@@ -93,7 +93,7 @@ pilot navigate --multi --group core --dry-run
 1. Start the control panel:
 
 ```bash
-pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788
+cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
 ```
 
 2. Open `http://127.0.0.1:7788`.

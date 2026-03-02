@@ -55,6 +55,12 @@ Use `pilot serve` to expose Branch and Multi operations through ArqonBus command
 pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry
 ```
 
+Canonical full-control launch command (repo-local build, mutations enabled):
+
+```bash
+cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
+```
+
 If ArqonBus is frozen and its default module entrypoint is incompatible in your checkout,
 start the compatibility shim from this repo instead of editing ArqonBus:
 

@@ -52,7 +52,14 @@ cargo run -p pilot -- multi status --group core
 cargo run -p pilot -- branch create feat/pilot-wave --group core --dry-run
 cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry
 cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788
+cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
 cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-command pilot.branch.status --ui-allow-command pilot.multi.status
+```
+
+Canonical full-control UI start command:
+
+```bash
+cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
 ```
 
 ## Critical Linux/Conda Runtime Step

@@ -33,6 +33,12 @@ pilot serve \
   --ui-port 7788
 ```
 
+Canonical operator launch (repo-local, mutations enabled):
+
+```bash
+cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
+```
+
 Safer default UI mode (recommended):
 - UI/API mutation commands are blocked unless `--ui-allow-mutations` is set.
 - You can restrict commands further with:

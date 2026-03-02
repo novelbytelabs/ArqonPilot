@@ -9,7 +9,7 @@ theme:
   logo: assets/favicon.ico
   favicon: assets/favicon.ico
   features:
-    - navigation.tabs
+#    - navigation.tabs
     - navigation.sections
     - navigation.expand
     - navigation.tracking

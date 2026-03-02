@@ -4860,7 +4860,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
     input::placeholder, textarea::placeholder { color: var(--dim); }
     input:focus, select:focus, textarea:focus {
-      outline: none;
+      outline: 2px solid rgba(0, 245, 255, 0.8);
+      outline-offset: 2px;
       border-color: rgba(0, 245, 255, 0.4);
       box-shadow: 0 0 0 3px rgba(0, 245, 255, 0.06), 0 0 12px rgba(0, 245, 255, 0.08);
       background: rgba(0, 0, 0, 0.4);
@@ -4993,7 +4994,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
     .seq-step-btn:hover,
     .seq-step-btn:focus-visible {
-      outline: none;
+      outline: 2px solid rgba(0, 245, 255, 0.8);
+      outline-offset: 2px;
       border-color: rgba(0, 245, 255, 0.45);
       background: rgba(0, 245, 255, 0.08);
       color: var(--text);
@@ -5882,14 +5884,19 @@ Recommended flow:
     <div class="grid">
       <div class="card" style="grid-column: 1 / -1;">
         <h3>Fleet Branch Matrix</h3>
-        <div class="helper">Filter repos, inspect branch health, and select exact targets for branch actions.</div>
+        <div class="helper">Use search + base branch for daily flow. Open Advanced Filters only when you need cohort scoping.</div>
         <div class="row">
-          <input id="branch-matrix-group" placeholder="group (optional)" />
-          <input id="branch-matrix-tags" placeholder="tags (comma-separated)" />
           <input id="branch-matrix-search" placeholder="search repo/path" />
+          <input id="branch-matrix-base" placeholder="compare against branch" value="main" />
         </div>
+        <details id="branch-matrix-advanced" class="subtle-block">
+          <summary style="cursor:pointer; color:var(--text-muted); font-size:0.86rem;">Advanced Filters (group/tags)</summary>
+          <div class="row" style="margin-top:8px;">
+            <input id="branch-matrix-group" placeholder="group (optional)" />
+            <input id="branch-matrix-tags" placeholder="tags (comma-separated)" />
+          </div>
+        </details>
         <div class="row">
-          <input id="branch-matrix-base" placeholder="base branch for ahead/behind" value="main" />
           <button id="branch-matrix-refresh-btn" class="btn secondary" onclick="branchLoadMatrix()">Refresh Matrix</button>
           <button class="btn secondary" onclick="branchSelectVisible()">Select Visible</button>
           <button class="btn secondary" onclick="branchClearSelection()">Clear Selection</button>

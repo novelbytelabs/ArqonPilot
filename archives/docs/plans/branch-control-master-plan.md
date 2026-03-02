@@ -486,3 +486,43 @@ Branch Control is only done when **all** are true:
   - Dashboard workflow strip is now clickable and keyboard-accessible (button semantics).
   - Click behavior is hint-only (tab jump + guidance output), with no command execution.
   - Intended as macro/chatbot handoff surface for future automation.
+
+## Iteration 4 - 2026-03-02: UX/Accessibility Hardening
+
+### Completed
+- **Focus State Accessibility** (serve_ui.rs):
+  - Restored visible focus indicators for `input:focus`, `select:focus`, `textarea:focus` 
+  - Added `outline: 2px solid rgba(0, 245, 255, 0.8)` with `outline-offset: 2px`
+  - Fixed `.seq-step-btn:focus-visible` focus indicators
+
+- **Workflow Rail Accessibility** (pilot_ui.js):
+  - Added `title` attributes for hover tooltips to all workflow chips
+  - Added `aria-label` attributes for screen reader support
+  - Tooltips describe chip purpose and current state
+
+- **Branch Empty State Improvements** (pilot_ui.js):
+  - Added `role="status"` and `aria-live="polite"` to Timeline, Logs, and Matrix empty states
+  - Added actionable messages with next steps
+  - Added "Refresh Matrix" button for empty matrix recovery
+
+- **Error Display Enhancement** (pilot_ui.js):
+  - Created `showInlineError()` function with `role="alert"` and `aria-live="assertive"`
+  - Replaced 4 browser `alert()` calls with inline error display
+  - Errors now include actionable next step guidance
+
+- **Branch Source Chip Tooltips** (pilot_ui.js):
+  - Added `getBranchSourceTooltip()` function explaining:
+    - "registry": "Data from local registry"
+    - "bootstrapped": "Auto-created from current scope"  
+    - "autodiscovered": "Imported from discovered AGOrg repositories"
+    - "empty": "No branches found. Try adjusting filters or refresh."
+
+### Verification
+- `node -c crates/pilot/src/pilot_ui.js` - PASSED
+- `cargo check -p pilot --locked` - PASSED
+- Live API smoke test - `/api/branch/matrix` returns correct source metadata
+
+### Notes
+- Behavior remains hint-only (no macro execution)
+- Focus states now visible for keyboard navigation
+- Screen readers can now announce status changes

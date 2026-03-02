@@ -205,6 +205,7 @@ const branchMatrixBody = document.getElementById('branch-matrix-body');
 const branchMatrixSummary = document.getElementById('branch-matrix-summary');
 const branchMatrixRefreshBtn = document.getElementById('branch-matrix-refresh-btn');
 const branchMatrixSourceChip = document.getElementById('branch-matrix-source-chip');
+const branchMatrixAdvanced = document.getElementById('branch-matrix-advanced');
 const branchPreviewState = document.getElementById('branch-preview-state');
 const branchPruneModal = document.getElementById('branch-prune-modal');
 const branchPruneConfirmInput = document.getElementById('branch-prune-confirm-input');
@@ -328,6 +329,7 @@ function collectUiSessionState() {
     branch_matrix_tags: readInputValue('branch-matrix-tags'),
     branch_matrix_search: readInputValue('branch-matrix-search'),
     branch_matrix_base: readInputValue('branch-matrix-base'),
+    branch_matrix_advanced_open: !!(branchMatrixAdvanced && branchMatrixAdvanced.open),
     branch_log_limit: readInputValue('branch-log-limit'),
     codex_contract_id: readInputValue('codex-contract-id'),
     sub_tabs: subTabs
@@ -364,6 +366,9 @@ function applyUiSessionState(session) {
   setVal('branch-matrix-tags', session.branch_matrix_tags);
   setVal('branch-matrix-search', session.branch_matrix_search);
   setVal('branch-matrix-base', session.branch_matrix_base);
+  if (branchMatrixAdvanced && session.branch_matrix_advanced_open !== undefined && session.branch_matrix_advanced_open !== null) {
+    branchMatrixAdvanced.open = !!session.branch_matrix_advanced_open;
+  }
   setVal('branch-log-limit', session.branch_log_limit);
   setVal('codex-contract-id', session.codex_contract_id);
 }
@@ -533,6 +538,37 @@ function setChipState(chip, label, state, suffix) {
   chip.className = 'chip ' + level;
   const detail = suffix ? (': ' + suffix) : '';
   chip.textContent = label + detail;
+  // Add accessibility attributes for screen readers and tooltips
+  const tooltipText = getBranchSourceTooltip(suffix);
+  chip.setAttribute('title', tooltipText || label + detail + ' - Click for details');
+  chip.setAttribute('aria-label', label + ' chip: Current state is ' + (suffix || 'unknown'));
+}
+
+// Tooltip explanations for branch source types
+function getBranchSourceTooltip(source) {
+  const tooltips = {
+    'registry': 'Data from local registry',
+    'bootstrapped': 'Auto-created from current scope',
+    'autodiscovered': 'Imported from discovered AGOrg repositories',
+    'empty': 'No branches found. Try adjusting filters or refresh.'
+  };
+  return tooltips[source] || null;
+}
+
+// Display inline error message with role="alert" for accessibility
+function showInlineError(message, containerEl = null) {
+  const targetEl = containerEl || out;
+  const errorDiv = document.createElement('div');
+  errorDiv.className = 'error-message';
+  errorDiv.setAttribute('role', 'alert');
+  errorDiv.setAttribute('aria-live', 'assertive');
+  errorDiv.innerHTML = '<strong>Error:</strong> ' + message + '<br><small>Please try again or adjust your settings.</small>';
+  // Clear previous error and insert new one
+  const existing = targetEl.querySelector('.error-message');
+  if (existing) existing.remove();
+  targetEl.insertBefore(errorDiv, targetEl.firstChild);
+  // Also log the error for visibility
+  console.error('[Error]', message);
 }
 
 async function run(command, payload, opts = {}) {
@@ -801,7 +837,9 @@ function renderTimeline() {
   if (!items.length) {
     const empty = document.createElement('div');
     empty.className = 'tl-empty';
-    empty.textContent = 'No operations yet';
+    empty.setAttribute('role', 'status');
+    empty.setAttribute('aria-live', 'polite');
+    empty.innerHTML = '<p>Timeline is empty. Branches with activity will appear here.</p>';
     timelineEl.appendChild(empty);
     return;
   }
@@ -1022,7 +1060,9 @@ function branchRenderLog() {
   if (!branchLogItems.length) {
     const empty = document.createElement('div');
     empty.className = 'muted';
-    empty.textContent = 'No branch activity entries yet.';
+    empty.setAttribute('role', 'status');
+    empty.setAttribute('aria-live', 'polite');
+    empty.innerHTML = '<p>No activity logged yet. Actions will appear here.</p>';
     branchLogList.appendChild(empty);
     if (branchLogSummary) branchLogSummary.textContent = '0 log entries';
     return;
@@ -1104,8 +1144,10 @@ function renderBranchMatrix() {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
     td.colSpan = 10;
-    td.className = 'muted';
-    td.textContent = 'No repos matched current filter/scope.';
+    td.setAttribute('role', 'status');
+    td.setAttribute('aria-live', 'polite');
+    td.innerHTML = '<p>No branches found. Try adjusting filters or refresh the matrix.</p>' +
+      '<button class="action-btn" onclick="refreshBranchMatrix()" title="Click to refresh the branch matrix">Refresh Matrix</button>';
     tr.appendChild(td);
     branchMatrixBody.appendChild(tr);
     if (branchMatrixSummary) branchMatrixSummary.textContent = '0 repos shown, 0 selected';
@@ -2261,8 +2303,8 @@ function renderAgorgDiscoveryReview() {
     else if (c.kind === 'folder') { icon = '📁'; kindTag = 'DIR'; chipClass = 'neutral'; }
 
     const designationHtml = isDefault 
-      ? `<span class="chip" style="background:rgba(0,245,255,0.15); color:var(--accent); border-color:rgba(0,245,255,0.5); box-shadow:0 0 10px rgba(0,245,255,0.3);">AGOrg</span>`
-      : `<span class="chip ${chipClass}">${kindTag}</span>`;
+      ? `<span class="chip" style="background:rgba(0,245,255,0.15); color:var(--accent); border-color:rgba(0,245,255,0.5); box-shadow:0 0 10px rgba(0,245,255,0.3);" title="Default AGOrg scope" aria-label="AGOrg scope: default">AGOrg</span>`
+      : `<span class="chip ${chipClass}" title="${kindTag} designation" aria-label="${kindTag} chip: ${c.kind} type">${kindTag}</span>`;
 
     return `<div style="display:grid;grid-template-columns:30px 30px 90px 1fr;gap:8px;align-items:center;padding:8px 4px;border-bottom:1px solid rgba(0,245,255,0.15); transition:background 0.2s; ${checked ? 'background:rgba(0,245,255,0.05);' : ''}">
       <div title="Set as AGOrg Scope">
@@ -2346,7 +2388,7 @@ async function agorgDiscoverPreview() {
 async function agorgCreateNewFolder() {
   const root = document.getElementById('agorg-master').value.trim();
   if (!root) {
-    alert("Please select or enter a master directory first.");
+    showInlineError("Please select or enter a master directory first.", out);
     return;
   }
   const folderName = prompt("Enter new folder name:");
@@ -2365,7 +2407,7 @@ async function agorgCreateNewFolder() {
     agorgDiscoverPreview();
   } else {
     logActivity("Folder Creation Failed", data);
-    alert("Failed to create folder: " + (data.error || "Unknown error"));
+    showInlineError("Failed to create folder: " + (data.error || "Unknown error"), out);
   }
 }
 
@@ -2378,7 +2420,7 @@ async function agorgImportApproved() {
       return;
     }
     if (!agorgDefaultScopeCandidate) {
-      alert("⚠️ ACTION REQUIRED\n\nYou must select a directory to serve as the AGOrg for this group. Use the radio buttons in the Discovery Review panel to designate one.");
+      showInlineError("You must select a directory to serve as the AGOrg for this group. Use the radio buttons in the Discovery Review panel to designate one.", out);
       logActivity("Import Refused", "No AGOrg candidate selected. User must select one via radio button.");
       return;
     }
@@ -2840,7 +2882,7 @@ async function agorgBatchCreate() {
     use_git: !!document.getElementById('agorg-create-git').checked
   };
   if (!req.destination || !req.name) {
-    alert("Destination and Name are required.");
+    showInlineError("Destination and Name are required.", out);
     return;
   }
   const res = await fetch('/api/agorg/batch-create', {
@@ -3547,6 +3589,9 @@ async function bootUi() {
         if (currentTab === 'branch') branchLoadMatrix();
       });
     });
+  if (branchMatrixAdvanced) {
+    branchMatrixAdvanced.addEventListener('toggle', () => queueUiSessionSave());
+  }
   if (branchLogLimitInput) {
     branchLogLimitInput.addEventListener('change', () => {
       persistBranchLogLimit();

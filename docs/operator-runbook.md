@@ -15,6 +15,16 @@ This runbook defines the standard operating procedure for running Arqon Pilot ac
     - `~/.pilot/audit.jsonl`
     - `~/.pilot/reports/*.json`
 
+### Canonical Control Panel Start (Mutations Enabled)
+
+Use this exact command when operating the full UI control plane:
+
+```bash
+cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
+```
+
+This is the standard operator launch command for local AGOrg/Branch/Dependencies actions from the UI.
+
 ## 2. Daily Safe Workflow (Dry-Run First)
 
 1. Registry and health

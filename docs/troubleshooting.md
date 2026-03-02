@@ -179,6 +179,12 @@ cargo run -p pilot -- serve --help
 
 2. Install an updated package version that includes `serve`.
 
+Canonical full-control startup command:
+
+```bash
+cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
+```
+
 ## 2.1) `pilot db` is unrecognized
 
 Symptom:
