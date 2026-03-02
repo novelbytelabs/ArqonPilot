@@ -353,7 +353,90 @@ struct CodexContractRecord {
     updated_at_unix: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UiRuntimeEntry {
+    pid: u32,
+    port: u16,
+    instance_id: String,
+    version: String,
+    binary_fingerprint: String,
+    started_at_unix: u64,
+}
+
+fn ui_runtime_registry_path() -> PathBuf {
+    reports_root().join("ui_runtime_registry.json")
+}
+
+fn ui_binary_fingerprint() -> String {
+    let exe = std::env::current_exe().ok();
+    if let Some(path) = exe {
+        if let Ok(meta) = fs::metadata(&path) {
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            return format!("{}|{}|{}", env!("CARGO_PKG_VERSION"), meta.len(), mtime);
+        }
+    }
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+fn process_alive(pid: u32) -> bool {
+    PathBuf::from(format!("/proc/{pid}")).exists()
+}
+
+fn enforce_ui_runtime_version_guard(port: u16, instance_id: &str) -> Result<()> {
+    let path = ui_runtime_registry_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).into_diagnostic()?;
+    }
+    let mut entries: Vec<UiRuntimeEntry> = if path.exists() {
+        let raw = fs::read_to_string(&path).into_diagnostic()?;
+        serde_json::from_str(&raw).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    entries.retain(|e| process_alive(e.pid));
+
+    let current_fp = ui_binary_fingerprint();
+    if let Some(conflict) = entries
+        .iter()
+        .find(|e| e.binary_fingerprint != current_fp)
+        .cloned()
+    {
+        return Err(miette::miette!(
+            "Refusing mixed Pilot UI versions: running pid={} port={} version={} fingerprint={} conflicts with current version={} fingerprint={}",
+            conflict.pid,
+            conflict.port,
+            conflict.version,
+            conflict.binary_fingerprint,
+            env!("CARGO_PKG_VERSION"),
+            current_fp
+        ));
+    }
+
+    let pid = std::process::id();
+    entries.retain(|e| e.pid != pid);
+    entries.push(UiRuntimeEntry {
+        pid,
+        port,
+        instance_id: instance_id.to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        binary_fingerprint: current_fp,
+        started_at_unix: now_unix(),
+    });
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&entries).into_diagnostic()?,
+    )
+    .into_diagnostic()?;
+    Ok(())
+}
+
 pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
+    enforce_ui_runtime_version_guard(cfg.port, &cfg.instance_id)?;
     let (event_tx, _) = broadcast::channel(512);
     spawn_bus_telemetry_listener(cfg.bus.clone(), event_tx.clone());
     let codex_contracts_log = codex_contracts_log_path();
