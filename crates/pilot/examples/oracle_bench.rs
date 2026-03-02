@@ -11,11 +11,11 @@ fn main() {
     benchmark_python_parsing();
 
     // 2. Hash computation speed
-    benchmark_hashing();
+    // benchmark_hashing();
 }
 
 fn benchmark_rust_parsing() {
-    let rust_code = include_str!("../src/oracle/mod.rs");
+    let rust_code = include_str!("../src/main.rs");
 
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -92,6 +92,8 @@ if __name__ == "__main__":
     );
 }
 
+// Benchmark hashing removed because `sha2` crate is no longer a direct dependency.
+/*
 fn benchmark_hashing() {
     use sha2::{Digest, Sha256};
 
@@ -119,3 +121,4 @@ fn benchmark_hashing() {
         1_000_000_000.0 / per_hash as f64
     );
 }
+*/

@@ -218,6 +218,8 @@ const branchCreateChip = document.getElementById('branch-create-chip');
 const branchSyncChip = document.getElementById('branch-sync-chip');
 const branchPruneChip = document.getElementById('branch-prune-chip');
 const branchStatusChip = document.getElementById('branch-status-chip');
+const settingsStatusOut = document.getElementById('settings-status-out');
+const settingsStatusPanel = document.getElementById('settings-status-panel');
 const branchCreatePreviewBtn = document.getElementById('branch-create-preview-btn');
 const branchCreateExecBtn = document.getElementById('branch-create-exec-btn');
 const branchSyncPreviewBtn = document.getElementById('branch-sync-preview-btn');
@@ -271,6 +273,10 @@ function activatePanel(tabName, opts = {}) {
   }
   if (tabName === 'branch') {
     branchLoadMatrix();
+  }
+  if (tabName === 'settings') {
+    settingsLoadPolicy();
+    settingsLoadExceptions();
   }
   if (persist && !restoringUiSession) queueUiSessionSave();
 }
@@ -3616,6 +3622,233 @@ async function bootUi() {
   restoreBranchLogLimit();
   refreshBranchPreviewState();
   branchRenderLog();
+}
+
+/* ==========================================================================
+ * SETTINGS & GOVERNANCE UI
+ * ========================================================================== */
+
+let settingsActiveSimulationId = "";
+
+function settingsSetStatus(data, level = 'info') {
+  if (!settingsStatusOut) return;
+  const rendered = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  settingsStatusOut.textContent = rendered;
+  if (settingsStatusPanel) {
+    settingsStatusPanel.classList.remove('ok', 'warn', 'fail');
+    if (level === 'success') settingsStatusPanel.classList.add('ok');
+    if (level === 'warn') settingsStatusPanel.classList.add('warn');
+    if (level === 'error') settingsStatusPanel.classList.add('fail');
+  }
+}
+
+function settingsShowError(message, context = null) {
+  const payload = context ? `${message}\n${JSON.stringify(context, null, 2)}` : message;
+  settingsSetStatus(payload, 'error');
+  if (settingsStatusPanel) {
+    showInlineError(message, settingsStatusPanel);
+  }
+  logActivity('Settings Error', context || { error: message });
+}
+
+async function settingsLoadPolicy() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const target = document.getElementById('settings-policy-target').value.trim();
+  const editor = document.getElementById('settings-policy-editor');
+  
+  let url = `/api/settings/policy/${kind}`;
+  if (target) url += `?ago_path=${encodeURIComponent(target)}`;
+  
+  const res = await fetchJsonSafe(url);
+  if (!res.ok) {
+    if (res.error === "Policy not found") {
+       editor.value = "{\n  // No policy specific to this scope. Will fallback/inherit.\n}";
+       settingsSetStatus("No policy found for this target. Editor is in fallback/inherit mode.", 'warn');
+    } else {
+       settingsShowError('Error loading policy: ' + (res.error || 'unknown error'), res);
+    }
+    return;
+  }
+  editor.value = JSON.stringify(res.policy_json, null, 2);
+  settingsSetStatus(res, 'success');
+  logActivity('Loaded Policy', `Kind: ${kind}\nID: ${res.id}\nStatus: ${res.status}`);
+  settingsActiveSimulationId = "";
+}
+
+async function settingsDraftPolicy() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  const editor = document.getElementById('settings-policy-editor');
+  
+  let policyJson;
+  try {
+    policyJson = JSON.parse(editor.value);
+  } catch(e) {
+    settingsShowError("Invalid JSON in editor");
+    return;
+  }
+
+  const res = await fetchJsonSafe(`/api/settings/policy/${kind}/draft`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+       ago_path: target === "" ? null : target,
+       policy_json: policyJson
+    })
+  });
+  
+  if (!res.ok) {
+    settingsShowError('Failed to save draft: ' + (res.error || 'unknown error'), res);
+    return;
+  }
+  settingsSetStatus(res, 'success');
+  settingsActiveSimulationId = "";
+  settingsLoadPolicy();
+}
+
+async function settingsSimulatePolicy() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  const editor = document.getElementById('settings-policy-editor');
+  
+  let policyJson;
+  try {
+    policyJson = JSON.parse(editor.value);
+  } catch(e) {
+    settingsShowError("Invalid JSON in editor");
+    return;
+  }
+
+  const res = await fetchJsonSafe(`/api/settings/policy/${kind}/simulate`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+       ago_path: target === "" ? null : target,
+       policy_json: policyJson
+    })
+  });
+  
+  if (!res.ok) {
+    logActivity('Simulation Failed', res.error);
+    settingsShowError('Simulation failed: ' + (res.error || 'unknown error'), res);
+    return;
+  }
+  
+  settingsActiveSimulationId = res.evidence_id;
+  settingsSetStatus(res, 'success');
+  logActivity('Policy Simulation', JSON.stringify(res, null, 2));
+}
+
+async function settingsActivatePolicy() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  
+  if (!settingsActiveSimulationId) {
+    settingsShowError("Must successfully simulate policy first!");
+    return;
+  }
+
+  const res = await fetchJsonSafe(`/api/settings/policy/${kind}/activate`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+       ago_path: target === "" ? null : target,
+       simulation_evidence_id: settingsActiveSimulationId
+    })
+  });
+
+  if (!res.ok) {
+    settingsShowError('Activation failed: ' + (res.error || 'unknown error'), res);
+    return;
+  }
+  
+  settingsSetStatus(res, 'success');
+  settingsActiveSimulationId = "";
+  settingsLoadPolicy();
+}
+
+async function settingsLoadExceptions() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  
+  let url = `/api/settings/exceptions/${kind}`;
+  if (target) url += `?ago_path=${encodeURIComponent(target)}`;
+  
+  const res = await fetchJsonSafe(url);
+  const list = document.getElementById('settings-exceptions-list');
+  list.innerHTML = "";
+  if (!res.ok) {
+    if(!res.error) res.error = res;
+    settingsShowError('Failed to load exceptions', res);
+    return;
+  }
+  
+  if(Array.isArray(res)) {
+      res.forEach(exc => {
+          const opt = document.createElement("option");
+          opt.value = exc.id;
+          opt.textContent = `[${exc.rule_path}] by ${exc.owner} - ${exc.reason} (Expires: ${new Date(exc.expires_at).toLocaleString()})`;
+          list.appendChild(opt);
+      });
+      settingsSetStatus({ ok: true, loaded: res.length }, 'success');
+  }
+}
+
+async function settingsDeleteException() {
+  const list = document.getElementById('settings-exceptions-list');
+  if(!list.value) {
+     settingsShowError("Select an exception to revoke.");
+     return;
+  }
+  const res = await fetchJsonSafe(`/api/settings/exceptions/delete/${list.value}`, { method: 'POST' });
+  if(!res.ok) {
+      settingsShowError("Failed to delete: " + (res.error || 'unknown error'), res);
+      return;
+  }
+  settingsSetStatus(res, 'success');
+  settingsLoadExceptions();
+}
+
+async function settingsAddException() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  
+  const rule = document.getElementById('settings-exc-rule').value.trim();
+  const reason = document.getElementById('settings-exc-reason').value.trim();
+  const ticket = document.getElementById('settings-exc-ticket').value.trim() || "";
+  const owner = document.getElementById('settings-exc-owner').value.trim();
+  const expires = document.getElementById('settings-exc-expires').value;
+  
+  if(!rule || !reason || !owner || !expires) {
+     settingsShowError("Rule, Reason, Owner and Expiration are all required");
+     return;
+  }
+  
+  const unix = Math.floor(new Date(expires).getTime() / 1000);
+  
+  const res = await fetchJsonSafe(`/api/settings/exceptions/${kind}`, {
+     method: 'POST',
+     headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({
+        ago_path: target === "" ? null : target,
+        rule_path: rule,
+        reason: reason,
+        ticket_ref: ticket === "" ? null : ticket,
+        owner: owner,
+        expires_at_unix: unix
+     })
+  });
+  
+  if(!res.ok) {
+     settingsShowError("Failed to add exception: " + (res.error || 'unknown error'), res);
+     return;
+  }
+  
+  settingsSetStatus(res, 'success');
+  document.getElementById('settings-exc-rule').value = "";
+  document.getElementById('settings-exc-reason').value = "";
+  document.getElementById('settings-exc-ticket').value = "";
+  settingsLoadExceptions();
 }
 
 bootUi();

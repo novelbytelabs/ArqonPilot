@@ -352,6 +352,26 @@ Keep this file current whenever a new failure class appears.
   - Inventory includes ArqonBus shim live status and current hierarchy-editor path.
   - Use this before attempting manual workaround scripts.
 
+## G-022: `pilot serve` panics with settings exceptions route conflict
+
+- Signature:
+  - Startup panic from Axum route registration:
+    - `Invalid route "/api/settings/exceptions/:id": insertion failed due to conflict with previously registered route: /api/settings/exceptions/:kind`
+- Cause:
+  - Dynamic route params names do not distinguish route shape in Axum.
+  - Registering both `POST /api/settings/exceptions/:kind` and `POST /api/settings/exceptions/:id` causes a conflict.
+- Recovery:
+  1. Use non-conflicting delete route:
+     - `POST /api/settings/exceptions/delete/:id`
+  2. Keep add/list route unchanged:
+     - `GET /api/settings/exceptions/:kind`
+     - `POST /api/settings/exceptions/:kind`
+  3. Rebuild/restart:
+     - `cargo build -p pilot --locked`
+     - `cargo run -p pilot -- serve ...`
+- Prevention:
+  - For Axum route design, treat `:param` as wildcard shape only; avoid sibling routes that differ only by param name.
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`

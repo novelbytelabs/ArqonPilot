@@ -3,6 +3,7 @@ mod agorg;
 mod bus;
 mod config;
 mod db_runtime;
+mod governance;
 mod serve_ui;
 mod shim_runtime;
 use agorg::AgorgStore;
@@ -73,6 +74,8 @@ enum Commands {
     Db(DbArgs),
     /// Run Pilot as an ArqonBus command bridge
     Serve(ServeArgs),
+    /// Governance and Settings operations
+    Settings(SettingsArgs),
 }
 
 #[derive(Args)]
@@ -445,6 +448,22 @@ enum MultiCommands {
     Apply(MultiApplyArgs),
     /// Linked pull request planning
     Prs(MultiPrsArgs),
+}
+
+#[derive(Args)]
+struct SettingsArgs {
+    #[command(subcommand)]
+    command: SettingsCommands,
+}
+
+#[derive(Subcommand)]
+enum SettingsCommands {
+    /// Manage branch policies
+    Branch {
+        /// Show active branch policy json payload
+        #[arg(long)]
+        show: bool,
+    },
 }
 
 #[derive(Args)]
@@ -1897,6 +1916,7 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
             }
         }
         Commands::Agorg(args) => run_agorg(args).await,
+        Commands::Settings(args) => run_settings(args).await,
         Commands::Db(args) => run_db(args).await,
         Commands::Serve(args) => {
             let cfg = bus::BusBridgeConfig {
@@ -2338,6 +2358,7 @@ fn command_name(command: &Commands) -> &'static str {
             command: DbCommands::Status,
         }) => "db.status",
         Commands::Serve(_) => "serve",
+        Commands::Settings(_) => "settings.branch",
     }
 }
 
@@ -2390,6 +2411,51 @@ async fn run_db(args: &DbArgs) -> Result<CommandReport> {
                 "db.status",
                 "Managed DB status".to_string(),
             ))
+        }
+    }
+}
+
+async fn run_settings(args: &SettingsArgs) -> Result<CommandReport> {
+    match &args.command {
+        SettingsCommands::Branch { show } => {
+            if *show {
+                let agorg_store = AgorgStore::from_env();
+                agorg_store.initialize().await?;
+                let gov_store = governance::store::GovernanceStore::new(agorg_store.dsn());
+
+                match agorg_store.get_active_agorg().await {
+                    Ok(Some(active)) => match gov_store.get_policy(active.id, "branch").await {
+                        Ok(Some(pol)) => {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&pol.policy_json).into_diagnostic()?
+                            );
+                        }
+                        Ok(None) => {
+                            let default_policy = governance::model::BranchPolicy::default();
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&default_policy).into_diagnostic()?
+                            );
+                        }
+                        Err(e) => return Err(miette::miette!("Error loading policy: {}", e)),
+                    },
+                    Ok(None) => {
+                        let default_policy = governance::model::BranchPolicy::default();
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&default_policy).into_diagnostic()?
+                        );
+                    }
+                    Err(e) => return Err(miette::miette!("Error loading active AGOrg: {}", e)),
+                }
+                Ok(CommandReport::ok(
+                    "settings.branch",
+                    "Printed active branch policy".to_string(),
+                ))
+            } else {
+                Err(miette::miette!("Usage: pilot settings branch --show"))
+            }
         }
     }
 }

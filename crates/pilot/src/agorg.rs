@@ -287,10 +287,18 @@ impl AgorgStore {
     pub async fn reset_all(&self) -> Result<(u64, u64)> {
         self.initialize().await?;
         let client = self.connect().await?;
-        let agos = client.execute("DELETE FROM agos", &[]).await.into_diagnostic()?;
-        let agorgs = client.execute("DELETE FROM agorgs", &[]).await.into_diagnostic()?;
+        let agos = client
+            .execute("DELETE FROM agos", &[])
+            .await
+            .into_diagnostic()?;
+        let agorgs = client
+            .execute("DELETE FROM agorgs", &[])
+            .await
+            .into_diagnostic()?;
         let key = self.app_state_key(ACTIVE_AGORG_KEY_BASE);
-        let _ = client.execute("DELETE FROM app_state WHERE key = $1", &[&key]).await;
+        let _ = client
+            .execute("DELETE FROM app_state WHERE key = $1", &[&key])
+            .await;
         Ok((agorgs, agos))
     }
 
@@ -903,14 +911,14 @@ impl AgorgStore {
             if c.kind == "ago" || c.kind == "folder" {
                 let path = PathBuf::from(&c.path);
                 keep_paths.push(canonicalize_or_input(&path));
-                
+
                 // Bootstrap pyproject.toml with parent hierarchy if missing or incomplete
                 if path.exists() {
                     let parent_name = c.parent_hint.as_deref();
                     ensure_pyproject_relationships(
                         &path,
                         parent_name.or(Some("")), // AGO has parent = "AGOrgName" or ""
-                        &[], // AGOs have no children
+                        &[],                      // AGOs have no children
                     );
                     // Init git if needed
                     if !path.join(".git").exists() {
@@ -919,7 +927,11 @@ impl AgorgStore {
                             .current_dir(&path)
                             .output()
                         {
-                            Ok(out) => eprintln!("[agorg] git init in {:?}: {}", path, String::from_utf8_lossy(&out.stdout)),
+                            Ok(out) => eprintln!(
+                                "[agorg] git init in {:?}: {}",
+                                path,
+                                String::from_utf8_lossy(&out.stdout)
+                            ),
                             Err(e) => eprintln!("[agorg] git init failed in {:?}: {}", path, e),
                         }
                     }
@@ -1115,6 +1127,56 @@ impl AgorgStore {
                 CREATE TABLE IF NOT EXISTS app_state (
                   key TEXT PRIMARY KEY,
                   value JSONB NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS agorg_policies (
+                  id UUID PRIMARY KEY,
+                  agorg_id UUID NOT NULL REFERENCES agorgs(id) ON DELETE CASCADE,
+                  ago_path TEXT NULL,
+                  policy_kind TEXT NOT NULL,
+                  version INT NOT NULL,
+                  policy_json JSONB NOT NULL,
+                  status TEXT NOT NULL DEFAULT 'draft',
+                  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  updated_by TEXT NOT NULL,
+                  UNIQUE NULLS NOT DISTINCT (agorg_id, ago_path, policy_kind, version)
+                );
+
+                CREATE TABLE IF NOT EXISTS policy_exceptions (
+                  id UUID PRIMARY KEY,
+                  agorg_id UUID NOT NULL REFERENCES agorgs(id) ON DELETE CASCADE,
+                  ago_path TEXT NULL,
+                  policy_kind TEXT NOT NULL,
+                  rule_path TEXT NOT NULL,
+                  reason TEXT NOT NULL,
+                  ticket_ref TEXT NULL,
+                  owner TEXT NOT NULL,
+                  expires_at TIMESTAMPTZ NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  UNIQUE NULLS NOT DISTINCT (agorg_id, ago_path, policy_kind, rule_path)
+                );
+
+                CREATE TABLE IF NOT EXISTS policy_decisions (
+                  decision_id UUID PRIMARY KEY,
+                  agorg_id UUID NOT NULL REFERENCES agorgs(id) ON DELETE CASCADE,
+                  ago_path TEXT NOT NULL,
+                  policy_kind TEXT NOT NULL,
+                  action TEXT NOT NULL,
+                  result TEXT NOT NULL,
+                  decision_json JSONB NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
+                CREATE TABLE IF NOT EXISTS policy_leases (
+                  lease_key TEXT PRIMARY KEY,
+                  owner_id UUID NOT NULL,
+                  expires_at TIMESTAMPTZ NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS policy_idempotency (
+                  idempotency_key TEXT PRIMARY KEY,
+                  response_json JSONB NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 ",
             )
@@ -1534,13 +1596,9 @@ fn walk_dirs(
 /// - If the file exists but lacks the section, append it.
 /// - `parent`: None means `parent = []` (AGOrg), Some("name") means `parent = "name"` (AGO).
 /// - `children`: list of child AGO names (usually populated for AGOrg, empty for AGO).
-pub fn ensure_pyproject_relationships(
-    dir: &Path,
-    parent: Option<&str>,
-    children: &[String],
-) {
+pub fn ensure_pyproject_relationships(dir: &Path, parent: Option<&str>, children: &[String]) {
     let pyproject = dir.join("pyproject.toml");
-    
+
     let parent_val = match parent {
         Some(name) => format!("\"{}\"", name),
         None => "[]".to_string(),
@@ -1559,7 +1617,10 @@ pub fn ensure_pyproject_relationships(
     if !pyproject.exists() {
         // Create new file
         if let Err(e) = fs::write(&pyproject, &section) {
-            eprintln!("[agorg] Failed to create pyproject.toml at {:?}: {}", pyproject, e);
+            eprintln!(
+                "[agorg] Failed to create pyproject.toml at {:?}: {}",
+                pyproject, e
+            );
         } else {
             eprintln!("[agorg] Created pyproject.toml at {:?}", pyproject);
         }
@@ -1571,9 +1632,15 @@ pub fn ensure_pyproject_relationships(
                     // Append the section
                     let new_content = format!("{}\n{}", content.trim_end(), section);
                     if let Err(e) = fs::write(&pyproject, new_content) {
-                        eprintln!("[agorg] Failed to append relationships to {:?}: {}", pyproject, e);
+                        eprintln!(
+                            "[agorg] Failed to append relationships to {:?}: {}",
+                            pyproject, e
+                        );
                     } else {
-                        eprintln!("[agorg] Appended [tool.arqon.relationships] to {:?}", pyproject);
+                        eprintln!(
+                            "[agorg] Appended [tool.arqon.relationships] to {:?}",
+                            pyproject
+                        );
                     }
                 }
             }
