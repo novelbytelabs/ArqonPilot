@@ -198,10 +198,21 @@ const multiApplyChip = document.getElementById('multi-apply-chip');
 const multiDagBtn = document.getElementById('multi-dag-btn');
 const multiApplyDryBtn = document.getElementById('multi-apply-dry-btn');
 const multiApplyExecBtn = document.getElementById('multi-apply-exec-btn');
-const branchOut = document.getElementById('branch-out');
+const branchLogList = document.getElementById('branch-log-list');
+const branchLogSummary = document.getElementById('branch-log-summary');
+const branchLogLimitInput = document.getElementById('branch-log-limit');
 const branchMatrixBody = document.getElementById('branch-matrix-body');
 const branchMatrixSummary = document.getElementById('branch-matrix-summary');
 const branchMatrixRefreshBtn = document.getElementById('branch-matrix-refresh-btn');
+const branchMatrixSourceChip = document.getElementById('branch-matrix-source-chip');
+const branchPreviewState = document.getElementById('branch-preview-state');
+const branchPruneModal = document.getElementById('branch-prune-modal');
+const branchPruneConfirmInput = document.getElementById('branch-prune-confirm-input');
+const branchDagChip = document.getElementById('branch-dag-chip');
+const branchApplyChip = document.getElementById('branch-apply-chip');
+const branchDagBtn = document.getElementById('branch-dag-btn');
+const branchApplyPreviewBtn = document.getElementById('branch-apply-preview-btn');
+const branchApplyExecBtn = document.getElementById('branch-apply-exec-btn');
 const branchCreateChip = document.getElementById('branch-create-chip');
 const branchSyncChip = document.getElementById('branch-sync-chip');
 const branchPruneChip = document.getElementById('branch-prune-chip');
@@ -229,6 +240,8 @@ let latestCodexContractId = '';
 let currentTab = 'dashboard';
 let branchMatrixRows = [];
 let branchSelectedRepoIds = new Set();
+let branchPreviewTokens = { create: null, sync: null, prune: null };
+let branchLogItems = [];
 let agorgDiscoveryCache = null;
 let agorgApprovedPaths = new Set();
 let restoringUiSession = false;
@@ -237,6 +250,7 @@ let agorgCache = { at: 0, items: [], active: null, recent: [], instanceId: 'unkn
 let dashAgorgIssueFilterState = { issues: [], classFilter: 'all', selectedIndex: 0 };
 let agorgReconcileState = { report: null, dryRunTokenByClass: {} };
 const AGORG_CACHE_TTL_MS = 8000;
+const BRANCH_LOG_LIMIT_KEY = 'pilot.branch.log.limit.v1';
 let agorgDefaultScopeCandidate = null;
 
 function activatePanel(tabName, opts = {}) {
@@ -314,6 +328,7 @@ function collectUiSessionState() {
     branch_matrix_tags: readInputValue('branch-matrix-tags'),
     branch_matrix_search: readInputValue('branch-matrix-search'),
     branch_matrix_base: readInputValue('branch-matrix-base'),
+    branch_log_limit: readInputValue('branch-log-limit'),
     codex_contract_id: readInputValue('codex-contract-id'),
     sub_tabs: subTabs
   };
@@ -349,6 +364,7 @@ function applyUiSessionState(session) {
   setVal('branch-matrix-tags', session.branch_matrix_tags);
   setVal('branch-matrix-search', session.branch_matrix_search);
   setVal('branch-matrix-base', session.branch_matrix_base);
+  setVal('branch-log-limit', session.branch_log_limit);
   setVal('codex-contract-id', session.codex_contract_id);
 }
 
@@ -476,6 +492,9 @@ async function switchAgorgScope(id) {
   if (currentTab === 'agorg') {
     agorgTree();
     agorgShowActive();
+  }
+  if (currentTab === 'branch') {
+    await branchLoadMatrix();
   }
   queueUiSessionSave();
   document.getElementById('agorg-hero-dropdown').classList.remove('active');
@@ -925,8 +944,8 @@ timelineCommandFilter.addEventListener('input', renderTimeline);
 timelineTextFilter.addEventListener('input', renderTimeline);
 
 function branchScopeFilters() {
-  const group = (document.getElementById('branch-matrix-group')?.value || document.getElementById('branch-group').value || '').trim();
-  const tagRaw = (document.getElementById('branch-matrix-tags')?.value || document.getElementById('branch-tags').value || '').trim();
+  const group = (document.getElementById('branch-matrix-group')?.value || '').trim();
+  const tagRaw = (document.getElementById('branch-matrix-tags')?.value || '').trim();
   return {
     group: group || null,
     tags: tags(tagRaw)
@@ -948,18 +967,149 @@ function branchMatrixRequest() {
   };
 }
 
+function refreshBranchPreviewState() {
+  if (!branchPreviewState) return;
+  const parts = [];
+  for (const action of ['create', 'sync', 'prune']) {
+    if (branchPreviewTokens[action]) parts.push(`${action}=ready`);
+  }
+  branchPreviewState.textContent = parts.length
+    ? ('Preview tokens ready: ' + parts.join(', '))
+    : 'No active preview token.';
+}
+
+function invalidateBranchPreviews(reason) {
+  branchPreviewTokens = { create: null, sync: null, prune: null };
+  refreshBranchPreviewState();
+  if (reason) {
+    branchAddLogEntry({
+      title: 'Preview invalidated',
+      phase: 'info',
+      summary: reason,
+      payload: { status: 'preview_invalidated', reason }
+    });
+  }
+}
+
+function getBranchLogLimit() {
+  const rawInput = branchLogLimitInput ? parseInt(branchLogLimitInput.value || '50', 10) : 50;
+  let limit = Number.isFinite(rawInput) ? rawInput : 50;
+  limit = Math.max(1, Math.min(100, limit));
+  return limit;
+}
+
+function persistBranchLogLimit() {
+  const limit = getBranchLogLimit();
+  if (branchLogLimitInput) branchLogLimitInput.value = String(limit);
+  try { localStorage.setItem(BRANCH_LOG_LIMIT_KEY, String(limit)); } catch (_) {}
+  return limit;
+}
+
+function restoreBranchLogLimit() {
+  try {
+    const raw = localStorage.getItem(BRANCH_LOG_LIMIT_KEY);
+    if (!raw) return;
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) return;
+    const limit = Math.max(1, Math.min(100, parsed));
+    if (branchLogLimitInput) branchLogLimitInput.value = String(limit);
+  } catch (_) {}
+}
+
+function branchRenderLog() {
+  if (!branchLogList) return;
+  branchLogList.innerHTML = '';
+  if (!branchLogItems.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'No branch activity entries yet.';
+    branchLogList.appendChild(empty);
+    if (branchLogSummary) branchLogSummary.textContent = '0 log entries';
+    return;
+  }
+  for (const item of branchLogItems) {
+    const entry = document.createElement('div');
+    entry.className = 'branch-log-entry ' + (item.ok ? 'ok' : (item.phase === 'running' || item.phase === 'info' ? '' : 'fail'));
+    const head = document.createElement('div');
+    head.className = 'branch-log-head';
+    const title = document.createElement('div');
+    title.textContent = `${item.at} | ${item.title} | ${String(item.phase || 'completed').toUpperCase()}`;
+    const actions = document.createElement('div');
+    actions.className = 'branch-log-actions';
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'action-btn';
+    copyBtn.textContent = 'COPY JSON';
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(JSON.stringify(item.payload || {}, null, 2)).catch(() => {});
+    });
+    actions.appendChild(copyBtn);
+    if (item.artifactPath) {
+      const artifactBtn = document.createElement('button');
+      artifactBtn.className = 'action-btn';
+      artifactBtn.textContent = 'OPEN ARTIFACT';
+      artifactBtn.addEventListener('click', async () => {
+        await openReportPath(item.artifactPath, opDetail, out);
+      });
+      actions.appendChild(artifactBtn);
+    }
+    const details = document.createElement('details');
+    const sum = document.createElement('summary');
+    sum.textContent = 'Show JSON';
+    const pre = document.createElement('pre');
+    pre.style.maxHeight = '220px';
+    pre.textContent = JSON.stringify(item.payload || {}, null, 2);
+    details.appendChild(sum);
+    details.appendChild(pre);
+    const body = document.createElement('div');
+    body.className = 'branch-log-body';
+    body.textContent = item.summary || '';
+
+    head.appendChild(title);
+    head.appendChild(actions);
+    entry.appendChild(head);
+    entry.appendChild(body);
+    entry.appendChild(details);
+    branchLogList.appendChild(entry);
+  }
+  if (branchLogSummary) {
+    branchLogSummary.textContent = `${branchLogItems.length} log entries (limit ${getBranchLogLimit()})`;
+  }
+}
+
+function branchAddLogEntry({ title, phase, ok, summary, payload }) {
+  const artifactPath = extractArtifactPathFromJsonText(JSON.stringify(payload || {}));
+  branchLogItems.unshift({
+    at: new Date().toISOString(),
+    title: title || 'Branch',
+    phase: phase || (ok ? 'completed' : 'failed'),
+    ok: !!ok,
+    summary: summary || '',
+    payload: payload || {},
+    artifactPath: artifactPath || ''
+  });
+  const limit = persistBranchLogLimit();
+  if (branchLogItems.length > limit) branchLogItems = branchLogItems.slice(0, limit);
+  branchRenderLog();
+}
+
+function branchClearHtmlLog() {
+  branchLogItems = [];
+  branchRenderLog();
+}
+
 function renderBranchMatrix() {
   if (!branchMatrixBody) return;
   branchMatrixBody.innerHTML = '';
   if (!branchMatrixRows.length) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 9;
+    td.colSpan = 10;
     td.className = 'muted';
     td.textContent = 'No repos matched current filter/scope.';
     tr.appendChild(td);
     branchMatrixBody.appendChild(tr);
     if (branchMatrixSummary) branchMatrixSummary.textContent = '0 repos shown, 0 selected';
+    setChipState(branchMatrixSourceChip, 'Matrix Source', 'warn', 'empty');
     return;
   }
   let selectedVisible = 0;
@@ -977,6 +1127,7 @@ function renderBranchMatrix() {
     cb.addEventListener('change', () => {
       if (cb.checked) branchSelectedRepoIds.add(row.id);
       else branchSelectedRepoIds.delete(row.id);
+      invalidateBranchPreviews('selection changed');
       renderBranchMatrix();
     });
     selTd.appendChild(cb);
@@ -987,6 +1138,7 @@ function renderBranchMatrix() {
       row.group || '-',
       (row.tags || []).join(','),
       row.current_branch || 'unknown',
+      row.protected ? 'yes' : 'no',
       row.clean ? 'yes' : 'no',
       row.ahead == null ? '-' : String(row.ahead),
       row.behind == null ? '-' : String(row.behind),
@@ -1004,10 +1156,33 @@ function renderBranchMatrix() {
   }
 }
 
+function updateBranchMatrixSourceChip(data) {
+  const source = String(data && data.source ? data.source : 'unknown').toLowerCase();
+  if (source === 'autodiscovered') {
+    setChipState(branchMatrixSourceChip, 'Matrix Source', 'warn', 'autodiscovered');
+    return;
+  }
+  if (source === 'bootstrapped') {
+    setChipState(branchMatrixSourceChip, 'Matrix Source', 'success', 'bootstrapped');
+    return;
+  }
+  if (source === 'registry') {
+    setChipState(branchMatrixSourceChip, 'Matrix Source', 'success', 'registry');
+    return;
+  }
+  setChipState(branchMatrixSourceChip, 'Matrix Source', 'neutral', source);
+}
+
 async function branchLoadMatrix() {
   if (branchMatrixRefreshBtn) setButtonBusy(branchMatrixRefreshBtn, true, 'Loading...');
   const payload = branchMatrixRequest();
-  if (branchOut) branchOut.textContent = JSON.stringify({ status: 'running', endpoint: '/api/branch/matrix', payload }, null, 2);
+  branchAddLogEntry({
+    title: 'Matrix refresh',
+    phase: 'running',
+    ok: true,
+    summary: 'Loading branch matrix',
+    payload: { status: 'running', endpoint: '/api/branch/matrix', payload }
+  });
   try {
     const res = await fetch('/api/branch/matrix', {
       method: 'POST',
@@ -1016,7 +1191,13 @@ async function branchLoadMatrix() {
     });
     const data = await res.json();
     if (!data.ok) {
-      if (branchOut) branchOut.textContent = JSON.stringify(data, null, 2);
+      branchAddLogEntry({
+        title: 'Matrix refresh',
+        phase: 'failed',
+        ok: false,
+        summary: data.error || 'Matrix request failed',
+        payload: data
+      });
       branchMatrixRows = [];
       branchSelectedRepoIds = new Set();
       renderBranchMatrix();
@@ -1026,11 +1207,26 @@ async function branchLoadMatrix() {
     const visibleIds = new Set(rows.map(r => r.id));
     branchSelectedRepoIds = new Set(Array.from(branchSelectedRepoIds).filter(id => visibleIds.has(id)));
     branchMatrixRows = rows;
-    if (branchOut) branchOut.textContent = JSON.stringify(data, null, 2);
+    invalidateBranchPreviews('matrix refreshed');
+    branchAddLogEntry({
+      title: 'Matrix refresh',
+      phase: 'completed',
+      ok: true,
+      summary: `Loaded ${rows.length} repos${Number(data.autodiscovered || 0) > 0 ? ` (auto-discovered ${Number(data.autodiscovered)} AGOs)` : ''}${Number(data.bootstrapped || 0) > 0 ? ` (bootstrapped ${Number(data.bootstrapped)} from AGOrg)` : ''}`,
+      payload: data
+    });
+    updateBranchMatrixSourceChip(data);
     renderBranchMatrix();
   } catch (err) {
     const msg = { ok: false, error: err && err.message ? err.message : String(err), endpoint: '/api/branch/matrix' };
-    if (branchOut) branchOut.textContent = JSON.stringify(msg, null, 2);
+    branchAddLogEntry({
+      title: 'Matrix refresh',
+      phase: 'failed',
+      ok: false,
+      summary: msg.error,
+      payload: msg
+    });
+    setChipState(branchMatrixSourceChip, 'Matrix Source', 'fail', 'error');
   } finally {
     if (branchMatrixRefreshBtn) setButtonBusy(branchMatrixRefreshBtn, false, null);
   }
@@ -1038,11 +1234,13 @@ async function branchLoadMatrix() {
 
 function branchSelectVisible() {
   for (const row of branchMatrixRows) branchSelectedRepoIds.add(row.id);
+  invalidateBranchPreviews('selection changed');
   renderBranchMatrix();
 }
 
 function branchClearSelection() {
   branchSelectedRepoIds.clear();
+  invalidateBranchPreviews('selection changed');
   renderBranchMatrix();
 }
 
@@ -1072,9 +1270,9 @@ function branchSyncPayload(dryRun) {
   };
 }
 
-function branchPrunePayload(dryRun) {
+function branchPrunePayload(dryRun, confirmPhrase) {
   const selectors = branchScopeFilters();
-  return {
+  const payload = {
     action: 'prune',
     base_branch: document.getElementById('sync-base').value,
     dry_run: !!dryRun,
@@ -1082,15 +1280,44 @@ function branchPrunePayload(dryRun) {
     tags: selectors.tags,
     selected_repo_ids: branchSelectedIdsArray()
   };
+  if (!dryRun && confirmPhrase) payload.confirm_phrase = confirmPhrase;
+  return payload;
 }
 
 async function runBranchAction(payload, opts = {}) {
   const label = opts.label || 'Branch';
   const chip = opts.chip || null;
   const buttons = Array.isArray(opts.buttons) ? opts.buttons : [];
+  const action = String(payload.action || '').trim().toLowerCase();
+  const isMutatingAction = ['create', 'sync', 'prune'].includes(action);
+  const isExecute = isMutatingAction && payload.dry_run === false;
+
+  if (isExecute) {
+    const token = branchPreviewTokens[action];
+    if (!token) {
+      const msg = { ok: false, error: 'No preview token for execute. Run Preview first.', action };
+      branchAddLogEntry({
+        title: `${action} execute blocked`,
+        phase: 'failed',
+        ok: false,
+        summary: msg.error,
+        payload: msg
+      });
+      setChipState(chip, label, 'failed', 'failed');
+      return msg;
+    }
+    payload.preview_token = token;
+  }
+
   setChipState(chip, label, 'running', 'running');
   for (const b of buttons) setButtonBusy(b, true, opts.runningLabel || null);
-  if (branchOut) branchOut.textContent = JSON.stringify({ status: 'running', endpoint: '/api/branch/run', payload }, null, 2);
+  branchAddLogEntry({
+    title: `${action} ${payload.dry_run ? 'preview' : 'execute'}`,
+    phase: 'running',
+    ok: true,
+    summary: 'Running branch action',
+    payload: { status: 'running', endpoint: '/api/branch/run', payload }
+  });
   try {
     const res = await fetch('/api/branch/run', {
       method: 'POST',
@@ -1098,22 +1325,145 @@ async function runBranchAction(payload, opts = {}) {
       body: JSON.stringify(payload)
     });
     const data = await res.json();
-    if (branchOut) branchOut.textContent = JSON.stringify(data, null, 2);
     const ok = !!data.ok;
+    if (ok && isMutatingAction && payload.dry_run === true && data.preview_token) {
+      branchPreviewTokens[action] = data.preview_token;
+      refreshBranchPreviewState();
+    } else if (ok && isExecute) {
+      branchPreviewTokens[action] = null;
+      refreshBranchPreviewState();
+    } else if (!ok && isExecute) {
+      branchPreviewTokens[action] = null;
+      refreshBranchPreviewState();
+    }
     setChipState(chip, label, ok ? 'success' : 'failed', ok ? 'success' : 'failed');
+    branchAddLogEntry({
+      title: `${action} ${payload.dry_run ? 'preview' : 'execute'}`,
+      phase: ok ? 'completed' : 'failed',
+      ok,
+      summary: ok
+        ? (data.failures != null ? `repo_count=${data.repo_count || 0}, failures=${data.failures}` : 'success')
+        : (data.error || 'Branch action failed'),
+      payload: data
+    });
     appendLive({ source: 'branch_control', action: payload.action, ok, status: res.status, dry_run: !!payload.dry_run });
     loadHistory();
-    if (ok) await branchLoadMatrix();
+    if (ok && (isExecute || action === 'status')) await branchLoadMatrix();
     return data;
   } catch (err) {
     const msg = err && err.message ? err.message : String(err);
-    if (branchOut) branchOut.textContent = JSON.stringify({ ok: false, error: msg, payload }, null, 2);
+    branchAddLogEntry({
+      title: `${action} ${payload.dry_run ? 'preview' : 'execute'}`,
+      phase: 'failed',
+      ok: false,
+      summary: msg,
+      payload: { ok: false, error: msg, payload }
+    });
     setChipState(chip, label, 'failed', 'failed');
     appendLive({ source: 'branch_control', action: payload.action, ok: false, error: msg });
     return { ok: false, error: msg };
   } finally {
     for (const b of buttons) setButtonBusy(b, false, null);
   }
+}
+
+async function runBranchBusCommand(command, payload, opts = {}) {
+  const label = opts.label || command;
+  const chip = opts.chip || null;
+  const buttons = Array.isArray(opts.buttons) ? opts.buttons : [];
+  setChipState(chip, label, 'running', 'running');
+  for (const b of buttons) setButtonBusy(b, true, opts.runningLabel || null);
+  branchAddLogEntry({
+    title: `${label} run`,
+    phase: 'running',
+    ok: true,
+    summary: `command=${command}`,
+    payload: { status: 'running', endpoint: '/api/command', command, payload }
+  });
+  try {
+    const res = await fetch('/api/command', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify({ command, payload })
+    });
+    const data = await res.json();
+    const ok = !!data.ok;
+    setChipState(chip, label, ok ? 'success' : 'failed', ok ? 'success' : 'failed');
+    branchAddLogEntry({
+      title: `${label} run`,
+      phase: ok ? 'completed' : 'failed',
+      ok,
+      summary: ok ? 'success' : (data.error || 'command failed'),
+      payload: data
+    });
+    appendLive({ source: 'branch_control', action: label.toLowerCase(), ok, status: res.status, command });
+    loadHistory();
+    return data;
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    setChipState(chip, label, 'failed', 'failed');
+    branchAddLogEntry({
+      title: `${label} run`,
+      phase: 'failed',
+      ok: false,
+      summary: msg,
+      payload: { ok: false, error: msg, command, payload }
+    });
+    appendLive({ source: 'branch_control', action: label.toLowerCase(), ok: false, error: msg, command });
+    return { ok: false, error: msg };
+  } finally {
+    for (const b of buttons) setButtonBusy(b, false, null);
+  }
+}
+
+function branchApplyPayload(apply) {
+  const selectors = branchScopeFilters();
+  const stageSizeRaw = parseInt(document.getElementById('branch-apply-stage-size').value || '2', 10);
+  const stageSize = Number.isFinite(stageSizeRaw) && stageSizeRaw > 0 ? stageSizeRaw : 2;
+  return {
+    branch: document.getElementById('branch-apply-branch').value || 'feat/pilot-wave13',
+    base_branch: document.getElementById('branch-apply-base').value || 'dev',
+    pr_base_branch: document.getElementById('branch-apply-pr-base').value || 'main',
+    group: selectors.group,
+    tags: selectors.tags,
+    stage_size: stageSize,
+    continue_on_failure: !!document.getElementById('branch-apply-continue').checked,
+    apply: !!apply
+  };
+}
+
+function branchDagPreview() {
+  const selectors = branchScopeFilters();
+  runBranchBusCommand('pilot.multi.dag', {
+    group: selectors.group,
+    tags: selectors.tags,
+    dry_run: true
+  }, {
+    label: 'DAG',
+    chip: branchDagChip,
+    buttons: [branchDagBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function branchApplyPreview() {
+  const payload = branchApplyPayload(false);
+  runBranchBusCommand('pilot.multi.apply', payload, {
+    label: 'Staged Apply',
+    chip: branchApplyChip,
+    buttons: [branchApplyPreviewBtn, branchApplyExecBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function branchApplyExecute() {
+  const payload = branchApplyPayload(true);
+  runBranchBusCommand('pilot.multi.apply', payload, {
+    label: 'Staged Apply',
+    chip: branchApplyChip,
+    buttons: [branchApplyPreviewBtn, branchApplyExecBtn],
+    runningLabel: 'Running...'
+  });
 }
 
 function branchCreatePreview() {
@@ -1162,7 +1512,61 @@ function branchPrunePreview() {
 }
 
 function branchPruneExecute() {
-  runBranchAction(branchPrunePayload(false), {
+  if (branchPruneModal) {
+    branchPruneModal.classList.add('open');
+    if (branchPruneConfirmInput) {
+      branchPruneConfirmInput.value = '';
+      branchPruneConfirmInput.focus();
+    }
+    return;
+  }
+  // fallback if modal is unavailable
+  const typed = prompt('Type PRUNE to confirm destructive prune execute');
+  if (String(typed || '').trim().toUpperCase() !== 'PRUNE') {
+    branchAddLogEntry({
+      title: 'prune execute blocked',
+      phase: 'failed',
+      ok: false,
+      summary: 'Prune execute cancelled: confirmation phrase mismatch.',
+      payload: {
+        ok: false,
+        action: 'prune',
+        error: 'Prune execute cancelled: confirmation phrase mismatch.'
+      }
+    });
+    return;
+  }
+  runBranchAction(branchPrunePayload(false, 'PRUNE'), {
+    label: 'Prune',
+    chip: branchPruneChip,
+    buttons: [branchPrunePreviewBtn, branchPruneExecBtn],
+    runningLabel: 'Running...'
+  });
+}
+
+function branchCancelPruneConfirm() {
+  if (!branchPruneModal) return;
+  branchPruneModal.classList.remove('open');
+}
+
+function branchConfirmPruneExecute() {
+  const typed = String(branchPruneConfirmInput ? branchPruneConfirmInput.value : '').trim().toUpperCase();
+  if (typed !== 'PRUNE') {
+    branchAddLogEntry({
+      title: 'prune execute blocked',
+      phase: 'failed',
+      ok: false,
+      summary: 'Prune execute blocked: type PRUNE to confirm.',
+      payload: {
+        ok: false,
+        action: 'prune',
+        error: 'Prune execute blocked: type PRUNE to confirm.'
+      }
+    });
+    return;
+  }
+  if (branchPruneModal) branchPruneModal.classList.remove('open');
+  runBranchAction(branchPrunePayload(false, 'PRUNE'), {
     label: 'Prune',
     chip: branchPruneChip,
     buttons: [branchPrunePreviewBtn, branchPruneExecBtn],
@@ -1736,6 +2140,9 @@ async function agorgUse() {
     agorgList();
     agorgShowActive();
     agorgTree();
+    if (currentTab === 'branch') {
+      await branchLoadMatrix();
+    }
     queueUiSessionSave();
   }
 }
@@ -2578,6 +2985,33 @@ function dashServicesStop() { depRun('services-stop'); }
 function dashServicesRestart() { depRun('services-restart'); }
 function dashRunPush() { depRun('push'); }
 
+function dashWorkflowHint(kind) {
+  const guides = {
+    health: {
+      tab: 'dashboard',
+      title: 'Workflow Hint: Health Path',
+      text: 'Guided path (no macro execution): 1) Status 2) Bus Status 3) Oracle Query 4) Heal Plan 5) Heal Run'
+    },
+    branch: {
+      tab: 'branch',
+      title: 'Workflow Hint: Branch Path',
+      text: 'Guided path (no macro execution): 1) Branch Preview 2) Multi Status 3) DAG Preview 4) Staged Apply Preview/Execute'
+    },
+    push: {
+      tab: 'dashboard',
+      title: 'Workflow Hint: Push Path',
+      text: 'Guided path (no macro execution): 1) Push Safe 2) Timeline Verify (check latest events + artifacts).'
+    }
+  };
+  const guide = guides[kind] || guides.health;
+  activatePanel(guide.tab);
+  const msg = { ok: true, mode: 'hint_only', workflow: kind, message: guide.text };
+  if (dashStatusOut) {
+    dashStatusOut.textContent = JSON.stringify(msg, null, 2);
+  }
+  logActivity(guide.title, msg);
+}
+
 function dashAgorgContractPayload() {
   const cls = readInputValue('dash-agorg-contract-class');
   const dryRun = !!(document.getElementById('dash-agorg-contract-dry-run') && document.getElementById('dash-agorg-contract-dry-run').checked);
@@ -3113,6 +3547,30 @@ async function bootUi() {
         if (currentTab === 'branch') branchLoadMatrix();
       });
     });
+  if (branchLogLimitInput) {
+    branchLogLimitInput.addEventListener('change', () => {
+      persistBranchLogLimit();
+      if (branchLogItems.length > getBranchLogLimit()) {
+        branchLogItems = branchLogItems.slice(0, getBranchLogLimit());
+      }
+      branchRenderLog();
+    });
+  }
+  ['branch-name', 'branch-base', 'sync-branch', 'sync-base',
+   'branch-apply-branch', 'branch-apply-base', 'branch-apply-pr-base', 'branch-apply-stage-size', 'branch-apply-continue']
+    .forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('change', () => invalidateBranchPreviews(`input changed: ${id}`));
+    });
+  if (branchPruneModal) {
+    branchPruneModal.addEventListener('click', (evt) => {
+      if (evt.target === branchPruneModal) branchCancelPruneConfirm();
+    });
+  }
+  restoreBranchLogLimit();
+  refreshBranchPreviewState();
+  branchRenderLog();
 }
 
 bootUi();

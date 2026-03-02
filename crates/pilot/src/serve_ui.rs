@@ -51,6 +51,7 @@ struct UiState {
     allowed_commands: Option<HashSet<String>>,
     codex_contracts: Arc<Mutex<HashMap<String, CodexContractRecord>>>,
     codex_contracts_log: PathBuf,
+    branch_previews: Arc<Mutex<HashMap<String, BranchPreviewRecord>>>,
     agorg_store: AgorgStore,
 }
 
@@ -281,6 +282,7 @@ struct BranchMatrixRow {
     ahead: Option<u32>,
     behind: Option<u32>,
     on_target: Option<bool>,
+    protected: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -294,6 +296,18 @@ struct BranchRunRequest {
     tags: Vec<String>,
     #[serde(default)]
     selected_repo_ids: Vec<i64>,
+    preview_token: Option<String>,
+    confirm_phrase: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct BranchPreviewRecord {
+    token: String,
+    scope_id: Uuid,
+    action: String,
+    expected_execute_payload: Value,
+    created_at_unix: u64,
+    expires_at_unix: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -358,6 +372,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         allowed_commands: cfg.allowed_commands,
         codex_contracts: Arc::new(Mutex::new(contract_seed)),
         codex_contracts_log,
+        branch_previews: Arc::new(Mutex::new(HashMap::new())),
         agorg_store,
     });
 
@@ -554,6 +569,9 @@ async fn run_command(
             );
         }
     }
+    if let Some(err) = branch_policy_violation(&req.command, &req.payload) {
+        return error_response(StatusCode::BAD_REQUEST, &err);
+    }
 
     match send_command_once_with_retry(&state.bus, &req.command, req.payload, 3).await {
         Ok(response) => {
@@ -609,6 +627,7 @@ fn branch_row_from_repo(
 ) -> BranchMatrixRow {
     let current_branch = parse_git_output(&repo.path, &["rev-parse", "--abbrev-ref", "HEAD"])
         .unwrap_or_else(|_| "unknown".to_string());
+    let protected = is_protected_branch(&current_branch);
     let clean = Command::new("git")
         .args(["status", "--porcelain"])
         .current_dir(&repo.path)
@@ -652,12 +671,13 @@ fn branch_row_from_repo(
         ahead,
         behind,
         on_target,
+        protected,
     }
 }
 
 fn scope_filter_rows(
     rows: Vec<BranchMatrixRow>,
-    scope_root: &Path,
+    scope_roots: &[PathBuf],
     search: Option<&str>,
 ) -> Vec<BranchMatrixRow> {
     let needle = search
@@ -667,7 +687,7 @@ fn scope_filter_rows(
     rows.into_iter()
         .filter(|row| {
             let path = canonicalize_path_lossy(Path::new(&row.path));
-            if !path_is_within(&path, scope_root) {
+            if !path_in_any_root(&path, scope_roots) {
                 return false;
             }
             if let Some(n) = needle.as_ref() {
@@ -680,6 +700,204 @@ fn scope_filter_rows(
         .collect()
 }
 
+fn scope_roots(scope: &agorg::Agorg) -> Vec<PathBuf> {
+    let mut roots = vec![canonicalize_path_lossy(Path::new(&scope.root_path))];
+    if let Some(master) = scope.master_path.as_deref() {
+        let master_root = canonicalize_path_lossy(Path::new(master));
+        if !roots.iter().any(|r| r == &master_root) {
+            roots.push(master_root);
+        }
+    }
+    roots
+}
+
+fn path_in_any_root(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| path_is_within(path, root))
+}
+
+fn collect_agos_from_tree(nodes: &[agorg::AgorgTreeNode], out: &mut Vec<agorg::AgoRecord>) {
+    for node in nodes {
+        out.extend(node.agos.iter().cloned());
+        collect_agos_from_tree(&node.child_agorgs, out);
+    }
+}
+
+async fn bootstrap_branch_registry_from_scope(
+    state: &UiState,
+    scope: &agorg::Agorg,
+) -> std::result::Result<usize, String> {
+    let tree = state
+        .agorg_store
+        .tree(Some(scope.id))
+        .await
+        .map_err(|e| format!("Failed to read AGOrg tree: {e}"))?;
+    let mut agos = Vec::new();
+    collect_agos_from_tree(&tree, &mut agos);
+    if agos.is_empty() {
+        return Ok(0);
+    }
+    let registry = branch_registry().map_err(|_| "Failed to open branch registry".to_string())?;
+    let roots = scope_roots(scope);
+    let mut upserted = 0usize;
+    for ago in agos {
+        let path = canonicalize_path_lossy(Path::new(&ago.repo_path));
+        if !path.exists() || !path_in_any_root(&path, &roots) {
+            continue;
+        }
+        let tags: Vec<String> = ago
+            .relationship_children
+            .iter()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect();
+        if registry
+            .register_repo(&path, Some(&ago.name), None, &tags)
+            .is_ok()
+        {
+            upserted += 1;
+        }
+    }
+    Ok(upserted)
+}
+
+async fn discover_and_import_scope_agos(
+    state: &UiState,
+    scope: &agorg::Agorg,
+) -> std::result::Result<usize, String> {
+    let depth = usize::try_from(scope.scan_depth.max(1)).unwrap_or(4);
+    let discovery = agorg::discover_hierarchy(Path::new(&scope.root_path), depth)
+        .map_err(|e| format!("Failed AGOrg discovery: {e}"))?;
+    let imported = state
+        .agorg_store
+        .import_discovery(scope.id, &discovery)
+        .await
+        .map_err(|e| format!("Failed AGOrg import: {e}"))?;
+    Ok(imported.upserted)
+}
+
+fn sorted_unique_tags(tags: &[String]) -> Vec<String> {
+    let mut v: Vec<String> = tags
+        .iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+fn sorted_unique_ids(ids: &[i64]) -> Vec<i64> {
+    let mut v: Vec<i64> = ids.to_vec();
+    v.sort();
+    v.dedup();
+    v
+}
+
+fn canonical_branch_payload(req: &BranchRunRequest, dry_run: bool) -> Value {
+    json!({
+        "action": req.action.trim().to_ascii_lowercase(),
+        "branch": req.branch.as_deref().unwrap_or("").trim(),
+        "base_branch": req.base_branch.as_deref().unwrap_or("main").trim(),
+        "dry_run": dry_run,
+        "group": req.group.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        "tags": sorted_unique_tags(&req.tags),
+        "selected_repo_ids": sorted_unique_ids(&req.selected_repo_ids),
+    })
+}
+
+fn prune_expired_branch_previews(previews: &mut HashMap<String, BranchPreviewRecord>, now: u64) {
+    previews.retain(|_, rec| rec.expires_at_unix >= now);
+}
+
+fn is_protected_branch(name: &str) -> bool {
+    let n = name.trim();
+    n == "main"
+        || n == "master"
+        || n == "dev"
+        || n == "release"
+        || n.starts_with("release/")
+}
+
+fn is_valid_branch_name(name: &str) -> bool {
+    let n = name.trim();
+    let mut parts = n.splitn(2, '/');
+    let prefix = parts.next().unwrap_or_default();
+    let rest = parts.next().unwrap_or_default();
+    let allowed_prefix = matches!(
+        prefix,
+        "feat" | "fix" | "docs" | "test" | "refactor" | "chore" | "perf"
+    );
+    if !allowed_prefix || rest.is_empty() {
+        return false;
+    }
+    rest.bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !rest.starts_with('-')
+        && !rest.ends_with('-')
+        && !rest.contains("--")
+}
+
+fn branch_policy_violation(command: &str, payload: &Value) -> Option<String> {
+    if command == "pilot.branch.create" && command_requires_mutation(command, payload) {
+        let branch = payload
+            .get("branch")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if branch.is_empty() {
+            return Some("branch is required for create".to_string());
+        }
+        if is_protected_branch(&branch) {
+            return Some(format!(
+                "branch '{}' is protected and cannot be used as create target",
+                branch
+            ));
+        }
+        if !is_valid_branch_name(&branch) {
+            return Some(
+                "branch naming policy violation; expected prefix + kebab-case (feat|fix|docs|test|refactor|chore|perf)/name"
+                    .to_string(),
+            );
+        }
+    }
+    if command == "pilot.multi.apply" && command_requires_mutation(command, payload) {
+        let branch = payload
+            .get("branch")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if branch.is_empty() {
+            return Some("branch is required for multi apply".to_string());
+        }
+        if is_protected_branch(&branch) {
+            return Some(format!(
+                "branch '{}' is protected and cannot be used for staged apply",
+                branch
+            ));
+        }
+        if !is_valid_branch_name(&branch) {
+            return Some(
+                "branch naming policy violation; expected prefix + kebab-case (feat|fix|docs|test|refactor|chore|perf)/name"
+                    .to_string(),
+            );
+        }
+    }
+    if command == "pilot.branch.prune" && command_requires_mutation(command, payload) {
+        let phrase = payload
+            .get("confirm_phrase")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_ascii_uppercase();
+        if phrase != "PRUNE" {
+            return Some("prune execute requires confirm_phrase=PRUNE".to_string());
+        }
+    }
+    None
+}
+
 async fn api_branch_matrix(
     State(state): State<Arc<UiState>>,
     Json(req): Json<BranchMatrixRequest>,
@@ -688,29 +906,97 @@ async fn api_branch_matrix(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let registry = match branch_registry() {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let filter = multi::RepoFilter {
         group: req.group.clone(),
         tags: req.tags.clone(),
     };
-    let repos = match registry.list_repos(&filter) {
-        Ok(v) => v,
-        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
-    };
     let base_branch = req.base_branch.unwrap_or_else(|| "main".to_string());
-    let mut rows: Vec<BranchMatrixRow> = repos
-        .iter()
-        .map(|repo| branch_row_from_repo(repo, &base_branch, req.target_branch.as_deref()))
-        .collect();
-    let scope_root = canonicalize_path_lossy(Path::new(&scope.root_path));
-    rows = scope_filter_rows(rows, &scope_root, req.search.as_deref());
+    let roots = scope_roots(&scope);
+    let mut rows: Vec<BranchMatrixRow> = {
+        let registry = match branch_registry() {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let repos = match registry.list_repos(&filter) {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        };
+        repos
+            .iter()
+            .map(|repo| branch_row_from_repo(repo, &base_branch, req.target_branch.as_deref()))
+            .collect()
+    };
+    rows = scope_filter_rows(rows, &roots, req.search.as_deref());
+    let mut bootstrapped = 0usize;
+    let mut autodiscovered = 0usize;
+    let mut matrix_source = "registry".to_string();
+    if rows.is_empty() {
+        match bootstrap_branch_registry_from_scope(&state, &scope).await {
+            Ok(count) => {
+                bootstrapped = count;
+                if count > 0 {
+                    matrix_source = "bootstrapped".to_string();
+                    let registry = match branch_registry() {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let repos = match registry.list_repos(&filter) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            return error_response(StatusCode::BAD_REQUEST, &err.to_string());
+                        }
+                    };
+                    rows = repos
+                        .iter()
+                        .map(|repo| {
+                            branch_row_from_repo(repo, &base_branch, req.target_branch.as_deref())
+                        })
+                        .collect();
+                    rows = scope_filter_rows(rows, &roots, req.search.as_deref());
+                }
+            }
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
+        }
+    }
+    // If scope-backed AGOs were not present yet, auto-discover/import once and retry.
+    if rows.is_empty() {
+        match discover_and_import_scope_agos(&state, &scope).await {
+            Ok(count) => {
+                autodiscovered = count;
+                if count > 0 {
+                    matrix_source = "autodiscovered".to_string();
+                    if let Err(err) = bootstrap_branch_registry_from_scope(&state, &scope).await {
+                        return error_response(StatusCode::BAD_REQUEST, &err);
+                    }
+                    let registry = match branch_registry() {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let repos = match registry.list_repos(&filter) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            return error_response(StatusCode::BAD_REQUEST, &err.to_string());
+                        }
+                    };
+                    rows = repos
+                        .iter()
+                        .map(|repo| {
+                            branch_row_from_repo(repo, &base_branch, req.target_branch.as_deref())
+                        })
+                        .collect();
+                    rows = scope_filter_rows(rows, &roots, req.search.as_deref());
+                }
+            }
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
+        }
+    }
     rows.sort_by(|a, b| a.repo.cmp(&b.repo));
     Json(json!({
         "ok": true,
         "base_branch": base_branch,
+        "source": matrix_source,
+        "bootstrapped": bootstrapped,
+        "autodiscovered": autodiscovered,
         "count": rows.len(),
         "rows": rows
     }))
@@ -720,22 +1006,26 @@ async fn api_branch_matrix(
 fn resolve_branch_targets(
     registry: &multi::MultiRegistry,
     req: &BranchRunRequest,
-    scope_root: &Path,
+    scope_roots: &[PathBuf],
 ) -> std::result::Result<Vec<multi::RepoEntry>, String> {
-    let filter = multi::RepoFilter {
-        group: req.group.clone(),
-        tags: req.tags.clone(),
+    let selected: HashSet<i64> = req.selected_repo_ids.iter().copied().collect();
+    let list_filter = if selected.is_empty() {
+        multi::RepoFilter {
+            group: req.group.clone(),
+            tags: req.tags.clone(),
+        }
+    } else {
+        multi::RepoFilter::default()
     };
     let mut repos = registry
-        .list_repos(&filter)
+        .list_repos(&list_filter)
         .map_err(|e| format!("Failed to list repos: {e}"))?;
-    if !req.selected_repo_ids.is_empty() {
-        let selected: HashSet<i64> = req.selected_repo_ids.iter().copied().collect();
+    if !selected.is_empty() {
         repos.retain(|r| selected.contains(&r.id));
     }
     repos.retain(|repo| {
         let path = canonicalize_path_lossy(&repo.path);
-        path_is_within(&path, scope_root)
+        path_in_any_root(&path, scope_roots)
     });
     if repos.is_empty() {
         return Err("No repositories matched selected filters/selection within active AGOrg scope.".to_string());
@@ -766,13 +1056,115 @@ async fn api_branch_run(
             "branch action blocked in read-only UI mode; restart pilot serve with --ui-allow-mutations",
         );
     }
+    if action == "create" && !dry_run {
+        let branch_name = req.branch.as_deref().unwrap_or("").trim().to_string();
+        if branch_name.is_empty() {
+            return error_response(StatusCode::BAD_REQUEST, "branch is required for create action");
+        }
+        if is_protected_branch(&branch_name) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &format!(
+                    "branch '{}' is protected and cannot be used as create target",
+                    branch_name
+                ),
+            );
+        }
+        if !is_valid_branch_name(&branch_name) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "branch naming policy violation; expected prefix + kebab-case (feat|fix|docs|test|refactor|chore|perf)/name",
+            );
+        }
+    }
+    if action == "prune" && !dry_run {
+        let phrase = req
+            .confirm_phrase
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_uppercase();
+        if phrase != "PRUNE" {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "prune execute requires confirm_phrase=PRUNE",
+            );
+        }
+    }
+
+    let now = now_unix();
+    let mut issued_preview_token: Option<BranchPreviewRecord> = None;
+    if matches!(action.as_str(), "create" | "sync" | "prune") {
+        if dry_run {
+            let token = format!("branch-preview-{}", Uuid::new_v4());
+            let expected_execute_payload = canonical_branch_payload(&req, false);
+            let record = BranchPreviewRecord {
+                token: token.clone(),
+                scope_id: scope.id,
+                action: action.clone(),
+                expected_execute_payload,
+                created_at_unix: now,
+                expires_at_unix: now + 900,
+            };
+            let mut previews = state.branch_previews.lock().await;
+            prune_expired_branch_previews(&mut previews, now);
+            previews.insert(token.clone(), record.clone());
+            issued_preview_token = Some(record.clone());
+            let _ = state.events.send(json!({
+                "source": "branch_control",
+                "action": action,
+                "phase": "preview_token_issued",
+                "token": token,
+                "expires_at_unix": record.expires_at_unix
+            }));
+        } else {
+            let token = req.preview_token.as_deref().unwrap_or("").trim().to_string();
+            if token.is_empty() {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "preview_token is required for execute. Run preview first.",
+                );
+            }
+            let expected_payload = canonical_branch_payload(&req, false);
+            let mut previews = state.branch_previews.lock().await;
+            prune_expired_branch_previews(&mut previews, now);
+            let Some(record) = previews.get(&token).cloned() else {
+                return error_response(
+                    StatusCode::PRECONDITION_FAILED,
+                    "preview_token not found or expired. Re-run preview.",
+                );
+            };
+            if record.scope_id != scope.id {
+                previews.remove(&token);
+                return error_response(
+                    StatusCode::PRECONDITION_FAILED,
+                    "preview_token scope mismatch. Re-run preview in current AGOrg scope.",
+                );
+            }
+            if record.action != action {
+                previews.remove(&token);
+                return error_response(
+                    StatusCode::PRECONDITION_FAILED,
+                    "preview_token action mismatch. Re-run preview.",
+                );
+            }
+            if record.expected_execute_payload != expected_payload {
+                previews.remove(&token);
+                return error_response(
+                    StatusCode::PRECONDITION_FAILED,
+                    "preview payload mismatch. Inputs/selection changed; re-run preview.",
+                );
+            }
+            previews.remove(&token);
+        }
+    }
 
     let registry = match branch_registry() {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let scope_root = canonicalize_path_lossy(Path::new(&scope.root_path));
-    let repos = match resolve_branch_targets(&registry, &req, &scope_root) {
+    let roots = scope_roots(&scope);
+    let repos = match resolve_branch_targets(&registry, &req, &roots) {
         Ok(v) => v,
         Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
     };
@@ -796,7 +1188,7 @@ async fn api_branch_run(
             }
             let outcomes = branch::create_branch(&repos, &branch_name, &base_branch, dry_run);
             let failures = outcomes.iter().filter(|x| !x.success).count();
-            json!({
+            let mut payload = json!({
                 "ok": failures == 0,
                 "action": action,
                 "branch": branch_name,
@@ -805,7 +1197,14 @@ async fn api_branch_run(
                 "repo_count": repos.len(),
                 "failures": failures,
                 "outcomes": outcomes
-            })
+            });
+            if let Some(record) = issued_preview_token.as_ref() {
+                payload["preview_token"] = json!(record.token);
+                payload["preview_expires_at_unix"] = json!(record.expires_at_unix);
+                payload["preview_created_at_unix"] = json!(record.created_at_unix);
+                payload["expected_execute_payload"] = record.expected_execute_payload.clone();
+            }
+            payload
         }
         "sync" => {
             let branch_name = req.branch.clone().unwrap_or_default();
@@ -814,7 +1213,7 @@ async fn api_branch_run(
             }
             let outcomes = branch::sync_branch(&repos, &branch_name, &base_branch, dry_run);
             let failures = outcomes.iter().filter(|x| !x.success).count();
-            json!({
+            let mut payload = json!({
                 "ok": failures == 0,
                 "action": action,
                 "branch": branch_name,
@@ -823,12 +1222,19 @@ async fn api_branch_run(
                 "repo_count": repos.len(),
                 "failures": failures,
                 "outcomes": outcomes
-            })
+            });
+            if let Some(record) = issued_preview_token.as_ref() {
+                payload["preview_token"] = json!(record.token);
+                payload["preview_expires_at_unix"] = json!(record.expires_at_unix);
+                payload["preview_created_at_unix"] = json!(record.created_at_unix);
+                payload["expected_execute_payload"] = record.expected_execute_payload.clone();
+            }
+            payload
         }
         "prune" => match branch::prune_branches(&repos, &base_branch, dry_run) {
             Ok(outcomes) => {
                 let failures = outcomes.iter().filter(|x| !x.success).count();
-                json!({
+                let mut payload = json!({
                     "ok": failures == 0,
                     "action": action,
                     "base_branch": base_branch,
@@ -836,7 +1242,14 @@ async fn api_branch_run(
                     "repo_count": repos.len(),
                     "failures": failures,
                     "outcomes": outcomes
-                })
+                });
+                if let Some(record) = issued_preview_token.as_ref() {
+                    payload["preview_token"] = json!(record.token);
+                    payload["preview_expires_at_unix"] = json!(record.expires_at_unix);
+                    payload["preview_created_at_unix"] = json!(record.created_at_unix);
+                    payload["expected_execute_payload"] = record.expected_execute_payload.clone();
+                }
+                payload
             }
             Err(err) => {
                 return error_response(
@@ -2862,15 +3275,17 @@ mod tests {
         dependency_action_requires_cwd_scope, dependency_action_scope_required,
         filter_prune_paths_by_class, is_safe_cli_token, load_persisted_codex_contracts,
         parse_json_from_mixed_output, payload_has_multi_selector, resolve_branch_targets,
-        scope_filter_rows, with_event_agorg_scope, BranchMatrixRow, BranchRunRequest,
-        CodexContractRecord,
+        scope_filter_rows, sorted_unique_ids, sorted_unique_tags, with_event_agorg_scope,
+        BranchMatrixRow, BranchPreviewRecord, BranchRunRequest, CodexContractRecord,
+        canonical_branch_payload, prune_expired_branch_previews, is_protected_branch,
+        is_valid_branch_name, branch_policy_violation,
     };
     use crate::agorg::{AgorgReconcileIssue, AgorgReconcileReport};
     use pilot_multi as multi;
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
     use uuid::Uuid;
 
@@ -3113,6 +3528,7 @@ mod tests {
                 ahead: Some(0),
                 behind: Some(0),
                 on_target: Some(true),
+                protected: true,
             },
             BranchMatrixRow {
                 id: 2,
@@ -3125,14 +3541,15 @@ mod tests {
                 ahead: Some(0),
                 behind: Some(0),
                 on_target: Some(false),
+                protected: true,
             },
         ];
-        let scope_root = Path::new("/tmp/agorg");
-        let filtered = scope_filter_rows(rows.clone(), scope_root, None);
+        let roots = vec![PathBuf::from("/tmp/agorg")];
+        let filtered = scope_filter_rows(rows.clone(), &roots, None);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].repo, "ArqonCore");
 
-        let searched = scope_filter_rows(rows, scope_root, Some("core"));
+        let searched = scope_filter_rows(rows, &roots, Some("core"));
         assert_eq!(searched.len(), 1);
         assert_eq!(searched[0].repo, "ArqonCore");
     }
@@ -3190,13 +3607,150 @@ mod tests {
             group: Some("core".to_string()),
             tags: vec!["apply-pilot".to_string()],
             selected_repo_ids: vec![a.id],
+            preview_token: None,
+            confirm_phrase: None,
         };
-        let targets =
-            resolve_branch_targets(&registry, &req, &PathBuf::from(&scope_root)).unwrap();
+        let roots = vec![PathBuf::from(&scope_root)];
+        let targets = resolve_branch_targets(&registry, &req, &roots).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].name, "A");
 
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_resolve_branch_targets_selected_ids_ignore_group_filter() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("pilot_branch_targets_group_test_{}", nanos));
+        let scope_root = base.join("scope");
+        fs::create_dir_all(&scope_root).unwrap();
+        let repo_a = scope_root.join("A");
+        fs::create_dir_all(&repo_a).unwrap();
+
+        let db_path = base.join("workspace.db");
+        let registry = multi::MultiRegistry::open(&db_path).unwrap();
+        let a = registry
+            .register_repo(&repo_a, Some("A"), Some("agorg"), &vec![])
+            .unwrap();
+
+        let req = BranchRunRequest {
+            action: "create".to_string(),
+            branch: Some("feat/test".to_string()),
+            base_branch: Some("main".to_string()),
+            dry_run: Some(false),
+            group: Some("core".to_string()),
+            tags: vec!["apply-pilot".to_string()],
+            selected_repo_ids: vec![a.id],
+            preview_token: None,
+            confirm_phrase: None,
+        };
+        let roots = vec![PathBuf::from(&scope_root)];
+        let targets = resolve_branch_targets(&registry, &req, &roots).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "A");
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_sorted_helpers() {
+        let tags = sorted_unique_tags(&[
+            "beta".to_string(),
+            " alpha ".to_string(),
+            "beta".to_string(),
+            "".to_string(),
+        ]);
+        assert_eq!(tags, vec!["alpha".to_string(), "beta".to_string()]);
+        let ids = sorted_unique_ids(&[4, 2, 4, 3, 2]);
+        assert_eq!(ids, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn test_canonical_branch_payload_normalizes_fields() {
+        let req = BranchRunRequest {
+            action: "Create".to_string(),
+            branch: Some(" feat/x ".to_string()),
+            base_branch: Some(" dev ".to_string()),
+            dry_run: Some(true),
+            group: Some(" core ".to_string()),
+            tags: vec!["b".to_string(), "a".to_string(), "b".to_string()],
+            selected_repo_ids: vec![3, 1, 3],
+            preview_token: Some("tok".to_string()),
+            confirm_phrase: None,
+        };
+        let v = canonical_branch_payload(&req, false);
+        assert_eq!(v["action"], "create");
+        assert_eq!(v["branch"], "feat/x");
+        assert_eq!(v["base_branch"], "dev");
+        assert_eq!(v["dry_run"], false);
+        assert_eq!(v["group"], "core");
+        assert_eq!(v["tags"], json!(["a", "b"]));
+        assert_eq!(v["selected_repo_ids"], json!([1, 3]));
+        assert!(v.get("preview_token").is_none());
+    }
+
+    #[test]
+    fn test_prune_expired_branch_previews() {
+        let mut map = HashMap::new();
+        map.insert(
+            "old".to_string(),
+            BranchPreviewRecord {
+                token: "old".to_string(),
+                scope_id: Uuid::nil(),
+                action: "create".to_string(),
+                expected_execute_payload: json!({}),
+                created_at_unix: 10,
+                expires_at_unix: 20,
+            },
+        );
+        map.insert(
+            "new".to_string(),
+            BranchPreviewRecord {
+                token: "new".to_string(),
+                scope_id: Uuid::nil(),
+                action: "create".to_string(),
+                expected_execute_payload: json!({}),
+                created_at_unix: 30,
+                expires_at_unix: 100,
+            },
+        );
+        prune_expired_branch_previews(&mut map, 50);
+        assert!(!map.contains_key("old"));
+        assert!(map.contains_key("new"));
+    }
+
+    #[test]
+    fn test_branch_policy_helpers() {
+        assert!(is_protected_branch("main"));
+        assert!(is_protected_branch("release/v1.0.0"));
+        assert!(!is_protected_branch("feat/x"));
+
+        assert!(is_valid_branch_name("feat/wave-13"));
+        assert!(is_valid_branch_name("fix/lock-drift-182"));
+        assert!(!is_valid_branch_name("main"));
+        assert!(!is_valid_branch_name("feature/mixedCase"));
+        assert!(!is_valid_branch_name("feat/bad__name"));
+    }
+
+    #[test]
+    fn test_branch_policy_violation() {
+        let create_bad = json!({"branch":"main","dry_run":false});
+        let err = branch_policy_violation("pilot.branch.create", &create_bad);
+        assert!(err.is_some());
+
+        let create_good = json!({"branch":"feat/wave-13","dry_run":false});
+        assert!(branch_policy_violation("pilot.branch.create", &create_good).is_none());
+
+        let multi_bad = json!({"branch":"release/v1.0.0","apply":true});
+        assert!(branch_policy_violation("pilot.multi.apply", &multi_bad).is_some());
+
+        let prune_no_confirm = json!({"dry_run":false});
+        assert!(branch_policy_violation("pilot.branch.prune", &prune_no_confirm).is_some());
+        let prune_ok = json!({"dry_run":false, "confirm_phrase":"PRUNE"});
+        assert!(branch_policy_violation("pilot.branch.prune", &prune_ok).is_none());
     }
 }
 
@@ -4433,6 +4987,18 @@ const INDEX_HTML: &str = r#"<!doctype html>
       padding: 4px 10px;
       white-space: nowrap;
     }
+    .seq-step-btn {
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .seq-step-btn:hover,
+    .seq-step-btn:focus-visible {
+      outline: none;
+      border-color: rgba(0, 245, 255, 0.45);
+      background: rgba(0, 245, 255, 0.08);
+      color: var(--text);
+      box-shadow: 0 0 0 2px rgba(0, 245, 255, 0.12);
+    }
 
     /* ═══════════ Pre / Code ═══════════ */
     pre {
@@ -4566,6 +5132,72 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
     .branch-matrix-table tbody tr.selected {
       background: rgba(0, 245, 255, 0.08);
+    }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+    .modal-backdrop.open {
+      display: flex;
+    }
+    .modal-card {
+      width: min(520px, 92vw);
+      background: #0a0f16;
+      border: 1px solid var(--border-hover);
+      border-radius: 10px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 18px 60px rgba(0,0,0,0.55);
+    }
+    .modal-title {
+      font-size: 0.86rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--rose);
+      font-family: 'JetBrains Mono', monospace;
+      margin: 0;
+    }
+    .branch-log-entry {
+      border: 1px solid var(--border);
+      border-left: 3px solid transparent;
+      border-radius: 8px;
+      padding: 10px;
+      background: rgba(255,255,255,0.02);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .branch-log-entry.ok { border-left-color: var(--primary); }
+    .branch-log-entry.fail { border-left-color: var(--rose); }
+    .branch-log-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .branch-log-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .branch-log-body {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--text);
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
     .pre-wrap { position: relative; }
     .pre-actions { position: absolute; top: 6px; right: 10px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.2s; z-index: 20; }
@@ -4771,9 +5403,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
   <section class="panel active" id="dashboard">
     <div class="sequence-strip">
-      <span class="seq-step">Status -> Bus Health -> Oracle Query -> Heal Plan -> Heal Run</span>
-      <span class="seq-step">Branch Preview -> Multi Status -> DAG -> Staged Apply</span>
-      <span class="seq-step">Push Safe -> Timeline Verify</span>
+      <button type="button" class="seq-step seq-step-btn" onclick="dashWorkflowHint('health')" title="Guided path only: no commands are executed">Status -> Bus Health -> Oracle Query -> Heal Plan -> Heal Run</button>
+      <button type="button" class="seq-step seq-step-btn" onclick="dashWorkflowHint('branch')" title="Guided path only: no commands are executed">Branch Preview -> Multi Status -> DAG -> Staged Apply</button>
+      <button type="button" class="seq-step seq-step-btn" onclick="dashWorkflowHint('push')" title="Guided path only: no commands are executed">Push Safe -> Timeline Verify</button>
     </div>
     <div class="grid">
       <div class="card">
@@ -5262,6 +5894,9 @@ Recommended flow:
           <button class="btn secondary" onclick="branchSelectVisible()">Select Visible</button>
           <button class="btn secondary" onclick="branchClearSelection()">Clear Selection</button>
         </div>
+        <div class="chip-row">
+          <span id="branch-matrix-source-chip" class="chip neutral">Matrix Source: unknown</span>
+        </div>
         <div id="branch-matrix-summary" class="helper">No matrix loaded yet.</div>
       <div class="pre-wrap">
         <div style="max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 8px;">
@@ -5273,6 +5908,7 @@ Recommended flow:
                 <th>Group</th>
                 <th>Tags</th>
                 <th>Branch</th>
+                <th>Protected</th>
                 <th>Clean</th>
                 <th>Ahead</th>
                 <th>Behind</th>
@@ -5280,7 +5916,7 @@ Recommended flow:
               </tr>
             </thead>
             <tbody id="branch-matrix-body">
-              <tr><td colspan="9" class="muted">No data loaded.</td></tr>
+              <tr><td colspan="10" class="muted">No data loaded.</td></tr>
             </tbody>
           </table>
         </div>
@@ -5289,6 +5925,7 @@ Recommended flow:
       <div class="card">
         <h3>Create Branch</h3>
         <div class="helper">Use Preview first, then Execute when response looks correct.</div>
+        <div id="branch-preview-state" class="helper">No active preview token.</div>
         <div class="chip-row">
           <span id="branch-create-chip" class="chip neutral">Create: idle</span>
         </div>
@@ -5296,10 +5933,6 @@ Recommended flow:
         <input id="branch-name" placeholder="feat/pilot-wave7" />
         <div class="helper">Base branch</div>
         <input id="branch-base" placeholder="main" value="main" />
-        <div class="helper">Group selector (optional)</div>
-        <input id="branch-group" placeholder="core" />
-        <div class="helper">Tags selector (comma-separated)</div>
-        <input id="branch-tags" placeholder="apply-pilot,wave7" />
         <div class="row">
           <button id="branch-create-preview-btn" class="btn secondary" onclick="branchCreatePreview()">Preview</button>
           <button id="branch-create-exec-btn" class="btn" onclick="branchCreateExecute()">Execute</button>
@@ -5327,14 +5960,64 @@ Recommended flow:
         </div>
       </div>
       <div class="card">
-        <h3>Branch Action Output</h3>
-      <div class="pre-wrap">
-        <div class="pre-actions">
-          <button class="action-btn" onclick="copyToClipboard('branch-out', this)">COPY</button>
-          <button class="action-btn" onclick="clearElement('branch-out')">CLEAR</button>
+        <h3>Dependency DAG + Staged Apply (Primary Branch Flow)</h3>
+        <div class="helper">Run DAG preview, then staged apply preview, then staged apply execute when approved.</div>
+        <div class="chip-row">
+          <span id="branch-dag-chip" class="chip neutral">DAG: idle</span>
+          <span id="branch-apply-chip" class="chip neutral">Staged Apply: idle</span>
         </div>
-        <pre id="branch-out">No branch action run yet.</pre>
+        <div class="row">
+          <div style="flex:1;min-width:180px;">
+            <div class="helper">Apply branch</div>
+            <input id="branch-apply-branch" placeholder="feat/pilot-wave13" value="feat/pilot-wave13" />
+          </div>
+          <div style="flex:1;min-width:140px;">
+            <div class="helper">Apply base</div>
+            <input id="branch-apply-base" placeholder="dev" value="dev" />
+          </div>
+          <div style="flex:1;min-width:140px;">
+            <div class="helper">PR base</div>
+            <input id="branch-apply-pr-base" placeholder="main" value="main" />
+          </div>
+        </div>
+        <div class="row">
+          <div style="max-width:180px;">
+            <div class="helper">Stage size</div>
+            <input id="branch-apply-stage-size" placeholder="2" value="2" />
+          </div>
+          <label style="font-size:0.82rem;color:#a8b9e3;">
+            <input id="branch-apply-continue" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
+            Continue on failure
+          </label>
+        </div>
+        <div class="row">
+          <button id="branch-dag-btn" class="btn secondary" onclick="branchDagPreview()">DAG Preview</button>
+          <button id="branch-apply-preview-btn" class="btn secondary" onclick="branchApplyPreview()">Staged Apply Preview</button>
+          <button id="branch-apply-exec-btn" class="btn" onclick="branchApplyExecute()">Staged Apply Execute</button>
+        </div>
       </div>
+      <div class="card">
+        <h3>Branch Action Output</h3>
+        <div class="row">
+          <label class="field-label" for="branch-log-limit">Max logs</label>
+          <input id="branch-log-limit" type="number" min="1" max="100" value="50" style="max-width:110px;" />
+          <button class="btn secondary" onclick="branchClearHtmlLog()">Clear Logs</button>
+        </div>
+        <div id="branch-log-summary" class="helper">No branch activity entries yet.</div>
+        <div id="branch-log-list" style="display:flex;flex-direction:column;gap:10px;max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:10px;background:rgba(0,0,0,0.25);">
+          <div class="muted">No branch action run yet.</div>
+        </div>
+      </div>
+    </div>
+    <div id="branch-prune-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="branch-prune-modal-title">
+      <div class="modal-card">
+        <h4 id="branch-prune-modal-title" class="modal-title">Confirm Destructive Prune</h4>
+        <div class="helper">Type <code>PRUNE</code> to confirm execute. This deletes merged branches.</div>
+        <input id="branch-prune-confirm-input" placeholder="Type PRUNE to confirm" />
+        <div class="row">
+          <button class="btn secondary" onclick="branchCancelPruneConfirm()">Cancel</button>
+          <button class="btn" onclick="branchConfirmPruneExecute()">Confirm Prune Execute</button>
+        </div>
       </div>
     </div>
   </section>

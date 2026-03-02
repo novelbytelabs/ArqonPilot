@@ -74,6 +74,30 @@ Branch tab BC-2 workflow:
 - Select target repos directly in matrix (or use group/tags filter).
 - Run `Create/Sync/Prune` as `Preview` first, then `Execute`.
 - Use `Branch Action Output` + timeline for evidence and failures.
+- Execute requires a fresh preview token; changing scope/filters/selection invalidates stale previews.
+- `Prune Execute` requires typed confirmation (`PRUNE`) before mutation.
+- `Matrix Source` chip explains row origin:
+  - `registry`: loaded directly from workspace registry
+  - `bootstrapped`: registry was auto-seeded from AGOrg AGO records
+  - `autodiscovered`: AGOrg auto-discovery/import ran, then seeded registry
+  - `empty` / `error`: no rows or request failure
+- Matrix scope behavior:
+  - scope includes AGOrg `root_path` plus `master_path` (if present) so sibling AGO repos are considered in-scope.
+  - Branch tab auto-loads matrix on tab activation; no manual refresh required for first render.
+- Targeting behavior:
+  - matrix header filter fields are the only source of group/tags.
+  - selected repo IDs are authoritative when any rows are selected (no forced selection/filter intersection).
+- Branch output is now an HTML activity log:
+  - `Max logs` is stateful and capped to `100`.
+  - `Clear Logs` clears Branch log entries immediately.
+  - each entry has `Show JSON` + `COPY JSON`, and `OPEN ARTIFACT` when present.
+- Branch tab BC-4 orchestration:
+  - use `DAG Preview` before staged branch runs.
+  - use `Staged Apply Preview` then `Staged Apply Execute` for dependency-aware fleet branch motion.
+- Branch tab BC-6 policy guardrails:
+  - protected branches (`main|master|dev|release*`) are blocked as mutate targets.
+  - branch name policy is enforced for mutate executes:
+    - `(feat|fix|docs|test|refactor|chore|perf)/kebab-case`.
 
 1. `Dashboard -> System Status`
 

@@ -141,6 +141,38 @@ Each operation has:
 - Direct links to artifact paths.
 - One-click copy for command replay.
 
+### 5) Macro-Ready Guided Workflow Rail (No Auto-Execute)
+
+- Dashboard sequence rail must be clickable and keyboard-accessible.
+- Clicking a rail item must:
+  - open the relevant tab,
+  - show guided next steps in output/timeline,
+  - **not execute commands**.
+- The rail acts as a future macro handoff surface (chatbot/macro engine), but current behavior remains hint-only.
+- Initial guided rails:
+  - `Status -> Bus Health -> Oracle Query -> Heal Plan -> Heal Run`
+  - `Branch Preview -> Multi Status -> DAG -> Staged Apply`
+  - `Push Safe -> Timeline Verify`
+
+### 6) Accessibility + Intuitive UX Hardening
+
+- Accessibility baseline:
+  - all controls keyboard reachable (`tab`, `enter`, `space`) with visible focus.
+  - icon-only controls require title/aria labeling.
+  - status chips require textual state, not color-only semantics.
+  - contrast and font size must meet practical readability thresholds on dark theme.
+- Intuitive UX baseline:
+  - remove duplicate/legacy inputs that can conflict with matrix targeting.
+  - provide one source of truth for scope/filter/selection per operation family.
+  - every panel should include plain-language helper text with expected outcome.
+  - empty states must explain cause and next action (for example no scope, no repos, registry empty).
+- Progressive disclosure:
+  - basic flow visible first, advanced options collapsed by default.
+  - destructive actions isolated behind explicit confirmation.
+- Operator confidence:
+  - always surface “what will happen” before execute and “what happened” after execute.
+  - keep result summaries concise with artifact links for deep detail.
+
 ## Safety and Security Model
 
 ### Guardrails
@@ -372,6 +404,10 @@ Branch Control is only done when **all** are true:
 9. **No Hidden Technical Debt**
    - No placeholders/stubs for core Branch Control flows.
    - Any remaining shim is documented with reason and removal plan.
+10. **Usability Without Docs**
+   - New operator can complete core branch workflow by using in-product guidance rails and inline helper text only.
+11. **Accessibility Baseline**
+   - Core branch and dashboard flows are keyboard-usable with visible focus and non-color-only status cues.
 
 ## Relevant File Map
 
@@ -409,3 +445,42 @@ Branch Control is only done when **all** are true:
     - `POST /api/branch/run`
   - Branch operations now support `selected_repo_ids` and execute on exact repo subsets (within active AGOrg scope).
   - Active AGOrg scope is enforced for matrix and run endpoints; out-of-scope repos are excluded.
+- 2026-03-02: BC-3 hard close completed.
+  - Server now enforces preview->execute contract for mutating branch actions:
+    - execute requires valid `preview_token`
+    - token binds to active AGOrg scope + canonical execute payload
+    - token mismatch/expiry returns precondition failure with remediation
+  - UI invalidates stale previews when filters/selection/input scope changes.
+  - Prune execute is gated by typed confirmation (`PRUNE`) before mutation.
+- 2026-03-02: BC-5 hard close completed.
+  - Branch output replaced with structured HTML activity log entries (no raw JSON-only text output).
+  - Each log item supports drill-down (`Show JSON`) and artifact-open action when `artifact_path` is present.
+  - Added explicit `Clear Logs` control and stateful log retention limit (`1..100`, persisted).
+- 2026-03-02: BC-4 hard close completed.
+  - Added DAG preview and staged apply controls directly in Branch tab as primary branch orchestration surface.
+  - Branch tab can now run:
+    - `pilot.multi.dag` (preview)
+    - `pilot.multi.apply` (preview + execute)
+  - Branch-scoped filters (`group`/`tags`) drive DAG/staged apply execution context.
+- 2026-03-02: BC-6 hard close completed.
+  - Protected branch policy enforcement:
+    - blocks create/apply execute against `main|master|dev|release*`.
+  - Branch naming policy enforcement for mutating create/apply executes:
+    - required format: `(feat|fix|docs|test|refactor|chore|perf)/kebab-case`.
+  - Destructive confirmation enforcement:
+    - prune execute requires typed `PRUNE` in UI modal and backend `confirm_phrase=PRUNE`.
+  - Added targeted unit tests for policy helpers/violations.
+- 2026-03-02: BC-2 post-hard-close stabilization completed.
+  - Removed legacy Create card filter inputs (`branch-group`, `branch-tags`) to enforce single filter source.
+  - Matrix filters now come only from matrix header (`group`, `tags`, `search`, `base`).
+  - Added matrix source metadata and UI chip (`registry|bootstrapped|autodiscovered|empty|error`).
+  - Added auto-fallback chain when matrix initially resolves to zero rows:
+    1. bootstrap from AGOrg AGO records
+    2. AGOrg discover+import
+    3. bootstrap retry
+  - Resolved scope-root trap for sibling AGOs by using both AGOrg `root_path` and `master_path` for in-scope checks.
+  - Resolved selection/filter intersection trap: explicit row selection is authoritative target set.
+- 2026-03-02: UX guidance rail enhancement completed (non-executing).
+  - Dashboard workflow strip is now clickable and keyboard-accessible (button semantics).
+  - Click behavior is hint-only (tab jump + guidance output), with no command execution.
+  - Intended as macro/chatbot handoff surface for future automation.
