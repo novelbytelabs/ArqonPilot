@@ -259,6 +259,7 @@ struct DependencyActionRequest {
     json: bool,
     branch: Option<String>,
     remote: Option<String>,
+    preflight_steps: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2836,6 +2837,42 @@ async fn run_dependency_action(
         ("drift", true) => run_local_script("./scripts/drift_report.sh --json").await,
         ("drift", false) => run_local_script("./scripts/drift_report.sh").await,
         ("gate", _) => run_local_script("./scripts/prepush_gate.sh").await,
+        ("preflight", _) => {
+            use crate::preflight::{graph::run_preflight_graph, model::PreflightStepType};
+            let mut steps = Vec::new();
+            if let Some(rlist) = req.preflight_steps {
+                for s in rlist {
+                    match s.as_str() {
+                        "policy" => steps.push(PreflightStepType::Policy),
+                        "hook" => steps.push(PreflightStepType::Hook),
+                        "drift" => steps.push(PreflightStepType::Drift),
+                        "gate" => steps.push(PreflightStepType::Gate),
+                        "push" => steps.push(PreflightStepType::Push),
+                        _ => {}
+                    }
+                }
+            } else {
+                steps = vec![
+                    PreflightStepType::Policy,
+                    PreflightStepType::Hook,
+                    PreflightStepType::Drift,
+                    PreflightStepType::Gate,
+                ];
+            }
+            let report = run_preflight_graph(Path::new("."), steps, req.branch.as_deref(), req.remote.as_deref()).await;
+            match report {
+                Ok(rep) => {
+                    let ok = rep.is_pass();
+                    let body = json!({
+                        "ok": ok,
+                        "action": "preflight",
+                        "report": rep,
+                    });
+                    return Json(body).into_response();
+                }
+                Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+            }
+        }
         ("repair", _) => run_local_script("./scripts/repair_lock_182.sh --no-gate").await,
         ("bus-start", _) => run_local_script(&bus_shim_command("start")).await,
         ("bus-stop", _) => run_local_script(&bus_shim_command("stop")).await,

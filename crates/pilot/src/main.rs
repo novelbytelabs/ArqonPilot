@@ -6,6 +6,7 @@ mod db_runtime;
 mod governance;
 mod serve_ui;
 mod shim_runtime;
+pub mod preflight;
 use agorg::AgorgStore;
 use db_runtime::PilotDbManager;
 use pilot_branch as branch;

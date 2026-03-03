@@ -1784,8 +1784,13 @@ async function oracleViewReport() {
 }
 
 async function depRun(action) {
-  const isJsonAction = action === 'policy' || action === 'hook-policy';
-  const req = { action, json: isJsonAction };
+  const isPreflight = ['policy', 'hook-policy', 'drift', 'gate', 'push'].includes(action);
+  const req = { action: isPreflight ? 'preflight' : action, json: false };
+  if (isPreflight) {
+    let step = action;
+    if (step === 'hook-policy') step = 'hook';
+    req.preflight_steps = [step];
+  }
   if (action === 'push') {
     req.branch = document.getElementById('dash-push-branch').value || 'main';
     req.remote = document.getElementById('dash-push-remote').value || 'origin';
@@ -1796,17 +1801,44 @@ async function depRun(action) {
     body: JSON.stringify(req)
   });
   const data = await res.json();
-  if (isJsonAction) {
-    try {
-      const parsed = JSON.parse(data.stdout || '{}');
-      if (action === 'policy') setDepStatus(depPolicyStatus, parsed);
-      if (action === 'hook-policy') setDepStatus(depHookStatus, parsed);
-      if (action === 'drift') setDepDriftStatus(parsed && parsed.ok ? 'PASS' : 'FAIL');
-    } catch (_) {}
+  
+  if (data.action === 'preflight' && data.report && Array.isArray(data.report.steps)) {
+    for (const s of data.report.steps) {
+      const stepName = s.step;
+      const passed = s.result.status === 'Pass';
+      const suffix = passed ? 'PASS' : 'FAIL';
+      const level = passed ? 'ok' : 'fail';
+      
+      const parsedStruct = { ok: passed };
+      if (!passed && s.result.failure_code) {
+          parsedStruct.failed_checks = [s.result.failure_code];
+      }
+      
+      if (stepName === 'Policy') {
+          setDepStatus(depPolicyStatus, parsedStruct);
+          setChip(dashPolicyChip, 'Policy: ' + suffix, level);
+      }
+      if (stepName === 'Hook') {
+          setDepStatus(depHookStatus, parsedStruct);
+          setChip(dashHookChip, 'Hook: ' + suffix, level);
+      }
+      if (stepName === 'Drift') {
+          setDepDriftStatus(suffix);
+          setChip(dashDriftChip, 'Drift: ' + suffix, level);
+      }
+      if (stepName === 'Gate') {
+          setChip(dashGateChip, 'Gate: ' + suffix, level);
+      }
+      if (stepName === 'Push') {
+          setChip(dashPushChip, 'Push: ' + suffix, level);
+      }
+      
+      if (!passed && s.result.hint) {
+          appendLive({ source: 'dashboard', action: stepName, error: s.result.hint });
+      }
+    }
   }
-  if (action === 'drift' && !isJsonAction) {
-    setDepDriftStatus(data.ok ? 'PASS' : 'FAIL');
-  }
+
   if (action.startsWith('bus-')) {
     const text = String(data.stdout || '') + '\n' + String(data.stderr || '');
     if (text.includes('RUNNING')) setBusStatus(true, 'bus shim reported RUNNING');
@@ -1821,7 +1853,9 @@ async function depRun(action) {
   if (depActionOutGlobal) {
     depActionOutGlobal.textContent = JSON.stringify(data, null, 2);
   }
-  updateDashChip(action, !!data.ok, data);
+  if (!isPreflight) {
+      updateDashChip(action, !!data.ok, data);
+  }
   depLoadLogs();
 }
 
