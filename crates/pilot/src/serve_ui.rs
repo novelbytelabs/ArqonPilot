@@ -613,6 +613,26 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
             post(api_settings_delete_exception),
         )
         .route(
+            "/api/settings/overrides/:kind",
+            get(api_settings_get_overrides),
+        )
+        .route(
+            "/api/settings/overrides/:kind",
+            post(api_settings_create_override),
+        )
+        .route(
+            "/api/settings/overrides/delete/:kind/:ago_encoded",
+            post(api_settings_delete_override),
+        )
+        .route(
+            "/api/settings/policy/resolve_trace",
+            post(api_settings_resolve_trace),
+        )
+        .route(
+            "/api/settings/governance_scan",
+            post(api_settings_governance_scan),
+        )
+        .route(
             "/api/settings/compliance_scan",
             post(api_settings_compliance_scan),
         )
@@ -2654,6 +2674,139 @@ async fn api_agorg_delete(
     }
 }
 
+// -----------------------------------------------------------------------------
+// OVERRIDE REGISTRY HANDLERS
+// -----------------------------------------------------------------------------
+
+async fn api_settings_get_overrides(
+    State(state): State<Arc<UiState>>,
+    axum::extract::Path(kind): axum::extract::Path<String>,
+) -> Response {
+    let agorg_id = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(agorg)) => agorg.id,
+        Ok(None) => return error_response(StatusCode::BAD_REQUEST, "No active AGOrg"),
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    match gov_store.list_overrides(agorg_id, &kind).await {
+        Ok(overrides) => Json(json!({"ok": true, "overrides": overrides})).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct CreateOverrideReq {
+    ago_path: String,
+    reason: String,
+    ticket_ref: Option<String>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    policy_json: serde_json::Value,
+}
+
+async fn api_settings_create_override(
+    State(state): State<Arc<UiState>>,
+    axum::extract::Path(kind): axum::extract::Path<String>,
+    Json(req): Json<CreateOverrideReq>,
+) -> Response {
+    if !state.allow_mutations {
+        return error_response(StatusCode::FORBIDDEN, "mutations disabled");
+    }
+    let agorg_id = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(agorg)) => agorg.id,
+        Ok(None) => return error_response(StatusCode::BAD_REQUEST, "No active AGOrg"),
+        Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
+    };
+
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    match gov_store
+        .create_override_with_reason(
+            agorg_id,
+            &req.ago_path,
+            &kind,
+            &req.policy_json,
+            "active",
+            "pilot_ui",
+            &req.reason,
+            req.ticket_ref.as_deref(),
+            req.expires_at,
+        )
+        .await
+    {
+        Ok(_) => Json(json!({"ok": true})).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn api_settings_delete_override(
+    State(state): State<Arc<UiState>>,
+    axum::extract::Path((kind, ago_encoded)): axum::extract::Path<(String, String)>,
+) -> Response {
+    if !state.allow_mutations {
+        return error_response(StatusCode::FORBIDDEN, "mutations disabled");
+    }
+    let agorg_id = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(agorg)) => agorg.id,
+        Ok(None) => return error_response(StatusCode::BAD_REQUEST, "No active AGOrg"),
+        Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
+    };
+
+    let ago_path = ago_encoded
+        .replace("%2F", "/")
+        .replace("%2f", "/")
+        .replace("%20", " ")
+        .replace("%25", "%");
+
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    match gov_store
+        .revoke_override(agorg_id, &ago_path, &kind)
+        .await
+    {
+        Ok(_) => Json(json!({"ok": true})).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ResolveTraceReq {
+    ago_path: String,
+    policy_kind: String,
+}
+
+async fn api_settings_resolve_trace(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<ResolveTraceReq>,
+) -> Response {
+    let agorg_id = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(agorg)) => agorg.id,
+        Ok(None) => return error_response(StatusCode::BAD_REQUEST, "No active AGOrg"),
+        Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
+    };
+
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    match gov_store
+        .resolve_with_trace(agorg_id, &req.ago_path, &req.policy_kind)
+        .await
+    {
+        Ok(trace) => Json(json!({"ok": true, "trace": trace})).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn api_settings_governance_scan(State(state): State<Arc<UiState>>) -> Response {
+    let agorg_id = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(agorg)) => agorg.id,
+        Ok(None) => return error_response(StatusCode::BAD_REQUEST, "No active AGOrg"),
+        Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
+    };
+
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    match crate::governance::eval::fleet_governance_scan(&gov_store, &state.agorg_store, agorg_id).await {
+        Ok(report) => Json(json!({"ok": true, "report": report})).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
 async fn api_agorg_reset(State(state): State<Arc<UiState>>) -> Response {
     if !state.allow_mutations {
         return error_response(StatusCode::FORBIDDEN, "reset blocked in read-only UI mode");
@@ -4128,6 +4281,8 @@ mod tests {
                 code: "archive_path".to_string(),
                 message: "off-policy".to_string(),
             }],
+            governance_issues: vec![],
+            conflict_traces: vec![],
         }
     }
 
@@ -7212,6 +7367,100 @@ Recommended flow:
            <button class="btn secondary" onclick="settingsResolvePolicy()">Resolve Local Policy</button>
            <button class="btn secondary" onclick="settingsExploreDecisions()">Explore Decisions</button>
          </div>
+      </div>
+
+      <div class="card">
+        <h3>Override Registry</h3>
+        <p class="helper">Manage AGOrg-level policy overrides across the fleet. Overrides supersede baseline and default policies.</p>
+        <div class="row">
+          <select id="settings-override-kind" onchange="settingsLoadOverrides()">
+            <option value="branch" selected>Branch Rules</option>
+            <option value="dependency">Dependency & Lockfiles</option>
+            <option value="release">Release Structure</option>
+            <option value="security">Security & Secrets</option>
+            <option value="quality">Code Quality</option>
+            <option value="runtime">Runtime Env</option>
+          </select>
+          <button class="btn secondary" onclick="settingsLoadOverrides()">Refresh Overrides</button>
+        </div>
+
+        <div style="overflow-x:auto; margin-bottom: 16px;">
+          <table class="branch-matrix-table" id="settings-overrides-table">
+            <thead>
+              <tr>
+                <th>AGO Target</th>
+                <th>Owner</th>
+                <th>Reason</th>
+                <th>Expires</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="5" style="text-align:center; color:var(--muted)">No overrides loaded</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h4>Register New Override</h4>
+        <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 0;">
+          <div>
+            <label class="field-label">Target AGO (Path)</label>
+            <input id="settings-override-target" type="text" placeholder="e.g. core/engine" />
+          </div>
+          <div>
+            <label class="field-label">Ticket Ref (Optional)</label>
+            <input id="settings-override-ticket" type="text" placeholder="JIRA-123" />
+          </div>
+          <div>
+            <label class="field-label">Expires At (Optional)</label>
+            <input id="settings-override-expires" type="date" />
+          </div>
+        </div>
+        <label class="field-label">Reason</label>
+        <input id="settings-override-reason" type="text" placeholder="Why is this policy overridden?" />
+        
+        <label class="field-label">Override Policy JSON</label>
+        <textarea id="settings-override-json" placeholder='{"level": "Warn"}' style="min-height:100px;"></textarea>
+
+        <div class="row" style="margin-top:8px;">
+          <button class="btn" onclick="settingsCreateOverride()">Create Override</button>
+          <button class="btn secondary" onclick="settingsResolveTrace()">Resolve Policy Trace</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Fleet-Wide Governance Health</h3>
+        <p class="helper">Run a holistic fleet scan to verify compliance across all policy families.</p>
+        <div class="row">
+          <button class="btn secondary" onclick="settingsGovernanceScan()">Run Fleet Scan</button>
+          <button class="btn secondary" onclick="settingsExportGovernanceReport()">Export Report</button>
+        </div>
+        
+        <div class="chip-row">
+            <span id="gov-scan-total-chip" class="chip neutral" tabindex="0" role="status">Scanned: unknown</span>
+            <span id="gov-scan-violations-chip" class="chip neutral" tabindex="0" role="status">Violations: unknown</span>
+        </div>
+
+        <div style="overflow-x:auto;">
+          <table class="branch-matrix-table" id="settings-gov-scan-table">
+            <thead>
+              <tr>
+                <th>AGO Target</th>
+                <th>Overall</th>
+                <th>Branch</th>
+                <th>Dep.</th>
+                <th>Release</th>
+                <th>Security</th>
+                <th>Quality</th>
+                <th>Runtime</th>
+                <th>Overrides</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="9" style="text-align:center; color:var(--muted)">Run scan to view compliance matrix</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </section>

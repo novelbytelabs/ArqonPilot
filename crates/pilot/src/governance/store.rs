@@ -1,4 +1,4 @@
-use super::model::{AgorgPolicyRecord, PolicyException};
+use super::model::{AgorgPolicyRecord, InheritanceStep, PolicyConflictTrace, PolicyException, PolicyOverrideRecord};
 use chrono::{DateTime, Utc};
 use miette::{IntoDiagnostic, Result};
 use tokio_postgres::{Client, NoTls};
@@ -234,20 +234,106 @@ impl GovernanceStore {
         })
     }
 
-    pub async fn delete_ago_policy_override(
+    pub async fn list_overrides(
+        &self,
+        agorg_id: Uuid,
+        policy_kind: &str,
+    ) -> Result<Vec<PolicyOverrideRecord>> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT id, agorg_id, ago_path, policy_kind, reason, ticket_ref, owner, created_at, expires_at, parent_policy_version, override_policy_version
+                 FROM agorg_policy_overrides
+                 WHERE agorg_id = $1 AND policy_kind = $2 AND revoked_at IS NULL
+                 ORDER BY created_at DESC",
+                &[&agorg_id, &policy_kind],
+            )
+            .await
+            .into_diagnostic()?;
+
+        let mut overrides = Vec::new();
+        for r in rows {
+            overrides.push(PolicyOverrideRecord {
+                id: r.get(0),
+                agorg_id: r.get(1),
+                ago_path: r.get(2),
+                policy_kind: r.get(3),
+                reason: r.get(4),
+                ticket_ref: r.get(5),
+                owner: r.get(6),
+                created_at: r.get(7),
+                expires_at: r.get(8),
+                parent_policy_version: r.get(9),
+                override_policy_version: r.get(10),
+            });
+        }
+        Ok(overrides)
+    }
+
+    pub async fn create_override_with_reason(
         &self,
         agorg_id: Uuid,
         ago_path: &str,
         policy_kind: &str,
-    ) -> Result<()> {
+        policy_json: &serde_json::Value,
+        status: &str,
+        operator: &str,
+        reason: &str,
+        ticket_ref: Option<&str>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<AgorgPolicyRecord> {
+        let parent_policy = self.get_policy(agorg_id, policy_kind).await?;
+        let parent_version = parent_policy.map(|p| p.version).unwrap_or(0);
+
+        let saved = self
+            .save_policy(
+                agorg_id,
+                Some(ago_path),
+                policy_kind,
+                policy_json,
+                status,
+                operator,
+            )
+            .await?;
+
         let client = self.connect().await?;
         client
             .execute(
-                "DELETE FROM agorg_policies WHERE agorg_id = $1 AND policy_kind = $2 AND ago_path = $3",
-                &[&agorg_id, &policy_kind, &ago_path],
+                "INSERT INTO agorg_policy_overrides (agorg_id, ago_path, policy_kind, reason, ticket_ref, owner, expires_at, parent_policy_version, override_policy_version)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                &[
+                    &agorg_id,
+                    &ago_path,
+                    &policy_kind,
+                    &reason,
+                    &ticket_ref,
+                    &operator,
+                    &expires_at,
+                    &parent_version,
+                    &saved.version,
+                ],
             )
             .await
             .into_diagnostic()?;
+        Ok(saved)
+    }
+
+    pub async fn revoke_override(&self, agorg_id: Uuid, ago_path: &str, policy_kind: &str) -> Result<()> {
+        let mut client = self.connect().await?;
+        let tx = client.transaction().await.into_diagnostic()?;
+        tx.execute(
+            "DELETE FROM agorg_policies WHERE agorg_id = $1 AND policy_kind = $2 AND ago_path = $3",
+            &[&agorg_id, &policy_kind, &ago_path],
+        )
+        .await
+        .into_diagnostic()?;
+        tx.execute(
+            "UPDATE agorg_policy_overrides SET revoked_at = NOW() WHERE agorg_id = $1 AND policy_kind = $2 AND ago_path = $3 AND revoked_at IS NULL",
+            &[&agorg_id, &policy_kind, &ago_path],
+        )
+        .await
+        .into_diagnostic()?;
+        tx.commit().await.into_diagnostic()?;
         Ok(())
     }
 
@@ -318,6 +404,98 @@ impl GovernanceStore {
             }
             None => Ok(None),
         }
+    }
+
+    pub async fn resolve_with_trace(
+        &self,
+        agorg_id: Uuid,
+        ago_path: &str,
+        policy_kind: &str,
+    ) -> Result<PolicyConflictTrace> {
+        let client = self.connect().await?;
+
+        // 1. Get the hierarchy walk and check if each level has an override or a fleet policy.
+        let rows = client
+            .query(
+                "WITH RECURSIVE hierarchy(agorg_id, parent_agorg_id, depth) AS (
+                    SELECT id, parent_agorg_id, 0 FROM agorgs WHERE id = $1
+                    UNION ALL
+                    SELECT a.id, a.parent_agorg_id, h.depth + 1
+                    FROM agorgs a
+                    JOIN hierarchy h ON a.id = h.parent_agorg_id
+                    WHERE h.depth < 10
+                )
+                SELECT h.agorg_id, a.name, h.depth,
+                       EXISTS(SELECT 1 FROM agorg_policies WHERE agorg_id = h.agorg_id AND policy_kind = $2 AND ago_path = $3 AND status = 'active') as has_override,
+                       EXISTS(SELECT 1 FROM agorg_policies WHERE agorg_id = h.agorg_id AND policy_kind = $2 AND ago_path IS NULL AND status = 'active') as has_fleet_policy
+                FROM hierarchy h
+                JOIN agorgs a ON h.agorg_id = a.id
+                ORDER BY h.depth ASC",
+                &[&agorg_id, &policy_kind, &ago_path],
+            )
+            .await
+            .into_diagnostic()?;
+
+        let mut chain = Vec::new();
+        let mut winner_index = None;
+        let mut winner_source = "fallback".to_string();
+
+        for (i, r) in rows.iter().enumerate() {
+            let step_agorg_id: Uuid = r.get(0);
+            let step_name: String = r.get(1);
+            let depth: i32 = r.get(2);
+            let has_override: bool = r.get(3);
+            let has_fleet_policy: bool = r.get(4);
+
+            chain.push(InheritanceStep {
+                agorg_id: step_agorg_id,
+                agorg_name: step_name,
+                depth,
+                has_override,
+                has_fleet_policy,
+                is_winner: false,
+            });
+
+            // The first level (starting from depth 0) that has either an override or fleet policy wins.
+            if winner_index.is_none() {
+                if has_override {
+                    winner_index = Some(i);
+                    winner_source = "ago_override".to_string();
+                } else if has_fleet_policy {
+                    winner_index = Some(i);
+                    winner_source = if depth == 0 { "agorg_active".to_string() } else { "parent_agorg".to_string() };
+                }
+            }
+        }
+
+        let mut resolved_agorg_id = Uuid::nil();
+        let mut resolved_version = 0;
+
+        if let Some(idx) = winner_index {
+            chain[idx].is_winner = true;
+            resolved_agorg_id = chain[idx].agorg_id;
+
+            // Fetch the winning version
+            let is_override = winner_source == "ago_override";
+            let path_param = if is_override { Some(ago_path) } else { None };
+            let policy_row = client.query_opt(
+                "SELECT version FROM agorg_policies WHERE agorg_id = $1 AND policy_kind = $2 AND ago_path IS NOT DISTINCT FROM $3 AND status = 'active' ORDER BY version DESC LIMIT 1",
+                &[&resolved_agorg_id, &policy_kind, &path_param]
+            ).await.into_diagnostic()?;
+            
+            if let Some(p) = policy_row {
+                resolved_version = p.get(0);
+            }
+        }
+
+        Ok(PolicyConflictTrace {
+            ago_path: ago_path.to_string(),
+            policy_kind: policy_kind.to_string(),
+            resolved_source: winner_source,
+            resolved_agorg_id,
+            resolved_version,
+            chain,
+        })
     }
 
     pub async fn get_exceptions(

@@ -2712,6 +2712,29 @@ async function agorgReconcile() {
     if (dashAgorgClassCountsOut) dashAgorgClassCountsOut.textContent = renderClassCountsText(data.report);
     setDashAgorgIssueStateFromReport(data.report);
     await agorgLoadPolicyReports();
+    // Render governance issues if present
+    const govIssues = (data.report || {}).governance_issues || [];
+    const conflictTraces = (data.report || {}).conflict_traces || [];
+    if (govIssues.length > 0) {
+      const severityIcon = { error: '🔴', warning: '🟡', info: '🔵' };
+      let govText = `── Governance Issues (${govIssues.length}) ──\n`;
+      govIssues.forEach(gi => {
+        govText += `${severityIcon[gi.severity] || '⚪'} [${gi.issue_type}] ${gi.policy_kind} → ${gi.ago_path}\n`;
+        govText += `   ${gi.message}\n`;
+        govText += `   ↳ Remediation: ${gi.remediation}\n`;
+      });
+      logActivity("Governance Reconcile Issues", govText);
+    }
+    if (conflictTraces.length > 0) {
+      let traceText = `── Conflict Traces (${conflictTraces.length}) ──\n`;
+      conflictTraces.forEach(ct => {
+        traceText += `${ct.policy_kind} → ${ct.ago_path} (winner: ${ct.resolved_source})\n`;
+        (ct.chain || []).forEach(step => {
+          traceText += `   ${step.is_winner ? '★' : '·'} ${step.agorg_name} (depth ${step.depth})${step.has_override ? ' [OVERRIDE]' : ''}${step.has_fleet_policy ? ' [FLEET]' : ''}\n`;
+        });
+      });
+      logActivity("Policy Conflict Traces", traceText);
+    }
   }
 }
 
@@ -4397,6 +4420,263 @@ function startHealthHeartbeat() {
       if (dashDbChip) setChipState(dashDbChip, 'DB: ERROR', 'failed');
     }
   }, 5000);
+}
+
+// -----------------------------------------------------------------------------
+// OVERRIDE REGISTRY & FLEET GOVERNANCE HEALTH SCAN
+// -----------------------------------------------------------------------------
+
+async function settingsLoadOverrides() {
+  const kind = document.getElementById('settings-override-kind').value;
+  try {
+    const res = await fetch(`/api/settings/overrides/${encodeURIComponent(kind)}`);
+    const data = await res.json();
+    const tbody = document.querySelector('#settings-overrides-table tbody');
+    if (!data.ok) {
+      tbody.innerHTML = `<tr><td colspan="5" style="color:var(--rose)">Error: ${data.message || data.error}</td></tr>`;
+      return;
+    }
+    
+    if (!data.overrides || data.overrides.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--muted)">No overrides active for ${kind}</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = '';
+    for (const ov of data.overrides) {
+      const tr = document.createElement('tr');
+      
+      const tdTarget = document.createElement('td');
+      tdTarget.textContent = ov.ago_path;
+      tr.appendChild(tdTarget);
+
+      const tdOwner = document.createElement('td');
+      tdOwner.textContent = ov.owner_identity;
+      tr.appendChild(tdOwner);
+
+      const tdReason = document.createElement('td');
+      tdReason.textContent = ov.reason;
+      if (ov.ticket_ref) {
+        tdReason.textContent += ` (${ov.ticket_ref})`;
+      }
+      tr.appendChild(tdReason);
+
+      const tdExpires = document.createElement('td');
+      if (ov.expires_at) {
+        tdExpires.textContent = new Date(ov.expires_at).toLocaleString();
+      } else {
+        tdExpires.textContent = "Never";
+        tdExpires.style.color = 'var(--muted)';
+      }
+      tr.appendChild(tdExpires);
+
+      const tdActions = document.createElement('td');
+      const btnRevoke = document.createElement('button');
+      btnRevoke.className = 'btn secondary';
+      btnRevoke.style.padding = '4px 8px';
+      btnRevoke.textContent = 'Revoke';
+      btnRevoke.onclick = () => settingsRevokeOverride(kind, ov.ago_path);
+      tdActions.appendChild(btnRevoke);
+      tr.appendChild(tdActions);
+
+      tbody.appendChild(tr);
+    }
+  } catch (err) {
+    console.error("Failed to load overrides", err);
+  }
+}
+
+async function settingsCreateOverride() {
+  const kind = document.getElementById('settings-override-kind').value;
+  const target = document.getElementById('settings-override-target').value.trim();
+  const reason = document.getElementById('settings-override-reason').value.trim();
+  const ticket_ref = document.getElementById('settings-override-ticket').value.trim();
+  const expiresRaw = document.getElementById('settings-override-expires').value;
+  const policyStr = document.getElementById('settings-override-json').value.trim();
+
+  if (!target || !reason || !policyStr) {
+    alert("Target AGO, Reason, and Policy JSON are required.");
+    return;
+  }
+
+  let policy_json;
+  try {
+    policy_json = JSON.parse(policyStr);
+  } catch (e) {
+    alert("Invalid Policy JSON: " + e.message);
+    return;
+  }
+
+  let expires_at = null;
+  if (expiresRaw) {
+    expires_at = new Date(expiresRaw).toISOString();
+  }
+
+  const payload = {
+    ago_path: target,
+    reason: reason,
+    policy_json: policy_json
+  };
+  
+  if (ticket_ref) payload.ticket_ref = ticket_ref;
+  if (expires_at) payload.expires_at = expires_at;
+
+  try {
+    const res = await fetch(`/api/settings/overrides/${encodeURIComponent(kind)}`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      // clear form
+      document.getElementById('settings-override-target').value = '';
+      document.getElementById('settings-override-reason').value = '';
+      document.getElementById('settings-override-ticket').value = '';
+      document.getElementById('settings-override-expires').value = '';
+      settingsLoadOverrides();
+    } else {
+      alert("Error: " + (data.message || data.error || "Failed to create override"));
+    }
+  } catch (err) {
+    alert("Error: " + err.message);
+  }
+}
+
+async function settingsRevokeOverride(kind, agoPath) {
+  if (!confirm(`Are you sure you want to revoke the ${kind} override for ${agoPath}?`)) {
+    return;
+  }
+  
+  try {
+    const res = await fetch(`/api/settings/overrides/delete/${encodeURIComponent(kind)}/${encodeURIComponent(agoPath)}`, {
+      method: 'POST'
+    });
+    const data = await res.json();
+    if (data.ok) {
+      settingsLoadOverrides();
+    } else {
+      alert("Error revoking override: " + (data.message || data.error));
+    }
+  } catch (err) {
+    alert("Error: " + err.message);
+  }
+}
+
+async function settingsResolveTrace() {
+  const kind = document.getElementById('settings-override-kind').value;
+  const target = document.getElementById('settings-override-target').value.trim();
+  if (!target) {
+    alert("Please enter a Target AGO path to resolve its trace.");
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/settings/policy/resolve_trace`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({ policy_kind: kind, ago_path: target })
+    });
+    const data = await res.json();
+    const out = document.getElementById('settings-status-out');
+    if (data.ok) {
+      out.textContent = `TRACE FOR ${kind.toUpperCase()} @ ${target}:\n` + JSON.stringify(data.trace, null, 2);
+    } else {
+      out.textContent = "Error: " + (data.message || data.error);
+    }
+  } catch (err) {
+    document.getElementById('settings-status-out').textContent = "Error: " + err.message;
+  }
+}
+
+async function settingsGovernanceScan() {
+  const tbody = document.querySelector('#settings-gov-scan-table tbody');
+  tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:var(--muted)">Scanning fleet...</td></tr>`;
+  
+  const totChip = document.getElementById('gov-scan-total-chip');
+  const violChip = document.getElementById('gov-scan-violations-chip');
+  setChipState(totChip, "Scanned: running...", "running");
+  setChipState(violChip, "Violations: computing...", "running");
+
+  try {
+    const res = await fetch(`/api/settings/governance_scan`, { method: 'POST' });
+    const data = await res.json();
+    
+    if (!data.ok) {
+      tbody.innerHTML = `<tr><td colspan="9" style="color:var(--rose)">Error: ${data.message || data.error}</td></tr>`;
+      setChipState(totChip, "Scanned: Error", "failed");
+      setChipState(violChip, "Violations: Error", "failed");
+      return;
+    }
+
+    const rep = data.report;
+    setChipState(totChip, `Scanned: ${rep.agos_scanned}`, "success");
+    setChipState(violChip, `Violations: ${rep.total_violations}`, rep.total_violations > 0 ? "failed" : "success");
+
+    if (!rep.ago_statuses || rep.ago_statuses.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:var(--muted)">No AGOs returned by scan.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = '';
+    for (const st of rep.ago_statuses) {
+      const tr = document.createElement('tr');
+      
+      const tdTarget = document.createElement('td');
+      tdTarget.textContent = st.ago_path;
+      tr.appendChild(tdTarget);
+
+      const tdOverall = document.createElement('td');
+      const spanOverall = document.createElement('span');
+      spanOverall.className = 'chip ' + (st.overall_status === 'compliant' ? 'ok' : (st.overall_status === 'violation' ? 'fail' : 'warn'));
+      spanOverall.textContent = st.overall_status.toUpperCase();
+      tdOverall.appendChild(spanOverall);
+      tr.appendChild(tdOverall);
+
+      const families = ['branch', 'dependency', 'release', 'security', 'quality', 'runtime'];
+      for (const fam of families) {
+        const td = document.createElement('td');
+        const ev = st.evaluations[fam];
+        if (ev) {
+          if (ev.blocked || (ev.violations && ev.violations.length > 0)) {
+             td.textContent = '❌ Fail';
+             td.style.color = 'var(--rose)';
+          } else if (ev.warnings && ev.warnings.length > 0) {
+             td.textContent = '⚠️ Warn';
+             td.style.color = 'var(--accent)';
+          } else {
+             td.textContent = '✅ Pass';
+             td.style.color = 'var(--primary)';
+          }
+        } else {
+          td.textContent = '-';
+          td.style.color = 'var(--dim)';
+        }
+        tr.appendChild(td);
+      }
+
+      const tdOverrides = document.createElement('td');
+      if (st.is_overridden) {
+         tdOverrides.textContent = "Has Overrides";
+         tdOverrides.style.color = 'var(--accent)';
+      } else {
+         tdOverrides.textContent = 'None';
+         tdOverrides.style.color = 'var(--muted)';
+      }
+      tr.appendChild(tdOverrides);
+
+      tbody.appendChild(tr);
+    }
+
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="9" style="color:var(--rose)">Exception during scan: ${err.message}</td></tr>`;
+    setChipState(totChip, "Scanned: Exception", "failed");
+    setChipState(violChip, "Violations: Exception", "failed");
+  }
+}
+
+async function settingsExportGovernanceReport() {
+   alert("Export Governance Report not fully wired in UI layer yet, report json is kept in backend state.");
 }
 
 bootUi();

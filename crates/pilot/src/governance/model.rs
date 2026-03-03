@@ -325,10 +325,9 @@ pub struct GovernanceReconcileReport {
 pub struct AgoComplianceStatus {
     pub ago_path: String,
     pub ago_name: String,
-    pub is_compliant: bool,
-    pub violation_count: usize,
-    pub warning_count: usize,
-    pub reports: Vec<(String, PolicyEvalReport)>, // (kind, report)
+    pub overall_status: String,
+    pub is_overridden: bool,
+    pub evaluations: std::collections::HashMap<String, PolicyEvalReport>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

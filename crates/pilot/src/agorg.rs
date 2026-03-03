@@ -75,6 +75,16 @@ pub struct AgorgReconcileIssue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceReconcileIssue {
+    pub ago_path: String,
+    pub policy_kind: String,
+    pub issue_type: String,     // "expired_override", "orphan_override", "conflict", "shadow"
+    pub severity: String,       // "error", "warning", "info"
+    pub message: String,
+    pub remediation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgorgReconcileReport {
     pub agorg_id: Uuid,
     pub agorg_name: String,
@@ -86,6 +96,8 @@ pub struct AgorgReconcileReport {
     pub prune_candidate_paths: Vec<String>,
     pub duplicate_resolutions: Vec<AgorgDuplicateResolution>,
     pub issues: Vec<AgorgReconcileIssue>,
+    pub governance_issues: Vec<GovernanceReconcileIssue>,
+    pub conflict_traces: Vec<crate::governance::model::PolicyConflictTrace>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +378,22 @@ impl AgorgStore {
             .await
             .into_diagnostic()?;
         Ok(row.as_ref().map(row_to_agorg))
+    }
+
+    pub async fn get_agos(&self, agorg_id: Uuid) -> Result<Vec<AgoRecord>> {
+        self.initialize().await?;
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT id, agorg_id, name, repo_path, relationship_parent, relationship_children
+                 FROM agos
+                 WHERE agorg_id = $1
+                 ORDER BY name ASC",
+                &[&agorg_id],
+            )
+            .await
+            .into_diagnostic()?;
+        Ok(rows.iter().map(row_to_ago).collect())
     }
 
     pub async fn get_agorg_settings(&self, id: Uuid) -> Result<Option<serde_json::Value>> {
@@ -828,6 +856,51 @@ impl AgorgStore {
             v
         };
 
+        let gov_store = crate::governance::store::GovernanceStore::new(self.dsn());
+        let mut governance_issues = Vec::new();
+        let mut conflict_traces = Vec::new();
+        let families = ["branch", "dependency", "release", "security", "quality", "runtime"];
+        for fam in families {
+            if let Ok(overrides) = gov_store.list_overrides(agorg.id, fam).await {
+                for ov in overrides {
+                    let mut found = false;
+                    for ago in &agos {
+                        if ago.repo_path == ov.ago_path {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        governance_issues.push(GovernanceReconcileIssue {
+                            ago_path: ov.ago_path.clone(),
+                            policy_kind: fam.to_string(),
+                            issue_type: "orphan_override".to_string(),
+                            severity: "warning".to_string(),
+                            message: format!("Override for {} exists but AGO is missing or pruned", fam),
+                            remediation: "Revoke the override or restore the AGO".to_string(),
+                        });
+                    }
+                    if let Some(exp) = ov.expires_at {
+                        if exp < chrono::Utc::now() {
+                            governance_issues.push(GovernanceReconcileIssue {
+                                ago_path: ov.ago_path.clone(),
+                                policy_kind: fam.to_string(),
+                                issue_type: "expired_override".to_string(),
+                                severity: "error".to_string(),
+                                message: format!("Override for {} has expired on {}", fam, exp),
+                                remediation: "Revoke or renew the override".to_string(),
+                            });
+                        }
+                    }
+                    if found {
+                         if let Ok(trace) = gov_store.resolve_with_trace(agorg.id, &ov.ago_path, fam).await {
+                             conflict_traces.push(trace);
+                         }
+                    }
+                }
+            }
+        }
+
         Ok(AgorgReconcileReport {
             agorg_id: agorg.id,
             agorg_name: agorg.name,
@@ -839,6 +912,8 @@ impl AgorgStore {
             prune_candidate_paths,
             duplicate_resolutions,
             issues,
+            governance_issues,
+            conflict_traces,
         })
     }
 
@@ -1159,6 +1234,21 @@ impl AgorgStore {
 
                 CREATE UNIQUE INDEX IF NOT EXISTS policy_exceptions_scope_uq
                   ON policy_exceptions (agorg_id, COALESCE(ago_path, '__agorg__'), policy_kind, rule_path);
+
+                CREATE TABLE IF NOT EXISTS agorg_policy_overrides (
+                  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                  agorg_id UUID NOT NULL REFERENCES agorgs(id) ON DELETE CASCADE,
+                  ago_path TEXT NOT NULL,
+                  policy_kind TEXT NOT NULL,
+                  reason TEXT NOT NULL,
+                  ticket_ref TEXT,
+                  owner TEXT NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                  expires_at TIMESTAMPTZ,
+                  parent_policy_version INT NOT NULL,
+                  override_policy_version INT NOT NULL,
+                  revoked_at TIMESTAMPTZ
+                );
 
                 CREATE TABLE IF NOT EXISTS policy_decisions (
                   decision_id UUID PRIMARY KEY,

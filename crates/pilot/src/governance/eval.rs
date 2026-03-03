@@ -1,7 +1,9 @@
 use super::model::*;
 use chrono::Utc;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
+use crate::agorg::AgorgStore;
+use crate::governance::store::GovernanceStore;
 
 pub fn evaluate_branch_policy(
     policy: &BranchPolicy,
@@ -415,6 +417,200 @@ pub fn evaluate_runtime_policy(
 
     report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
     report
+}
+
+// -----------------------------------------------------------------------------
+// FLEET SCAN
+// -----------------------------------------------------------------------------
+
+pub async fn fleet_governance_scan(
+    store: &GovernanceStore,
+    agorg_store: &AgorgStore,
+    agorg_id: Uuid,
+) -> miette::Result<GovernanceReconcileReport> {
+    let mut agos = vec![];
+    
+    // Using a fast approach by fetching AGO paths under this agorg_id
+    if let Ok(list) = agorg_store.get_agos(agorg_id).await {
+        agos = list;
+    }
+
+    let mut statuses = Vec::new();
+    let mut total_violations = 0;
+    
+    for ago in &agos {
+        let repo_path = PathBuf::from(&ago.repo_path);
+        
+        let branch_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "branch").await?;
+        let branch_pol: BranchPolicy = get_policy_from_trace(store, &branch_trace).await?.unwrap_or_default();
+        let branch_ex = store.get_effective_exceptions(agorg_id, "branch").await?;
+        let current_branch = get_current_branch(&repo_path).unwrap_or_else(|| "main".to_string());
+        let branch_eval = evaluate_branch_policy(
+            &branch_pol, 
+            "sync", 
+            &current_branch, 
+            &branch_ex, 
+            &ago.repo_path, 
+            &branch_trace.resolved_source, 
+            Some(branch_trace.resolved_agorg_id)
+        );
+        total_violations += branch_eval.violations.len();
+
+        let dep_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "dependency").await?;
+        let dep_pol: DependencyPolicy = get_policy_from_trace(store, &dep_trace).await?.unwrap_or_default();
+        let dep_ex = store.get_effective_exceptions(agorg_id, "dependency").await?;
+        let dep_eval = evaluate_dependency_policy(
+            &dep_pol, 
+            &repo_path, 
+            &dep_ex, 
+            &ago.repo_path, 
+            &dep_trace.resolved_source, 
+            Some(dep_trace.resolved_agorg_id)
+        );
+        total_violations += dep_eval.violations.len();
+
+        let rel_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "release").await?;
+        let rel_pol: ReleasePolicy = get_policy_from_trace(store, &rel_trace).await?.unwrap_or_default();
+        let rel_ex = store.get_effective_exceptions(agorg_id, "release").await?;
+        let rel_eval = evaluate_release_policy(
+            &rel_pol, 
+            &repo_path, 
+            &rel_ex, 
+            &ago.repo_path, 
+            &rel_trace.resolved_source, 
+            Some(rel_trace.resolved_agorg_id)
+        );
+        total_violations += rel_eval.violations.len();
+
+        let sec_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "security").await?;
+        let sec_pol: SecurityPolicy = get_policy_from_trace(store, &sec_trace).await?.unwrap_or_default();
+        let sec_ex = store.get_effective_exceptions(agorg_id, "security").await?;
+        let sec_eval = evaluate_security_policy(
+            &sec_pol, 
+            &repo_path, 
+            &sec_ex, 
+            &ago.repo_path, 
+            &sec_trace.resolved_source, 
+            Some(sec_trace.resolved_agorg_id)
+        );
+        total_violations += sec_eval.violations.len();
+
+        let qual_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "quality").await?;
+        let qual_pol: QualityPolicy = get_policy_from_trace(store, &qual_trace).await?.unwrap_or_default();
+        let qual_ex = store.get_effective_exceptions(agorg_id, "quality").await?;
+        let qual_eval = evaluate_quality_policy(
+            &qual_pol, 
+            &repo_path, 
+            &qual_ex, 
+            &ago.repo_path, 
+            &qual_trace.resolved_source, 
+            Some(qual_trace.resolved_agorg_id)
+        );
+        total_violations += qual_eval.violations.len();
+
+        let run_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "runtime").await?;
+        let run_pol: RuntimePolicy = get_policy_from_trace(store, &run_trace).await?.unwrap_or_default();
+        let run_ex = store.get_effective_exceptions(agorg_id, "runtime").await?;
+        let run_eval = evaluate_runtime_policy(
+            &run_pol, 
+            &repo_path, 
+            &run_ex, 
+            &ago.repo_path, 
+            &run_trace.resolved_source, 
+            Some(run_trace.resolved_agorg_id)
+        );
+        total_violations += run_eval.violations.len();
+
+        // Include trace contexts
+        // No conflict_trace field on PolicyEvalReport, we compute is_overridden directly
+        let is_overridden = branch_trace.resolved_source == "ago_override" ||
+                            dep_trace.resolved_source == "ago_override" ||
+                            rel_trace.resolved_source == "ago_override" ||
+                            sec_trace.resolved_source == "ago_override" ||
+                            qual_trace.resolved_source == "ago_override" ||
+                            run_trace.resolved_source == "ago_override";
+
+        let overall = if branch_eval.blocked || dep_eval.blocked || rel_eval.blocked || sec_eval.blocked || qual_eval.blocked || run_eval.blocked {
+            "violation"
+        } else if !branch_eval.warnings.is_empty() || !dep_eval.warnings.is_empty() || !rel_eval.warnings.is_empty() || !sec_eval.warnings.is_empty() || !qual_eval.warnings.is_empty() || !run_eval.warnings.is_empty() {
+            "warning"
+        } else {
+            "compliant"
+        };
+
+        statuses.push(AgoComplianceStatus {
+            ago_path: ago.repo_path.clone(),
+            ago_name: ago.name.clone(),
+            overall_status: overall.to_string(),
+            is_overridden,
+            evaluations: [
+                ("branch".to_string(), branch_eval),
+                ("dependency".to_string(), dep_eval),
+                ("release".to_string(), rel_eval),
+                ("security".to_string(), sec_eval),
+                ("quality".to_string(), qual_eval),
+                ("runtime".to_string(), run_eval),
+            ].into_iter().collect(),
+        });
+    }
+    
+    let agorg_name = match agorg_store.get_agorg(agorg_id).await {
+        Ok(Some(agorg)) => agorg.name,
+        _ => "Unknown".to_string(),
+    };
+
+    let compliant_count = statuses.iter().filter(|s| s.overall_status == "compliant").count();
+    let warning_count = statuses.iter().filter(|s| s.overall_status == "warning").count();
+
+    Ok(GovernanceReconcileReport {
+        agorg_id,
+        agorg_name,
+        timestamp: Utc::now(),
+        total_agos: agos.len(),
+        compliant_count,
+        violation_count: total_violations,
+        warning_count,
+        ago_statuses: statuses,
+    })
+}
+
+async fn get_policy_from_trace<T: serde::de::DeserializeOwned>(
+    store: &GovernanceStore,
+    trace: &PolicyConflictTrace,
+) -> miette::Result<Option<T>> {
+    let rec = store.get_policy_by_version(trace.resolved_agorg_id, Some(&trace.ago_path), &trace.policy_kind, trace.resolved_version).await?;
+    let val = match rec {
+        Some(r) => r.policy_json,
+        None => {
+            let rec_no_ago = store.get_policy_by_version(trace.resolved_agorg_id, None, &trace.policy_kind, trace.resolved_version).await?;
+            if let Some(r2) = rec_no_ago {
+                r2.policy_json
+            } else {
+                return Ok(None);
+            }
+        }
+    };
+    Ok(serde_json::from_value(val).ok())
+}
+
+fn get_current_branch(repo_path: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .arg("rev-parse")
+        .arg("--abbrev-ref")
+        .arg("HEAD")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        None
+    } else {
+        Some(branch)
+    }
 }
 
 // -----------------------------------------------------------------------------
