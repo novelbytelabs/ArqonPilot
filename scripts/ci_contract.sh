@@ -273,6 +273,9 @@ do_run() {
     execution_id=$(uuidgen 2>/dev/null || echo "exec-$(date +%s)")
     log_info "Executing gates: $gates (execution_id: $execution_id)"
     
+    # Capture start time for duration calculation
+    local start_time=$(date +%s)
+    
     # Run the gates
     local gate_result=0
     IFS=',' read -ra GATE_ARRAY <<< "$gates"
@@ -321,13 +324,13 @@ do_run() {
     local record_file="$CONTRACT_STATE_DIR/$execution_id.json"
     
     # Capture environment snapshot
-    local env_snapshot=$(cat <<ENVEOF
+    local env_snapshot
+    env_snapshot=$(cat <<ENVEOF
 {
   "rust_version": "$(rustc --version 2>/dev/null || echo 'unknown')",
   "cargo_version": "$(cargo --version 2>/dev/null || echo 'unknown')",
   "python_version": "$(python3 --version 2>/dev/null || echo 'unknown')",
   "shell": "$SHELL",
-  "path": "$PATH",
   "user": "$(whoami)",
   "hostname": "$(hostname)"
 }
@@ -335,7 +338,8 @@ ENVEOF
 )
     
     # Capture git info
-    local git_info=$(cat <<GITEOF
+    local git_info
+    git_info=$(cat <<GITEOF
 {
   "branch": "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'unknown')",
   "commit": "$(git rev-parse HEAD 2>/dev/null || echo 'unknown')",
@@ -345,12 +349,12 @@ ENVEOF
 GITEOF
 )
     
-    # Capture start time for duration calculation
-    local start_time=$(date +%s)
-    
     # Calculate duration
-    local end_time=$(date +%s)
+    local end_time
+    end_time=$(date +%s)
     local duration=$((end_time - start_time))
+    local record_timestamp
+    record_timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     
     cat > "$record_file" <<EOF
 {
@@ -359,13 +363,13 @@ GITEOF
   "scope": "$scope",
   "agorg_context": "$agorg_context",
   "gates": "$gates",
-  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "timestamp": "$record_timestamp",
   "duration_seconds": $duration,
   "status": $([ $gate_result -eq 0 ] && echo '"SUCCESS"' || echo '"FAILED"'),
   "provenance": {
     "environment": $env_snapshot,
     "git": $git_info,
-    "payload_digest": "$(generate_digest \"$scope$gates$timestamp\")"
+    "payload_digest": "$(generate_digest \"$scope$gates$record_timestamp\")"
   },
   "resolved_commands": [
     "scope_check:$scope",
@@ -742,6 +746,74 @@ do_report() {
                 fi
             else
                 echo "No execution records found"
+            fi
+            ;;
+        audit_trail)
+            echo "=== Audit Trail ==="
+            echo "Full execution history with provenance"
+            echo ""
+            if [[ -d "$CONTRACT_STATE_DIR" ]]; then
+                local count
+                count=$(ls -1 "$CONTRACT_STATE_DIR"/*.json 2>/dev/null | wc -l)
+                echo "Total audit records: $count"
+                echo ""
+                
+                # List all executions with full provenance
+                ls -t "$CONTRACT_STATE_DIR"/*.json 2>/dev/null | while read -r f; do
+                    echo "--- Execution: $(basename "$f" .json) ---"
+                    if python3 -c "import json; json.load(open('$f'))" 2>/dev/null; then
+                        python3 -c "
+import json
+with open('$f') as f:
+    data = json.load(f)
+    print(f\"Command: {data.get('command', 'N/A')}\")
+    print(f\"Scope: {data.get('scope', 'N/A')}\")
+    print(f\"Gates: {data.get('gates', 'N/A')}\")
+    print(f\"Status: {data.get('status', 'N/A')}\")
+    print(f\"Timestamp: {data.get('timestamp', 'N/A')}\")
+    print(f\"Duration: {data.get('duration_seconds', 'N/A')}s\")
+    if 'provenance' in data:
+        prov = data['provenance']
+        if 'environment' in prov:
+            env = prov['environment']
+            print(f\"Environment: {env.get('rust_version', 'N/A')}, {env.get('cargo_version', 'N/A')}\")
+        if 'git' in prov:
+            git = prov['git']
+            print(f\"Git: {git.get('branch', 'N/A')} @ {git.get('commit_short', 'N/A')}\")
+        if 'payload_digest' in prov:
+            print(f\"Payload Digest: {prov['payload_digest']}\")
+" 2>/dev/null || cat "$f" | python3 -m json.tool
+                    else
+                        echo "  (invalid JSON)"
+                    fi
+                    echo ""
+                done
+            else
+                echo "No audit records found"
+            fi
+            ;;
+        provenance_detail)
+            if [[ -z "$execution_id" ]]; then
+                log_error "Execution ID required for provenance_detail report"
+                return 1
+            fi
+            echo "=== Provenance Detail: $execution_id ==="
+            local record_file="$CONTRACT_STATE_DIR/$execution_id.json"
+            if [[ ! -f "$record_file" ]]; then
+                log_error "Execution record not found: $execution_id"
+                return 1
+            fi
+            
+            if python3 -c "import json; json.load(open('$record_file'))" 2>/dev/null; then
+                python3 -c "
+import json
+with open('$record_file') as f:
+    data = json.load(f)
+    print(json.dumps(data, indent=2))
+"
+            else
+                log_error "Invalid JSON in record file"
+                return 1
             fi
             ;;
         gate_status)

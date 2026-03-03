@@ -27,7 +27,7 @@ use clap::{Args, Parser, Subcommand};
 use config::Config;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::de::DeserializeOwned;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use shim_runtime::bus_shim_command;
 use std::collections::HashSet;
 use std::fs;
