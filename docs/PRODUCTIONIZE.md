@@ -29,10 +29,10 @@ Audit sources used for this consolidation:
 
 ## Consolidated Status
 
-1. Core product waves, AGOrg rollout, and governance control-plane parity are hard-closed.
-2. Branch Control BC-1..BC-8 are hard-closed.
-3. Release process/tooling is complete and operational for alpha cadence.
-4. AGOrg governance loop (report -> dry-run -> apply -> verify) is live in UI/API/CLI.
+1. Core foundation waves and AGOrg control-plane baseline are implemented and stable.
+2. Branch Control BC-1..BC-6 are complete; BC-7/BC-8 parity and hardening are carried in the final completion plan.
+3. Governance control-plane parity (G1..G6) is implemented; multi-policy expansion remains open.
+4. AGOrg governance loop (report -> dry-run -> apply -> verify) is live in UI/API/CLI, with scale-level inheritance/override still open.
 
 ## Frozen Policy (Non-Negotiable)
 
@@ -74,8 +74,8 @@ ArqonPilot is a local control plane for AGOrg-scale software operations:
      - pre-push gate
      - push-safe summary
 5. Known critical hardening tracks still open:
-     - Wave 18 technical debt closure
-     - Branch Control BC-7/BC-8 hard-close
+     - unified completion waves `P1..P9` (this document)
+     - final release-train hardening and evidence discipline
 
 ## Branch Control Consolidated (Merged)
 
@@ -207,14 +207,240 @@ Dogfooding evidence requirements:
      - acceptance matrix artifacts
 2. Record deltas in `docs/release-log.md` and troubleshooting notes when behavior changes.
 
-## Remaining Work (Post Hard-Close Operations)
+## Remaining Work (Authoritative Open Gaps)
 
-1. Continue production release cadence:
-     - execute release playbook
-     - maintain complete evidence bundles for each alpha.
-2. Optional post-close enhancements:
-     - additional policy families (`dependency`, `release`, `security`, `runtime`)
-     - deeper UX/accessibility refinement.
+The items below are open and required for the intended "ultimate" production target. This replaces the prior minimal post-close note.
+
+1. Policy coverage gap:
+     - branch policy is mature; first-class policy families for `dependency`, `release`, `security`, `quality`, and `runtime` are not yet fully implemented end-to-end.
+2. Unified policy execution gap:
+     - `Policy`, `Hook`, `Drift`, and `Gate` are not yet one deterministic decision graph with a single machine-readable remediation contract.
+3. AGOrg governance-at-scale gap:
+     - topology/discovery/reconcile are operational, but org-wide inheritance/override/conflict resolution policy UX is incomplete.
+4. Branch holy-grail gap:
+     - branch UX is significantly improved, but conflict radar, undoable operation journal, deeper timeline, and full protected-branch typed confirmations are still incomplete.
+5. Cross-tab orchestration gap:
+     - Dashboard shortcuts exist, but full command-graph macro/runtime orchestration across `Dependencies` + `Branch` + `Multi` + `Heal` is incomplete.
+6. Evidence hardening gap:
+     - artifacts/logs exist, but tamper-evident signed evidence chain and release-grade audit bundle guarantees are not complete.
+7. Reliability/process supervision gap:
+     - runtime lifecycle is improved, but full supervised Bus/DB/UI model with deterministic startup order and restart policy is incomplete.
+8. Zero-doc usability/accessibility gap:
+     - major improvements landed, but task-mode guidance/progressive disclosure/keyboard-first remediation flows are not complete.
+9. Production release hardening gap:
+     - full channel strategy (alpha/beta/stable), migration playbooks, compatibility matrix, SLO/error-budget policy, and incident runbook discipline need hard-close.
+
+## Final Completion Plan (Unified)
+
+This is the single execution plan to finish the project. All items above are merged into this wave set.
+
+### P1: Policy Families Expansion
+
+Objective:
+1. Implement first-class policy families beyond branch: `dependency`, `release`, `security`, `quality`, `runtime`.
+
+Deliverables:
+1. CLI/API/UI parity for each family (read, draft, preview, approve, activate, resolve, decisions).
+2. Policy storage model supports family versioning and actor/time metadata.
+3. Per-family compliance scan/report artifacts under `~/.pilot/reports/`.
+
+Hard-close evidence:
+1. Targeted tests for each family pass (`cargo test -p pilot --locked` includes new policy suites).
+2. UI settings/governance panel can execute each family flow end-to-end without placeholders.
+
+### P2: Deterministic Preflight Graph
+
+Objective:
+1. Replace fragmented checks with one canonical preflight graph: `Policy -> Hook -> Drift -> Gate -> Push`.
+
+Deliverables:
+1. Canonical contract schema for graph inputs/outputs.
+2. Machine-readable failure codes + remediation hints.
+3. One UI execution path used by Dashboard/Dependencies/Branch flows.
+
+Hard-close evidence:
+1. One acceptance test validates deterministic outcomes for pass/fail variants.
+2. No duplicate logic paths in UI handlers for these checks.
+
+### P3: AGOrg Governance at Scale
+
+Objective:
+1. Enforce AGOrg standards across all AGOs with inheritance/override and conflict mediation.
+
+Deliverables:
+1. Policy inheritance chain (AGOrg -> child AGOrg/AGO).
+2. Explicit override registry with conflict reason logging.
+3. Governance reconciliation report with dry-run/apply parity.
+
+Hard-close evidence:
+1. Dogfood scenario under `~/Projects/arqon/` proves inheritance + override + resolve behavior.
+2. Reconcile artifacts include conflict and resolution traces.
+
+### P4: Branch Control Holy-Grail Completion
+
+Objective:
+1. Finish remaining branch-power features with safety and observability.
+
+Deliverables:
+1. Conflict radar before sync/merge operations.
+2. Undoable operation journal for branch mutations.
+3. Branch timeline hardening with detailed event drill-down.
+4. Protected-branch typed confirmation on destructive operations.
+
+Hard-close evidence:
+1. Branch acceptance checklist passes with preview/execute/undo path.
+2. No branch mutation executes without explicit confirmation and audit artifact.
+
+### P5: Cross-Tab Command Graph Orchestration
+
+Objective:
+1. Make Dashboard a true orchestration plane over specialist tabs.
+
+Deliverables:
+1. Contract runtime for macro-style workflows (without hidden bypasses).
+2. Shared execution/status contract across `Dependencies`, `Branch`, `Multi`, `Heal`.
+3. Workflow rail states clickable and stateful (hint-only unless execute approved).
+
+Hard-close evidence:
+1. End-to-end workflow runs produce one stitched timeline and artifact chain.
+2. Tab interop contract in docs matches actual API payload behavior.
+
+### P6: Tamper-Evident Evidence Chain
+
+Objective:
+1. Upgrade evidence from "logs exist" to release-grade integrity guarantees.
+
+Deliverables:
+1. Signed/hashed artifact chain (operation -> artifact -> summary manifest).
+2. Exportable audit bundle for release gates.
+3. Verification utility to validate bundle integrity.
+
+Hard-close evidence:
+1. Corruption/tamper simulation test fails verification as expected.
+2. Release bundle includes integrity manifest and verification result.
+
+### P7: Runtime Reliability Supervision
+
+Objective:
+1. Make Bus/DB/UI lifecycle deterministic and self-healing.
+
+Deliverables:
+1. Supervised startup order and health probes.
+2. Restart policy with bounded retries + clear failure modes.
+3. Service status API parity across CLI/UI.
+
+Hard-close evidence:
+1. Chaos-style service interruption tests recover within policy bounds.
+2. No "silent disconnected" state without visible remediation instructions.
+
+### P8: Zero-Doc UX + Accessibility Completion
+
+Objective:
+1. Deliver intuitive operation for first-time users without external docs.
+
+Deliverables:
+1. Task-mode flows and progressive disclosure for advanced options.
+2. Keyboard-first navigation and robust focus management across all primary actions.
+3. Inline remediation and accessible status/event output.
+
+Hard-close evidence:
+1. UI smoke + accessibility checks pass.
+2. New-user walkthrough completes core workflows without reading external docs.
+
+### P9: Release Train Hardening
+
+Objective:
+1. Institutionalize repeatable alpha->beta->stable release operations.
+
+Deliverables:
+1. Channel policy and gating criteria.
+2. Migration and rollback playbooks.
+3. Compatibility matrix (toolchain, platform, runtime).
+4. SLO/error-budget + incident response runbook.
+
+Hard-close evidence:
+1. Full dry-run release using playbook produces complete evidence bundle.
+2. One alpha release executed strictly by documented procedure with no tribal steps.
+
+## Execution Rules for Final Waves
+
+1. No placeholders, no stubs, no fake-success paths in production code paths.
+2. Every wave ends with hard-close evidence (tests + artifact path + doc update in same iteration).
+3. Frozen policy is immutable unless explicitly revised in this document and `scripts/frozen_versions.sh`.
+4. All new failure modes are appended to `docs/gotcha-registry.md` with signature + remediation.
+5. No hidden tab bypasses: shared contracts are authoritative across Dashboard and specialist tabs.
+
+## Critical Gotchas (Mandatory Before Each Session)
+
+The executing AI must read `docs/gotcha-registry.md` before coding. At minimum, these gotchas are required context:
+
+1. `G-001`, `G-002`: Rust 1.82 lock drift (edition2024 / ICU drift).
+2. `G-003`, `G-013`: DNS/index flaps and retry discipline.
+3. `G-005`, `G-006`: local/CI lane mismatch and packaging toolchain parity.
+4. `G-007`: ArqonBus lifecycle instability and shim manager flow.
+5. `G-010`: stale installed `pilot` binary versus repo-local commands.
+6. `G-014`: `protoc` missing in CI/UI smoke.
+7. `G-015`: fatal UI JS parse failures; Rust compile success is not enough.
+8. `G-017`: "feature complete" claim with stubbed behavior.
+
+Session startup requirement:
+1. Include in session notes which gotchas are relevant to current wave.
+2. If any matching signature appears, use the exact recovery path before adding code.
+
+## "Holy Grail" Build Posture (Decision Discipline)
+
+This project target is not "works in demo"; it is a safe, secure, auditable, operator-grade control plane.
+
+Non-negotiable posture:
+1. Prefer correctness and determinism over speed of patch.
+2. Do not ship happy-path-only implementations.
+3. Do not claim completion from route/command existence alone; verify behavior with real state transitions.
+4. Do not split business logic into duplicate paths across tabs; use shared contracts.
+5. Do not hide failures behind optimistic status chips.
+
+Anti-patterns that previously caused regressions:
+1. Declaring hard-close without artifact-backed evidence.
+2. UI appearing healthy while backend scope/policy semantics are broken.
+3. Adding surface-level endpoints with static payloads.
+4. Treating AGOrg scope as optional in mutating operations.
+5. Passing local checks while CI lane parity is unverified.
+
+Required quality bar for every merged change:
+1. Behavioral proof:
+     - before/after command/API evidence
+     - real data path exercised (not mocked success).
+2. Regression proof:
+     - targeted tests added/updated
+     - existing suites still pass.
+3. Operational proof:
+     - docs/runbook/gotchas updated in same iteration.
+4. Scope proof:
+     - AGOrg and policy boundaries explicitly validated for mutating actions.
+
+## AI Handoff Checklist (Execution-Ready)
+
+Use this checklist each session before declaring progress:
+
+1. Read:
+     - `docs/PRODUCTIONIZE.md`
+     - `docs/gotcha-registry.md`
+     - `docs/operator-runbook.md`
+     - `docs/troubleshooting.md`
+2. Validate frozen constraints:
+     - Rust core `1.82.0`
+     - packaging Rust `1.88.0`
+     - protobuf `4.25.8`
+3. Run local guardrails:
+     - `./scripts/verify_toolchain_policy.sh`
+     - `./scripts/prepush_gate.sh`
+4. For each implemented item:
+     - add/adjust tests first or in same change
+     - capture artifact/log path
+     - update docs + gotchas in same commit
+5. Do not mark wave hard-closed without:
+     - passing tests
+     - reproducible artifact evidence
+     - updated status lines in this document
 
 ## Operational Rules
 

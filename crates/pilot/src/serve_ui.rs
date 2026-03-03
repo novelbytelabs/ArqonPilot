@@ -1,6 +1,6 @@
 use crate::agorg::{self, AgorgStore};
 use crate::bus::{send_command_once, BusBridgeConfig};
-use crate::governance::{eval::evaluate_branch_policy, model::*, store::GovernanceStore};
+use crate::governance::{eval::*, model::*, store::GovernanceStore};
 use crate::shim_runtime::bus_shim_command;
 use axum::extract::{Query, State};
 use axum::http::{HeaderValue, StatusCode};
@@ -6520,6 +6520,11 @@ Recommended flow:
         <label class="field-label" for="settings-policy-kind">Select Policy Type</label>
         <select id="settings-policy-kind" onchange="settingsLoadPolicy()">
           <option value="branch" selected>Branch Rules</option>
+          <option value="dependency">Dependency & Lockfiles</option>
+          <option value="release">Release Structure</option>
+          <option value="security">Security & Secrets</option>
+          <option value="quality">Code Quality</option>
+          <option value="runtime">Runtime Env</option>
         </select>
 
         <label class="field-label" for="settings-policy-target">Target AGO (Leave blank for AGOrg level)</label>
@@ -7109,10 +7114,10 @@ async fn api_settings_compliance_scan(
     State(state): State<Arc<UiState>>,
     Json(req): Json<ComplianceScanRequest>,
 ) -> Response {
-    if req.kind != "branch" {
+    if req.kind != "branch" && req.kind != "dependency" && req.kind != "release" && req.kind != "security" && req.kind != "quality" && req.kind != "runtime" {
         return error_response(
             StatusCode::BAD_REQUEST,
-            "Compliance scan currently supports only kind=branch",
+            "Compliance scan supports branch, dependency, release, security, quality, runtime policies",
         );
     }
 
@@ -7153,7 +7158,16 @@ async fn api_settings_compliance_scan(
         Ok(v) => v,
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
-    let default_policy_json = serde_json::to_value(BranchPolicy::default()).unwrap_or(json!({}));
+    let default_policy_json = match req.kind.as_str() {
+        "branch" => serde_json::to_value(BranchPolicy::default()),
+        "dependency" => serde_json::to_value(DependencyPolicy::default()),
+        "release" => serde_json::to_value(ReleasePolicy::default()),
+        "security" => serde_json::to_value(SecurityPolicy::default()),
+        "quality" => serde_json::to_value(QualityPolicy::default()),
+        "runtime" => serde_json::to_value(RuntimePolicy::default()),
+        _ => serde_json::to_value(BranchPolicy::default()),
+    }.unwrap_or(json!({}));
+    
     let mut issues = 0usize;
     let mut off_policy = 0usize;
     let mut details: Vec<Value> = Vec::with_capacity(statuses.len());
@@ -7162,19 +7176,46 @@ async fn api_settings_compliance_scan(
             .display()
             .to_string();
         let (source, policy_json) = match gov_store
-            .get_ago_policy_override(active_scope.id, repo_path.as_str(), "branch")
+            .get_ago_policy_override(active_scope.id, repo_path.as_str(), &req.kind)
             .await
         {
             Ok(Some(p)) => ("ago", p.policy_json),
-            Ok(None) => match gov_store.get_policy(active_scope.id, "branch").await {
+            Ok(None) => match gov_store.get_policy(active_scope.id, &req.kind).await {
                 Ok(Some(p)) => ("agorg", p.policy_json),
                 _ => ("fallback_default", default_policy_json.clone()),
             },
             Err(_) => ("fallback_default", default_policy_json.clone()),
         };
-        let policy: BranchPolicy =
-            serde_json::from_value(policy_json).unwrap_or_else(|_| BranchPolicy::default());
-        let eval = evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions);
+
+        let path = Path::new(&st.path);
+        let eval = match req.kind.as_str() {
+            "branch" => {
+                let policy: BranchPolicy = serde_json::from_value(policy_json).unwrap_or_default();
+                evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions)
+            }
+            "dependency" => {
+                let policy: DependencyPolicy = serde_json::from_value(policy_json).unwrap_or_default();
+                evaluate_dependency_policy(&policy, path, &exceptions)
+            }
+            "release" => {
+                let policy: ReleasePolicy = serde_json::from_value(policy_json).unwrap_or_default();
+                evaluate_release_policy(&policy, path, &exceptions)
+            }
+            "security" => {
+                let policy: SecurityPolicy = serde_json::from_value(policy_json).unwrap_or_default();
+                evaluate_security_policy(&policy, path, &exceptions)
+            }
+            "quality" => {
+                let policy: QualityPolicy = serde_json::from_value(policy_json).unwrap_or_default();
+                evaluate_quality_policy(&policy, path, &exceptions)
+            }
+            "runtime" => {
+                let policy: RuntimePolicy = serde_json::from_value(policy_json).unwrap_or_default();
+                evaluate_runtime_policy(&policy, path, &exceptions)
+            }
+            _ => PolicyEvalReport::default()
+        };
+        
         let issue_count = eval.violations.len() + eval.warnings.len();
         issues += issue_count;
         if issue_count > 0 {

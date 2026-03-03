@@ -1,5 +1,6 @@
 use super::model::*;
 use chrono::Utc;
+use std::path::Path;
 
 pub fn evaluate_branch_policy(
     policy: &BranchPolicy,
@@ -225,6 +226,139 @@ fn add_result(
 }
 
 // -----------------------------------------------------------------------------
+// NEW FAMILIES EVALUATION
+// -----------------------------------------------------------------------------
+
+pub fn evaluate_dependency_policy(
+    policy: &DependencyPolicy,
+    repo_path: &Path,
+    exceptions: &[PolicyException],
+) -> PolicyEvalReport {
+    let mut report = PolicyEvalReport::default();
+
+    if policy.require_lockfile.level != EnforcementLevel::Off {
+        if !is_excepted("require_lockfile", exceptions) {
+            let has_cargo_lock = repo_path.join("Cargo.lock").exists();
+            let has_package_lock = repo_path.join("package-lock.json").exists();
+            let has_poetry_lock = repo_path.join("poetry.lock").exists();
+            let has_pnpm_lock = repo_path.join("pnpm-lock.yaml").exists();
+            
+            if !(has_cargo_lock || has_package_lock || has_poetry_lock || has_pnpm_lock) {
+                add_result(
+                    &mut report,
+                    "require_lockfile",
+                    &policy.require_lockfile.level,
+                    "Lockfile check",
+                    "No recognized lockfile found (Cargo.lock, package-lock.json, poetry.lock, pnpm-lock.yaml)",
+                    "Generate and commit a lockfile",
+                );
+            }
+        }
+    }
+
+    report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
+    report
+}
+
+pub fn evaluate_release_policy(
+    policy: &ReleasePolicy,
+    repo_path: &Path,
+    exceptions: &[PolicyException],
+) -> PolicyEvalReport {
+    let mut report = PolicyEvalReport::default();
+
+    if policy.require_changelog.level != EnforcementLevel::Off {
+        if !is_excepted("require_changelog", exceptions) {
+            if !repo_path.join("CHANGELOG.md").exists() {
+                add_result(
+                    &mut report,
+                    "require_changelog",
+                    &policy.require_changelog.level,
+                    "Changelog check",
+                    "CHANGELOG.md file is missing",
+                    "Create a CHANGELOG.md file in the repository root",
+                );
+            }
+        }
+    }
+
+    report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
+    report
+}
+
+pub fn evaluate_security_policy(
+    policy: &SecurityPolicy,
+    repo_path: &Path,
+    exceptions: &[PolicyException],
+) -> PolicyEvalReport {
+    let mut report = PolicyEvalReport::default();
+    
+    if policy.block_naked_secrets.level != EnforcementLevel::Off {
+        if !is_excepted("block_naked_secrets", exceptions) {
+            if let Ok(scan) = pilot_secure::scan_repo(repo_path) {
+                let secrets: Vec<_> = scan.findings.into_iter()
+                    .filter(|f| f.category == "secret")
+                    .collect();
+                    
+                for secret in secrets {
+                    let file = secret.file.unwrap_or_else(|| "unknown".to_string());
+                    add_result(
+                        &mut report,
+                        "block_naked_secrets",
+                        &policy.block_naked_secrets.level,
+                        &file,
+                        &secret.message,
+                        &secret.recommendation,
+                    );
+                }
+            }
+        }
+    }
+    
+    report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
+    report
+}
+
+pub fn evaluate_quality_policy(
+    _policy: &QualityPolicy,
+    _repo_path: &Path,
+    _exceptions: &[PolicyException],
+) -> PolicyEvalReport {
+    let mut report = PolicyEvalReport::default();
+    
+    // Stub for now
+    
+    report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
+    report
+}
+
+pub fn evaluate_runtime_policy(
+    policy: &RuntimePolicy,
+    repo_path: &Path,
+    exceptions: &[PolicyException],
+) -> PolicyEvalReport {
+    let mut report = PolicyEvalReport::default();
+
+    if policy.require_dockerfile.level != EnforcementLevel::Off {
+        if !is_excepted("require_dockerfile", exceptions) {
+            if !repo_path.join("Dockerfile").exists() {
+                add_result(
+                    &mut report,
+                    "require_dockerfile",
+                    &policy.require_dockerfile.level,
+                    "Dockerfile check",
+                    "Dockerfile is missing",
+                    "Add a Dockerfile to the repository root",
+                );
+            }
+        }
+    }
+
+    report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
+    report
+}
+
+// -----------------------------------------------------------------------------
 // TESTS
 // -----------------------------------------------------------------------------
 #[cfg(test)]
@@ -276,5 +410,64 @@ mod tests {
         // It passes naming checks, so it should not be blocked.
         let report = evaluate_branch_policy(&p, "create", "feat/x", &e);
         assert!(!report.blocked);
+    }
+
+    #[test]
+    fn test_dependency_policy_no_lockfile() {
+        let p = DependencyPolicy::default();
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        let report = evaluate_dependency_policy(&p, temp.path(), &e);
+        assert!(report.blocked);
+        
+        std::fs::File::create(temp.path().join("Cargo.lock")).unwrap();
+        let report = evaluate_dependency_policy(&p, temp.path(), &e);
+        assert!(!report.blocked);
+    }
+
+    #[test]
+    fn test_release_policy_no_changelog() {
+        let p = ReleasePolicy::default();
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        let report = evaluate_release_policy(&p, temp.path(), &e);
+        assert!(report.blocked);
+        
+        std::fs::File::create(temp.path().join("CHANGELOG.md")).unwrap();
+        let report = evaluate_release_policy(&p, temp.path(), &e);
+        assert!(!report.blocked);
+    }
+
+    #[test]
+    fn test_runtime_policy_no_dockerfile() {
+        let mut p = RuntimePolicy::default();
+        p.require_dockerfile.level = EnforcementLevel::Block;
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        let report = evaluate_runtime_policy(&p, temp.path(), &e);
+        assert!(report.blocked);
+        
+        std::fs::File::create(temp.path().join("Dockerfile")).unwrap();
+        let report = evaluate_runtime_policy(&p, temp.path(), &e);
+        assert!(!report.blocked);
+    }
+
+    #[test]
+    fn test_security_policy_naked_secrets() {
+        let p = SecurityPolicy::default();
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        // Ensure the directory looks somewhat valid (e.g. minimal scanning environment)
+        std::fs::File::create(temp.path().join("main.rs")).unwrap();
+        std::fs::write(temp.path().join("main.rs"), "let key = \"AKIAABCDEFGHIJKLMNOP\";").unwrap();
+        
+        let report = evaluate_security_policy(&p, temp.path(), &e);
+        assert!(report.blocked);
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.violations[0].rule, "block_naked_secrets");
     }
 }
