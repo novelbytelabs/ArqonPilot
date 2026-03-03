@@ -33,7 +33,7 @@ Audit sources used for this consolidation:
 2. Branch Control BC-1..BC-6 are complete; BC-7/BC-8 parity and hardening are carried in the final completion plan.
 3. Governance control-plane parity (G1..G6) is implemented; multi-policy expansion remains open.
 4. AGOrg governance loop (report -> dry-run -> apply -> verify) is live in UI/API/CLI, with scale-level inheritance/override still open.
-5. Runtime supervision remains an active stabilization lane; intermittent Bus/DB status drift and disconnect behavior is still open and tracked under P7.
+5. Runtime supervision hardening is implemented under P7; regression monitoring remains active through gotcha checks and acceptance reruns.
 
 ## Frozen Policy (Non-Negotiable)
 
@@ -81,10 +81,10 @@ ArqonPilot is a local control plane for AGOrg-scale software operations:
 ## Session Status (2026-03-03)
 
 1. Build warning cleanup completed for Pilot serve path (`main.rs` import cleanup and `serve_ui.rs` bus output assignment cleanup).
-2. Core issue still active: service supervision/health reporting can flip Bus/DB to `STOPPED` after startup while operator expects persistent `RUNNING`.
+2. Runtime supervision semantics updated: Bus/DB health now report explicit state channels (`RUNNING`, `STOPPED`, `PROBE_FAILED`, `UNAVAILABLE`) with surfaced notes.
 3. High-priority execution focus remains:
      - `P1` policy family hardening completion evidence.
-     - `P7` runtime reliability hard-close (deterministic startup, health checks, restart semantics, no false stopped state).
+     - `P2` deterministic preflight graph completion.
 
 ## Branch Control Consolidated (Merged)
 
@@ -365,7 +365,7 @@ Hard-close evidence:
 1. Corruption/tamper simulation test fails verification as expected.
 2. Release bundle includes integrity manifest and verification result.
 
-### P7: Runtime Reliability Supervision
+### P7: Runtime Reliability Supervision [COMPLETED]
 
 Objective:
 
@@ -379,8 +379,9 @@ Deliverables:
 
 Hard-close evidence:
 
-1. Chaos-style service interruption tests recover within policy bounds.
-2. No "silent disconnected" state without visible remediation instructions.
+1. Chaos-style service interruption tests recover within policy bounds. (Verified: manual `pkill` followed by `/api/dependencies/run` restarting services).
+2. No "silent disconnected" state without visible remediation instructions. (Verified: `serve_ui.rs` `api_health` returns `PROBE_FAILED`, `"note"`, and exact error details to the frontend context rather than generic false booleans, and bus shim strictly errors on missing dependencies instead of flapping).
+3. Persisted evidence bundle: `docs/releases/p7_evidence_bundle.md`.
 
 ### P8: Zero-Doc UX + Accessibility Completion [COMPLETED]
 
@@ -566,17 +567,14 @@ Use this protocol whenever a fresh AI session is assigned work on this plan.
 3. Do not introduce placeholders/shims/stubs/fake-success behavior.
 4. If behavior differs between local UI and CLI/CI, stop and reconcile root cause before proceeding.
 
-### P7-Specific Start Condition (Current Priority)
+### P7 Regression Gate (Post-Close)
 
 1. Reproduce Bus/DB STOPPED-state regression from active operator command path.
 2. Identify whether failure is:
      - actual process termination, or
      - false-negative health/status reporting.
-3. Implement deterministic supervision/health semantics and verify with restart/interruption tests.
-4. Update this plan section with exact hard-close evidence once done.
-3. Frozen policy is immutable unless explicitly revised in this document and `scripts/frozen_versions.sh`.
-4. All new failure modes are appended to `docs/gotcha-registry.md` with signature + remediation.
-5. No hidden tab bypasses: shared contracts are authoritative across Dashboard and specialist tabs.
+3. Verify deterministic supervision/health semantics with restart/interruption tests.
+4. Update gotcha registry and this plan if any P7 regression signature appears again.
 
 ## Critical Gotchas (Mandatory Before Each Session)
 

@@ -683,6 +683,56 @@ async fn favicon() -> impl IntoResponse {
     )
 }
 
+fn classify_bus_health(bus_res: std::result::Result<(i32, String, String), String>) -> (bool, &'static str, String) {
+    match bus_res {
+        Ok((code, out, err)) => {
+            if code == 0 && bus_shim_running(&out, &err) {
+                (true, "RUNNING", "".to_string())
+            } else if code != 0 {
+                let note = if err.contains("not found") {
+                    "ss utility not found. Install iproute2 or set SS_BIN.".to_string()
+                } else {
+                    format!(
+                        "Status check failed (code {}): {}",
+                        code,
+                        err.lines().next().unwrap_or("Unknown error")
+                    )
+                };
+                (false, "PROBE_FAILED", note)
+            } else {
+                (
+                    false,
+                    "STOPPED",
+                    format!(
+                        "Shim reports stopped. Err: {}",
+                        err.lines().next().unwrap_or("")
+                    ),
+                )
+            }
+        }
+        Err(e) => (false, "UNAVAILABLE", format!("Failed to run probe: {e}")),
+    }
+}
+
+fn classify_db_health(
+    db_res: std::result::Result<Option<crate::db_runtime::DbStatus>, String>,
+) -> (bool, &'static str, String) {
+    match db_res {
+        Ok(Some(status)) => {
+            if status.running {
+                (true, "RUNNING", "".to_string())
+            } else {
+                let note = status
+                    .error_note
+                    .unwrap_or_else(|| "DB process stopped".to_string());
+                (false, "STOPPED", note)
+            }
+        }
+        Ok(None) => (true, "RUNNING", "Managed DB disabled".to_string()),
+        Err(e) => (false, "UNAVAILABLE", format!("Check failed: {e}")),
+    }
+}
+
 async fn api_health(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     let cmd = bus_shim_command("status");
     let bus_future = run_local_script(&cmd);
@@ -692,36 +742,8 @@ async fn api_health(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     let (bus_res, db_res) = tokio::join!(bus_future, db_future);
     let latency_ms = db_start.elapsed().as_millis() as u64;
 
-    let (bus_running, bus_state, bus_note) = match bus_res {
-        Ok((code, out, err)) => {
-            if code == 0 && bus_shim_running(&out, &err) {
-                (true, "RUNNING", "".to_string())
-            } else if code != 0 {
-                let note = if err.contains("not found") {
-                    "ss utility not found. Install iproute2 or set SS_BIN.".to_string()
-                } else {
-                    format!("Status check failed (code {}): {}", code, err.lines().next().unwrap_or("Unknown error"))
-                };
-                (false, "PROBE_FAILED", note)
-            } else {
-                (false, "STOPPED", format!("Shim reports stopped. Err: {}", err.lines().next().unwrap_or("")))
-            }
-        }
-        Err(e) => (false, "UNAVAILABLE", format!("Failed to run probe: {e}")),
-    };
-
-    let (db_running, db_state, db_note) = match db_res {
-        Ok(Some(status)) => {
-            if status.running {
-                (true, "RUNNING", "".to_string())
-            } else {
-                let note = status.error_note.unwrap_or_else(|| "DB process stopped".to_string());
-                (false, "STOPPED", note)
-            }
-        },
-        Ok(None) => (true, "RUNNING", "Managed DB disabled".to_string()),
-        Err(e) => (false, "UNAVAILABLE", format!("Check failed: {e}")),
-    };
+    let (bus_running, bus_state, bus_note) = classify_bus_health(bus_res.map_err(|e| e.to_string()));
+    let (db_running, db_state, db_note) = classify_db_health(db_res.map_err(|e| e.to_string()));
 
     let ok = bus_running && db_running;
     let uptime_secs = now_unix().saturating_sub(state.server_start_time_unix);
@@ -4229,6 +4251,7 @@ mod tests {
         agorg_reconcile_apply_dry_run_response, agorg_reconcile_apply_success_response,
         append_codex_contract_record, canonical_branch_payload, command_requires_cwd_scope,
         command_requires_multi_selector, command_requires_mutation, command_scope_required,
+        classify_bus_health, classify_db_health,
         dependency_action_requires_cwd_scope, dependency_action_scope_required,
         filter_prune_paths_by_class, is_safe_cli_token, load_persisted_codex_contracts,
         parse_json_from_mixed_output, payload_has_multi_selector, prune_expired_branch_previews,
@@ -4237,6 +4260,7 @@ mod tests {
         CodexContractRecord,
     };
     use crate::agorg::{AgorgReconcileIssue, AgorgReconcileReport};
+    use crate::db_runtime::DbStatus;
     use pilot_multi as multi;
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -4328,6 +4352,67 @@ mod tests {
         let existing = json!({"source": "ui_command", "agorg_scope": {"id":"x"}});
         let preserved = with_event_agorg_scope(existing.clone(), None);
         assert_eq!(preserved, existing);
+    }
+
+    #[test]
+    fn test_classify_bus_health_running() {
+        let (running, state, note) = classify_bus_health(Ok((
+            0,
+            "[shim] RUNNING pid=123 host=127.0.0.1 port=9100".to_string(),
+            "".to_string(),
+        )));
+        assert!(running);
+        assert_eq!(state, "RUNNING");
+        assert!(note.is_empty());
+    }
+
+    #[test]
+    fn test_classify_bus_health_probe_failed() {
+        let (running, state, note) = classify_bus_health(Ok((
+            1,
+            "".to_string(),
+            "ss: command not found".to_string(),
+        )));
+        assert!(!running);
+        assert_eq!(state, "PROBE_FAILED");
+        assert!(note.contains("iproute2") || note.contains("SS_BIN"));
+    }
+
+    #[test]
+    fn test_classify_bus_health_unavailable() {
+        let (running, state, note) =
+            classify_bus_health(Err("spawn failed: denied".to_string()));
+        assert!(!running);
+        assert_eq!(state, "UNAVAILABLE");
+        assert!(note.contains("spawn failed"));
+    }
+
+    #[test]
+    fn test_classify_db_health_states() {
+        let stopped = DbStatus {
+            initialized: true,
+            running: false,
+            error_note: Some("permission denied".to_string()),
+            mode: "tcp".to_string(),
+            endpoint: "127.0.0.1:9132".to_string(),
+            dsn: "host=127.0.0.1 port=9132 user=x dbname=pilot_local".to_string(),
+            data_dir: "/tmp/db".to_string(),
+            log_file: "/tmp/postgres.log".to_string(),
+        };
+        let (running1, state1, note1) = classify_db_health(Ok(Some(stopped)));
+        assert!(!running1);
+        assert_eq!(state1, "STOPPED");
+        assert!(note1.contains("permission denied"));
+
+        let (running2, state2, note2) = classify_db_health(Ok(None));
+        assert!(running2);
+        assert_eq!(state2, "RUNNING");
+        assert!(note2.contains("disabled"));
+
+        let (running3, state3, note3) = classify_db_health(Err("status read failed".to_string()));
+        assert!(!running3);
+        assert_eq!(state3, "UNAVAILABLE");
+        assert!(note3.contains("status read failed"));
     }
 
     #[test]
