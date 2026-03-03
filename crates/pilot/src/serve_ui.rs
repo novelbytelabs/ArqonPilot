@@ -5180,11 +5180,32 @@ fn read_report_file(path: &str, max_bytes: usize) -> std::io::Result<String> {
 }
 
 pub async fn run_local_script(cmd: &str) -> std::io::Result<(i32, String, String)> {
+    // Keep profile isolation, but preserve a practical PATH for system tools
+    // used by helper scripts (e.g., `ss` in /usr/sbin, `awk` in /usr/bin).
+    let mut path = std::env::var("PATH").unwrap_or_default();
+    if path.is_empty() {
+        path = "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin".to_string();
+    }
+    for extra in [
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/local/sbin",
+        "/usr/sbin",
+        "/sbin",
+    ] {
+        let needle = format!("{extra}:");
+        if !path.starts_with(extra) && !path.contains(&needle) && !path.ends_with(extra) {
+            path.push(':');
+            path.push_str(extra);
+        }
+    }
     let child = TokioCommand::new("bash")
         .arg("--noprofile")
         .arg("--norc")
         .arg("-lc")
         .arg(cmd)
+        .env("PATH", path)
         .output()
         .await?;
     let code = child.status.code().unwrap_or(-1);

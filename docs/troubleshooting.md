@@ -123,6 +123,39 @@ Recovery:
 ./scripts/wave_acceptance_matrix.sh --wave J --profile full
 ```
 
+## 0.3) Services restart succeeds/fails intermittently, Bus appears to flap
+
+Symptoms:
+- `./scripts/pilot_local.sh services restart` intermittently fails in DB startup.
+- `./scripts/pilot_local.sh bus status` shows `STOPPED`, but the shim may still be listening.
+
+Checks:
+
+```bash
+./scripts/pilot_local.sh services restart
+./scripts/pilot_local.sh db status
+./scripts/pilot_local.sh bus status
+ss -ltnp | rg ':9100'
+```
+
+Recovery:
+1. Ensure you are running latest local source (not stale installed binary).
+2. Re-run deterministic restart:
+
+```bash
+./scripts/pilot_local.sh services restart
+```
+
+3. Validate both services stay up:
+
+```bash
+for i in 1 2 3 4 5; do
+  ./scripts/pilot_local.sh db status
+  ./scripts/pilot_local.sh bus status
+  sleep 2
+done
+```
+
 ## 1) Linux/Conda: `libssl-*.so.10` or `libcrypto-*.so.10` not found
 
 Symptom:

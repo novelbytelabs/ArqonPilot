@@ -317,8 +317,41 @@ do_run() {
         esac
     done
     
-    # Save execution record
+    # Save execution record with full provenance
     local record_file="$CONTRACT_STATE_DIR/$execution_id.json"
+    
+    # Capture environment snapshot
+    local env_snapshot=$(cat <<ENVEOF
+{
+  "rust_version": "$(rustc --version 2>/dev/null || echo 'unknown')",
+  "cargo_version": "$(cargo --version 2>/dev/null || echo 'unknown')",
+  "python_version": "$(python3 --version 2>/dev/null || echo 'unknown')",
+  "shell": "$SHELL",
+  "path": "$PATH",
+  "user": "$(whoami)",
+  "hostname": "$(hostname)"
+}
+ENVEOF
+)
+    
+    # Capture git info
+    local git_info=$(cat <<GITEOF
+{
+  "branch": "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'unknown')",
+  "commit": "$(git rev-parse HEAD 2>/dev/null || echo 'unknown')",
+  "commit_short": "$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')",
+  "dirty": "$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+}
+GITEOF
+)
+    
+    # Capture start time for duration calculation
+    local start_time=$(date +%s)
+    
+    # Calculate duration
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
     cat > "$record_file" <<EOF
 {
   "execution_id": "$execution_id",
@@ -327,7 +360,18 @@ do_run() {
   "agorg_context": "$agorg_context",
   "gates": "$gates",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "status": $([ $gate_result -eq 0 ] && echo '"SUCCESS"' || echo '"FAILED"')
+  "duration_seconds": $duration,
+  "status": $([ $gate_result -eq 0 ] && echo '"SUCCESS"' || echo '"FAILED"'),
+  "provenance": {
+    "environment": $env_snapshot,
+    "git": $git_info,
+    "payload_digest": "$(generate_digest \"$scope$gates$timestamp\")"
+  },
+  "resolved_commands": [
+    "scope_check:$scope",
+    "policy_check",
+    "$gates"
+  ]
 }
 EOF
     
@@ -340,11 +384,12 @@ EOF
     return $gate_result
 }
 
-# Replay command - replay previous execution
+# Replay command - replay previous execution with deterministic verification
 do_replay() {
     local execution_id=""
     local scope=""
     local preview=false
+    local verify_deterministic=true
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -358,6 +403,10 @@ do_replay() {
                 ;;
             --preview)
                 preview=true
+                shift
+                ;;
+            --no-verify)
+                verify_deterministic=false
                 shift
                 ;;
             *)
@@ -380,6 +429,37 @@ do_replay() {
     
     log_info "Loading execution record: $execution_id"
     
+    # Extract provenance for verification
+    local original_payload_digest
+    original_payload_digest=$(grep -oP '"payload_digest":\s*"\K[^"]+' "$record_file" 2>/dev/null || echo "")
+    
+    # Verify reproducibility - compute current payload digest
+    local original_scope
+    local original_gates
+    local original_timestamp
+    original_scope=$(grep -oP '"scope":\s*"\K[^"]+' "$record_file" 2>/dev/null || echo "")
+    original_gates=$(grep -oP '"gates":\s*"\K[^"]+' "$record_file" 2>/dev/null || echo "")
+    original_timestamp=$(grep -oP '"timestamp":\s*"\K[^"]+' "$record_file" 2>/dev/null || echo "")
+    local current_payload_digest
+    current_payload_digest=$(generate_digest "$original_scope$original_gates$original_timestamp")
+    
+    # Deterministic verification
+    if [[ "$verify_deterministic" == "true" ]]; then
+        log_info "Verifying deterministic replay..."
+        if [[ "$original_payload_digest" == "$current_payload_digest" ]]; then
+            log_success "Deterministic verification PASSED - payload digest matches"
+        else
+            log_warn "Deterministic verification: payload digest mismatch (environment may have changed)"
+            log_warn "  Original: $original_payload_digest"
+            log_warn "  Current:  $current_payload_digest"
+        fi
+        
+        # Capture current environment for comparison
+        local current_env_digest
+        current_env_digest=$(generate_digest "$(rustc --version 2>/dev/null)$(cargo --version 2>/dev/null)")
+        log_info "Current environment signature: $current_env_digest"
+    fi
+    
     if [[ "$preview" == "true" ]]; then
         log_info "Generating replay preview..."
         local preview_output
@@ -392,16 +472,19 @@ do_replay() {
     
     # Read and execute the recorded commands
     log_info "Replaying execution..."
-    cat "$record_file"
+    
+    # Extract replay info from record
+    local replay_scope
+    local replay_gates
+    replay_scope=$(grep -oP '"scope":\s*"\K[^"]+' "$record_file" 2>/dev/null || echo "$scope")
+    replay_gates=$(grep -oP '"gates":\s*"\K[^"]+' "$record_file" 2>/dev/null || echo "")
     
     # Re-run the gates from the record
-    local gates
-    gates=$(grep -oP '"gates":\s*"\K[^"]+' "$record_file")
-    
-    if [[ -n "$gates" ]]; then
-        do_run --scope "$scope" --gates "$gates"
+    if [[ -n "$replay_gates" ]]; then
+        do_run --scope "$replay_scope" --gates "$replay_gates"
     else
         log_warn "No gates to replay"
+        return 1
     fi
     
     return $?

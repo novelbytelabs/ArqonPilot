@@ -1,7 +1,6 @@
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::Serialize;
 use std::fs;
-use std::fs::OpenOptions;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -235,24 +234,14 @@ impl PilotDbManager {
     }
 
     fn select_log_file(&self) -> Result<PathBuf> {
-        let primary = self.log_file.clone();
-        if path_writable(&primary) {
-            return Ok(primary);
-        }
-        let run_fallback = self.run_dir.join("postgres.log");
-        if path_writable(&run_fallback) {
-            return Ok(run_fallback);
-        }
-        let tmp_fallback = PathBuf::from("/tmp").join("arqon_pilot_postgres.log");
-        if path_writable(&tmp_fallback) {
-            return Ok(tmp_fallback);
-        }
-        Err(miette!(
-            "No writable Postgres log path found (tried {}, {}, {})",
-            self.log_file.display(),
-            run_fallback.display(),
-            tmp_fallback.display()
-        ))
+        // Deterministic log path to avoid stale/fallback ambiguity.
+        // Default always stays in the managed run dir unless explicitly overridden.
+        let selected = if std::env::var("PILOT_DB_LOG_FILE").is_ok() {
+            self.log_file.clone()
+        } else {
+            self.run_dir.join("postgres.log")
+        };
+        Ok(selected)
     }
 
     async fn run_initdb(&self) -> Result<()> {
@@ -326,6 +315,15 @@ fn is_port_available(port: u16) -> bool {
 }
 
 async fn run_checked(mut cmd: Command, context: &str) -> Result<()> {
+    let debug_cmd = format!(
+        "{} {}",
+        cmd.as_std().get_program().to_string_lossy(),
+        cmd.as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
     let output = cmd
         .output()
         .await
@@ -351,8 +349,9 @@ async fn run_checked(mut cmd: Command, context: &str) -> Result<()> {
     }
 
     Err(miette!(
-        "{}\nstdout: {}\nstderr: {}{}",
+        "{}\ncommand: {}\nstdout: {}\nstderr: {}{}",
         context,
+        debug_cmd,
         tail_stdout,
         tail_stderr,
         log_dump
@@ -365,19 +364,6 @@ fn truncate_tail(input: &str, max: usize) -> String {
     }
     let start = input.len() - max;
     format!("...{}", &input[start..])
-}
-
-fn path_writable(path: &PathBuf) -> bool {
-    if let Some(parent) = path.parent() {
-        if fs::create_dir_all(parent).is_err() {
-            return false;
-        }
-    }
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .is_ok()
 }
 
 fn resolve_postgres_bin(bin: &str) -> Result<String> {

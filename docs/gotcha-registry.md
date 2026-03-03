@@ -31,6 +31,25 @@ Keep this file current whenever a new failure class appears.
   3. Re-run parity on normal workstation/runtime for full evidence:
      - `bash scripts/verify_policy_parity.sh`
 
+## G-042: `services restart` intermittently fails DB start while Bus status flaps
+
+- Signature:
+  - `pilot services restart` fails with DB startup errors, then later succeeds.
+  - `pilot bus status` may report `STOPPED` even while shim is actually running.
+- Cause:
+  - Legacy DB log-path fallback to `/tmp/arqon_pilot_postgres.log` introduced ambiguous/stale diagnostics and non-deterministic start behavior.
+  - Profile-isolated shell execution (`--noprofile --norc`) can miss `ss` in PATH (`/usr/sbin`), causing false-negative shim status checks.
+- Recovery:
+  1. Use latest code where:
+     - managed DB log path is deterministic (`~/.arqon/pilot/run/postgres.log` by default),
+     - local-script PATH includes `/usr/sbin`,
+     - shim resolves `ss` via absolute fallback.
+  2. Restart services:
+     - `./scripts/pilot_local.sh services restart`
+  3. Verify both:
+     - `./scripts/pilot_local.sh db status`
+     - `./scripts/pilot_local.sh bus status`
+
 ## G-018: Widespread compilation failure after `evaluate_*_policy` signature changes
 
 - Signature:

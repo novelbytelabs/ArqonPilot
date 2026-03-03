@@ -10,8 +10,21 @@ PORT="${ARQONBUS_PORT:-9100}"
 REPORT_DIR="${PILOT_REPORT_DIR:-$HOME/.pilot/reports}"
 PID_FILE="$REPORT_DIR/arqonbus_shim_${PORT}.pid"
 LOG_FILE="$REPORT_DIR/arqonbus_shim_${PORT}.log"
+SS_BIN="${SS_BIN:-}"
 
 mkdir -p "$REPORT_DIR"
+
+if [[ -z "$SS_BIN" ]]; then
+  if command -v ss >/dev/null 2>&1; then
+    SS_BIN="$(command -v ss)"
+  elif [[ -x /usr/sbin/ss ]]; then
+    SS_BIN="/usr/sbin/ss"
+  elif [[ -x /bin/ss ]]; then
+    SS_BIN="/bin/ss"
+  else
+    SS_BIN="ss"
+  fi
+fi
 
 usage() {
   cat <<'EOF'
@@ -35,7 +48,7 @@ is_running() {
 }
 
 listener_pid() {
-  ss -ltnp 2>/dev/null | awk -v p=":${PORT}" '
+  "$SS_BIN" -ltnp 2>/dev/null | awk -v p=":${PORT}" '
     $4 ~ p"$" {
       if (match($0, /pid=[0-9]+/)) {
         print substr($0, RSTART + 4, RLENGTH - 4);
