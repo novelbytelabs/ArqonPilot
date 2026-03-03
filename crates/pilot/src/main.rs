@@ -2821,7 +2821,10 @@ async fn run_services(args: &ServicesArgs) -> Result<CommandReport> {
                 "Managed Database",
                 || {
                     let s = store.clone();
-                    async move { s.ensure_managed_db().await.map_err(|e| e.to_string()) }
+                    async move {
+                        s.ensure_managed_db().await.map_err(|e| e.to_string())?;
+                        ensure_db_stable(&s).await.map_err(|e| e.to_string())
+                    }
                 },
                 policy.clone(),
             )
@@ -2841,6 +2844,7 @@ async fn run_services(args: &ServicesArgs) -> Result<CommandReport> {
                     if !serve_ui::bus_shim_running(&out, &err) {
                         return Err("Not running".into());
                     }
+                    ensure_bus_stable().await.map_err(|e| e.to_string())?;
                     Ok((code, out, err))
                 },
                 policy,
@@ -2861,7 +2865,10 @@ async fn run_services(args: &ServicesArgs) -> Result<CommandReport> {
                 "Managed Database",
                 || {
                     let s = store.clone();
-                    async move { s.ensure_managed_db().await.map_err(|e| e.to_string()) }
+                    async move {
+                        s.ensure_managed_db().await.map_err(|e| e.to_string())?;
+                        ensure_db_stable(&s).await.map_err(|e| e.to_string())
+                    }
                 },
                 policy.clone(),
             )
@@ -2881,6 +2888,7 @@ async fn run_services(args: &ServicesArgs) -> Result<CommandReport> {
                     if !serve_ui::bus_shim_running(&out, &err) {
                         return Err("Not running".into());
                     }
+                    ensure_bus_stable().await.map_err(|e| e.to_string())?;
                     Ok((code, out, err))
                 },
                 policy,
@@ -2917,6 +2925,40 @@ async fn run_services(args: &ServicesArgs) -> Result<CommandReport> {
             Ok(CommandReport::ok("services.status", "Status retrieved"))
         }
     }
+}
+
+async fn ensure_db_stable(store: &AgorgStore) -> Result<()> {
+    // Catch quick-crash cases where startup succeeds but DB exits moments later.
+    for _ in 0..5 {
+        if let Ok(Some(status)) = store.managed_db_status().await {
+            if status.running {
+                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                continue;
+            }
+        }
+        return Err(miette!("Managed DB failed stability probe (not running)"));
+    }
+    Ok(())
+}
+
+async fn ensure_bus_stable() -> Result<()> {
+    // Catch quick-crash bus processes and force supervisor retry.
+    for _ in 0..5 {
+        let cmd = shim_runtime::bus_shim_command("status");
+        let (code, out, err) = serve_ui::run_local_script(&cmd)
+            .await
+            .map_err(|e| miette!("Bus stability probe failed: {}", e))?;
+        if code != 0 || !serve_ui::bus_shim_running(&out, &err) {
+            return Err(miette!(
+                "ArqonBus failed stability probe: code={} out='{}' err='{}'",
+                code,
+                out.trim(),
+                err.trim()
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    }
+    Ok(())
 }
 
 async fn run_settings(args: &SettingsArgs) -> Result<CommandReport> {

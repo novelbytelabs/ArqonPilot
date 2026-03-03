@@ -201,10 +201,13 @@ test_error_handling() {
     log_test "Testing: Error handling for invalid scope"
     
     # Test with invalid scope - should fail
-    if "$SCRIPT_DIR/ci_run.sh" --scope InvalidRepo --gates toolchain_policy 2>&1 | grep -q "Invalid scope"; then
+    local output
+    output=$("$SCRIPT_DIR/ci_run.sh" --scope InvalidRepo --gates toolchain_policy 2>&1 || true)
+    
+    if echo "$output" | grep -q "Invalid scope"; then
         log_pass "Invalid scope rejected"
     else
-        log_fail "Invalid scope not rejected"
+        log_fail "Invalid scope not rejected: $output"
     fi
 }
 

@@ -5181,6 +5181,8 @@ fn read_report_file(path: &str, max_bytes: usize) -> std::io::Result<String> {
 
 pub async fn run_local_script(cmd: &str) -> std::io::Result<(i32, String, String)> {
     let child = TokioCommand::new("bash")
+        .arg("--noprofile")
+        .arg("--norc")
         .arg("-lc")
         .arg(cmd)
         .output()

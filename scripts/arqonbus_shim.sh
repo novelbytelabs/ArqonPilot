@@ -88,9 +88,9 @@ PY
   "
 
   if command -v setsid >/dev/null 2>&1; then
-    setsid bash -lc "$launch_cmd" >>"$LOG_FILE" 2>&1 < /dev/null &
+    setsid bash --noprofile --norc -lc "$launch_cmd" >>"$LOG_FILE" 2>&1 < /dev/null &
   else
-    nohup bash -lc "$launch_cmd" >>"$LOG_FILE" 2>&1 < /dev/null &
+    nohup bash --noprofile --norc -lc "$launch_cmd" >>"$LOG_FILE" 2>&1 < /dev/null &
   fi
 
   local launcher_pid="$!"
