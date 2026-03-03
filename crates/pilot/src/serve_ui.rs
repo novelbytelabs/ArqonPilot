@@ -692,15 +692,35 @@ async fn api_health(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     let (bus_res, db_res) = tokio::join!(bus_future, db_future);
     let latency_ms = db_start.elapsed().as_millis() as u64;
 
-    let bus_running = match bus_res {
-        Ok((code, out, err)) => code == 0 && bus_shim_running(&out, &err),
-        Err(_) => false,
+    let (bus_running, bus_state, bus_note) = match bus_res {
+        Ok((code, out, err)) => {
+            if code == 0 && bus_shim_running(&out, &err) {
+                (true, "RUNNING", "".to_string())
+            } else if code != 0 {
+                let note = if err.contains("not found") {
+                    "ss utility not found. Install iproute2 or set SS_BIN.".to_string()
+                } else {
+                    format!("Status check failed (code {}): {}", code, err.lines().next().unwrap_or("Unknown error"))
+                };
+                (false, "PROBE_FAILED", note)
+            } else {
+                (false, "STOPPED", format!("Shim reports stopped. Err: {}", err.lines().next().unwrap_or("")))
+            }
+        }
+        Err(e) => (false, "UNAVAILABLE", format!("Failed to run probe: {e}")),
     };
 
-    let db_running = match db_res {
-        Ok(Some(status)) => status.running,
-        Ok(None) => true, // managed DB explicitly disabled
-        Err(_) => false,
+    let (db_running, db_state, db_note) = match db_res {
+        Ok(Some(status)) => {
+            if status.running {
+                (true, "RUNNING", "".to_string())
+            } else {
+                let note = status.error_note.unwrap_or_else(|| "DB process stopped".to_string());
+                (false, "STOPPED", note)
+            }
+        },
+        Ok(None) => (true, "RUNNING", "Managed DB disabled".to_string()),
+        Err(e) => (false, "UNAVAILABLE", format!("Check failed: {e}")),
     };
 
     let ok = bus_running && db_running;
@@ -710,10 +730,14 @@ async fn api_health(State(state): State<Arc<UiState>>) -> impl IntoResponse {
         "ok": ok,
         "bus": {
             "running": bus_running,
+            "state": bus_state,
+            "note": bus_note,
             "latency_ms": latency_ms
         },
         "db": {
             "running": db_running,
+            "state": db_state,
+            "note": db_note,
             "latency_ms": latency_ms
         },
         "uptime_secs": uptime_secs

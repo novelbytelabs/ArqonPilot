@@ -4412,16 +4412,39 @@ function startHealthHeartbeat() {
           typeof res.bus_running === 'boolean'
             ? res.bus_running
             : !!(res.bus && res.bus.running);
+        
+        let busNoteSuffix = '';
+        if (res.bus && res.bus.note && res.bus.note.trim() !== '') {
+            busNoteSuffix = res.bus.note;
+        }
+        
         const dbRunning =
           typeof res.db_running === 'boolean'
             ? res.db_running
             : !!(res.db && res.db.running);
+            
+        let dbState = dbRunning ? 'RUNNING' : 'STOPPED';
+        let dbNote = '';
+        if (res.db) {
+            if (res.db.state) dbState = res.db.state;
+            if (res.db.note) dbNote = res.db.note;
+        }
+
         const latency = res.bus && typeof res.bus.latency_ms === 'number' ? `${res.bus.latency_ms}ms` : '';
         const meta = res.uptime_secs ? `Uptime: ${res.uptime_secs}s` : '';
-        const note = [meta, latency].filter(Boolean).join(' | ') || 'OK';
+        const healthParts = [meta, latency];
+        if (busNoteSuffix) healthParts.push(`Bus: ${busNoteSuffix}`);
+        const note = healthParts.filter(Boolean).join(' | ') || 'OK';
+        
         setBusStatus(busRunning, note);
         if (dashDbChip) {
-           setChipState(dashDbChip, 'DB: ' + (dbRunning ? 'RUNNING' : 'STOPPED'), dbRunning ? 'success' : 'failed');
+            let label = 'DB: ' + dbState;
+            if (dbNote) {
+                // Ensure note shows up in UI
+                dashDbChip.setAttribute('title', dbNote);
+                if (dbState !== 'RUNNING') label += ' (Error)';
+            }
+            setChipState(dashDbChip, label, dbRunning ? 'success' : 'failed');
         }
       } else {
         setBusStatus(false, 'Heartbeat Failed');
