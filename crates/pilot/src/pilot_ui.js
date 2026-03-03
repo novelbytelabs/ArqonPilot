@@ -4308,4 +4308,26 @@ async function unifiedTimelineLoad() {
   }
 }
 
+async function dashVerifyEvidence() {
+  const pathNode = document.getElementById('dash-verify-path');
+  const out = document.getElementById('dash-verify-out');
+  const path = pathNode ? pathNode.value.trim() : '';
+  
+  const req = {};
+  if (path) req.path = path;
+  
+  out.textContent = 'Verifying...';
+  try {
+    const res = await fetch('/api/evidence/verify', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify(req)
+    });
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    out.textContent = 'Verification request failed: ' + err;
+  }
+}
+
 bootUi();

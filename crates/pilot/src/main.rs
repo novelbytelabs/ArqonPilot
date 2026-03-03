@@ -30,6 +30,9 @@ use shim_runtime::bus_shim_command;
 use std::collections::HashSet;
 use uuid::Uuid;
 use chrono::Utc;
+use sha2::{Digest, Sha256};
+use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -81,6 +84,30 @@ enum Commands {
     Settings(SettingsArgs),
     /// Governance Policy operations
     Policy(PolicyArgs),
+    /// Tamper-Evident Evidence Verification
+    Verify(VerifyArgs),
+}
+
+#[derive(Args)]
+struct VerifyArgs {
+    #[command(subcommand)]
+    command: VerifyCommands,
+}
+
+#[derive(Subcommand)]
+enum VerifyCommands {
+    /// Walk the audit.jsonl chain and report integrity
+    Chain,
+    /// Verify a previously exported evidence bundle JSON
+    Bundle {
+        #[arg(long, short)]
+        path: String,
+    },
+    /// Verify a single artifact against its .sha256 sidecar
+    Artifact {
+        #[arg(long, short)]
+        path: String,
+    },
 }
 
 #[derive(Args)]
@@ -2112,6 +2139,60 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
             ))
         }
         Commands::Policy(args) => run_policy(args).await,
+        Commands::Verify(args) => run_verify(args).await,
+    }
+}
+
+async fn run_verify(args: &VerifyArgs) -> Result<CommandReport> {
+    match &args.command {
+        VerifyCommands::Chain => {
+            let res = pilot_core::verify_audit_chain();
+            if res.is_valid {
+                println!("Audit chain is valid. {} events verified.", res.audited_events);
+                Ok(CommandReport::ok("verify.chain", "valid"))
+            } else {
+                for e in &res.errors {
+                    eprintln!("ERROR: {}", e);
+                }
+                Err(miette::miette!("Audit chain verification failed with {} errors", res.errors.len()))
+            }
+        }
+        VerifyCommands::Bundle { path } => {
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| miette::miette!("Failed to read bundle: {}", e))?;
+            let bundle: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| miette::miette!("Failed to parse JSON: {}", e))?;
+            
+            let manifest = bundle.get("manifest")
+                .ok_or_else(|| miette::miette!("No manifest found in bundle"))?;
+            let stated_hash = bundle.get("bundle_hash")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| miette::miette!("No bundle_hash found in bundle"))?;
+            
+            let mut hasher = sha2::Sha256::new();
+            sha2::Digest::update(&mut hasher, serde_json::to_string(manifest).unwrap().as_bytes());
+            let computed = format!("{:x}", hasher.finalize());
+            if computed != stated_hash {
+                return Err(miette::miette!("Bundle hash mismatch! Computed: {}, Stated: {}", computed, stated_hash));
+            }
+            
+            println!("Bundle signature OK.");
+            if let Some(chain) = manifest.get("chain_integrity") {
+                let valid = chain.get("is_valid").and_then(|v| v.as_bool()).unwrap_or(false);
+                let events = chain.get("audited_events").and_then(|v| v.as_u64()).unwrap_or(0);
+                println!("Chain Integrity inside bundle: {} ({} events)", if valid { "VALID" } else { "INVALID" }, events);
+            }
+            Ok(CommandReport::ok("verify.bundle", "valid"))
+        }
+        VerifyCommands::Artifact { path } => {
+            let p = PathBuf::from(&path);
+            if pilot_core::verify_artifact_hash(&p) {
+                println!("Artifact signature OK: {}", path);
+                Ok(CommandReport::ok("verify.artifact", "valid"))
+            } else {
+                Err(miette::miette!("Artifact signature mismatch or sidecar missing: {}", path))
+            }
+        }
     }
 }
 
@@ -2221,6 +2302,8 @@ fn persist_mutation_audit(command: &str, dry_run: bool, summary: &str, outcomes:
         failures,
         artifact_path: artifact_path.clone(),
         repos,
+        content_hash: None,
+        prev_hash: None,
         details: serde_json::json!({}),
     };
 
@@ -2511,6 +2594,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Policy(PolicyArgs {
             command: PolicyCommands::Decisions { .. },
         }) => "policy.decisions",
+        Commands::Verify(_) => "verify",
         Commands::Policy(PolicyArgs {
             command:
                 PolicyCommands::Exceptions(PolicyExceptionsArgs {

@@ -34,6 +34,8 @@ use uuid::Uuid;
 const FAVICON_ICO: &[u8] = include_bytes!("../assets/favicon.ico");
 const PILOT_UI_JS: &str = include_str!("pilot_ui.js");
 
+use sha2::{Digest, Sha256};
+
 #[derive(Clone)]
 pub struct UiConfig {
     pub host: String,
@@ -1502,6 +1504,8 @@ async fn api_branch_run(
         failures,
         artifact_path: None,
         repos: repos.iter().map(|r| r.name.clone()).collect(),
+        content_hash: None,
+        prev_hash: None,
         details: json!({"response_summary": {
             "ok": success,
             "failures": failures,
@@ -1690,6 +1694,8 @@ async fn api_branch_undo(
             failures: if outcome.success { 0 } else { 1 },
             artifact_path: None,
             repos: vec![entry.repo.clone()],
+            content_hash: None,
+            prev_hash: None,
             details: json!({
                 "undone_action": entry.action, 
                 "prior_ref": entry.prior_ref,
@@ -3240,8 +3246,35 @@ async fn export_evidence_bundle(
     }
     let file_name = format!("evidence_bundle_{}.json", stamp);
     let file_path = root.join(&file_name);
+
+    let chain_info = pilot_core::verify_audit_chain();
+    let mut artifacts_hashmap = Vec::new();
+    for row in &reports {
+        if let Some(p) = row.get("path").and_then(|v| v.as_str()) {
+            let abs_path = root.join(p);
+            let sha = pilot_core::compute_file_hash(&abs_path).unwrap_or_else(|_| "hash_failed".to_string());
+            artifacts_hashmap.push(json!({"path": p, "sha256": sha}));
+        }
+    }
+
+    let manifest = json!({
+        "timestamp": now,
+        "chain_integrity": {
+            "is_valid": chain_info.is_valid,
+            "audited_events": chain_info.audited_events,
+            "errors": chain_info.errors
+        },
+        "artifacts": artifacts_hashmap,
+    });
+
+    let mut hasher = Sha256::new();
+    hasher.update(serde_json::to_string(&manifest).unwrap().as_bytes());
+    let bundle_hash = format!("{:x}", hasher.finalize());
+
     let bundle = json!({
         "exported_at_unix": now,
+        "bundle_hash": bundle_hash,
+        "manifest": manifest,
         "bus": {
             "ws_url": state.bus.ws_url,
             "room": state.bus.room,
@@ -5928,6 +5961,20 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <button class="action-btn" onclick="clearElement('dash-timeline-out')">CLEAR</button>
           </div>
           <pre id="dash-timeline-out">Loading timeline...</pre>
+        </div>
+      </div>
+      <div class="card" style="grid-column: 1 / -1;">
+        <h3>Evidence Integrity Verification</h3>
+        <div class="helper">Validate the cryptographic integrity of the unified audit chain, exported bundles, or individual artifact sidecars.</div>
+        <div class="row">
+          <input type="text" id="dash-verify-path" style="flex:1" placeholder="Path to bundle or artifact (leave empty to verify local audit chain)" />
+          <button class="btn" onclick="dashVerifyEvidence()">Verify Integrity</button>
+        </div>
+        <div class="pre-wrap">
+          <div class="pre-actions">
+            <button class="action-btn" onclick="clearElement('dash-verify-out')">CLEAR</button>
+          </div>
+          <pre id="dash-verify-out">Ready to verify</pre>
         </div>
       </div>
       <div class="card">
