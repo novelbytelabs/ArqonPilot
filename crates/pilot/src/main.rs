@@ -2932,13 +2932,13 @@ async fn ensure_db_stable(store: &AgorgStore) -> Result<()> {
     for _ in 0..5 {
         if let Ok(Some(status)) = store.managed_db_status().await {
             if status.running {
-                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
-                continue;
+                // First successful check - DB is stable
+                return Ok(());
             }
         }
-        return Err(miette!("Managed DB failed stability probe (not running)"));
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
     }
-    Ok(())
+    Err(miette!("Managed DB failed stability probe (not running)"))
 }
 
 async fn ensure_bus_stable() -> Result<()> {
@@ -2956,7 +2956,8 @@ async fn ensure_bus_stable() -> Result<()> {
                 err.trim()
             ));
         }
-        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        // First successful check - bus is stable
+        return Ok(());
     }
     Ok(())
 }
