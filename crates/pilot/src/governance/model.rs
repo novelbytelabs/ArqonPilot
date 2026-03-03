@@ -378,3 +378,38 @@ pub struct AgorgPolicyRecord {
     pub updated_at: DateTime<Utc>,
     pub updated_by: String,
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PolicyOverrideRecord {
+    pub id: Uuid,
+    pub agorg_id: Uuid,
+    pub ago_path: String,
+    pub policy_kind: String,
+    pub reason: String,
+    pub ticket_ref: Option<String>,
+    pub owner: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub parent_policy_version: i32,
+    pub override_policy_version: i32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PolicyConflictTrace {
+    pub ago_path: String,
+    pub policy_kind: String,
+    pub resolved_source: String,
+    pub resolved_agorg_id: Uuid,
+    pub resolved_version: i32,
+    pub chain: Vec<InheritanceStep>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct InheritanceStep {
+    pub agorg_id: Uuid,
+    pub agorg_name: String,
+    pub depth: i32,
+    pub has_override: bool,
+    pub has_fleet_policy: bool,
+    pub is_winner: bool,
+}

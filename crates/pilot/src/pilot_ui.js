@@ -283,6 +283,27 @@ function activatePanel(tabName, opts = {}) {
     settingsLoadPolicy();
     settingsLoadExceptions();
   }
+  if (['oracle', 'heal', 'dependencies', 'multi'].includes(tabName)) {
+    fetchJsonSafe('/api/agorg/active').then(res => {
+      const container = document.getElementById(tabName + '-empty-state');
+      if (container) {
+        if (!res || !res.id) {
+          container.innerHTML = `
+            <div style="background:rgba(255, 215, 0, 0.1); border:1px solid rgba(255, 215, 0, 0.4); padding:12px; border-radius:8px; margin-bottom:16px;">
+              <strong>No active AGOrg detected.</strong><br>
+              <span style="font-size:0.85em; color:var(--text-muted);">These operations require a target repository context.</span>
+              <div style="margin-top:8px;">
+                <strong>Next Steps:</strong> Go to the <a href="#" onclick="activatePanel('agorg'); return false;" style="color:var(--accent);text-decoration:underline;">AGOrg tab</a> to select or import a master directory.
+              </div>
+            </div>`;
+          container.style.display = 'block';
+        } else {
+          container.innerHTML = '';
+          container.style.display = 'none';
+        }
+      }
+    });
+  }
   if (persist && !restoringUiSession) queueUiSessionSave();
 }
 
@@ -553,6 +574,26 @@ function setChipState(chip, label, state, suffix) {
   const tooltipText = getBranchSourceTooltip(suffix);
   chip.setAttribute('title', tooltipText || label + detail + ' - Click for details');
   chip.setAttribute('aria-label', label + ' chip: Current state is ' + (suffix || 'unknown'));
+
+  // Announce the state change to screen readers
+  let announcer = document.getElementById('aria-announcer');
+  if (!announcer) {
+    announcer = document.createElement('div');
+    announcer.id = 'aria-announcer';
+    announcer.setAttribute('aria-live', 'polite');
+    announcer.setAttribute('class', 'sr-only');
+    announcer.style.position = 'absolute';
+    announcer.style.width = '1px';
+    announcer.style.height = '1px';
+    announcer.style.padding = '0';
+    announcer.style.margin = '-1px';
+    announcer.style.overflow = 'hidden';
+    announcer.style.clip = 'rect(0, 0, 0, 0)';
+    announcer.style.whiteSpace = 'nowrap';
+    announcer.style.border = '0';
+    document.body.appendChild(announcer);
+  }
+  announcer.textContent = `${label} status is now ${state} ${suffix || ''}`;
 }
 
 // Tooltip explanations for branch source types
@@ -567,13 +608,19 @@ function getBranchSourceTooltip(source) {
 }
 
 // Display inline error message with role="alert" for accessibility
-function showInlineError(message, containerEl = null) {
+function showInlineError(message, containerEl = null, nextSteps = null) {
   const targetEl = containerEl || out;
   const errorDiv = document.createElement('div');
   errorDiv.className = 'error-message';
   errorDiv.setAttribute('role', 'alert');
   errorDiv.setAttribute('aria-live', 'assertive');
-  errorDiv.innerHTML = '<strong>Error:</strong> ' + message + '<br><small>Please try again or adjust your settings.</small>';
+  let html = '<strong>Error:</strong> ' + message;
+  if (nextSteps) {
+    html += '<div style="margin-top:6px; font-size:0.85em; background:rgba(255,46,46,0.1); border:1px solid rgba(255,46,46,0.2); padding:6px; border-radius:4px;"><strong>Next Steps:</strong> ' + nextSteps + '</div>';
+  } else {
+    html += '<br><small>Please try again or adjust your settings.</small>';
+  }
+  errorDiv.innerHTML = html;
   // Clear previous error and insert new one
   const existing = targetEl.querySelector('.error-message');
   if (existing) existing.remove();
@@ -4226,8 +4273,10 @@ let pendingUndoId = null;
 
 async function branchUndoExecute(id, dryRun) {
   const chip = document.getElementById('branch-undo-chip');
+  const errorContainer = document.getElementById('branch-undo-body').parentElement;
+  
   if (!dryRun && pendingUndoId !== id) {
-     alert("Please preview before executing.");
+     showInlineError("Please preview before executing.", errorContainer);
      return;
   }
   
@@ -4250,7 +4299,7 @@ async function branchUndoExecute(id, dryRun) {
     const data = await res.json();
     if (!data.ok) {
        setChipState(chip, 'Undo', 'failed', 'failed');
-       alert(`Undo failed:\n${JSON.stringify(data.outcome, null, 2)}`);
+       showInlineError(`Undo failed:\n${JSON.stringify(data.outcome, null, 2)}`, errorContainer);
        return;
     }
 
@@ -4271,18 +4320,18 @@ async function branchUndoExecute(id, dryRun) {
              });
           }, 100);
        });
-       alert(`Preview successful. The branch will be reverted to ${data.outcome.new_ref || data.outcome.prior_ref}.\nMessage: ${data.outcome.message}`);
+       logActivity("Undo Preview Successful", { ref: data.outcome.new_ref || data.outcome.prior_ref, message: data.outcome.message });
     } else {
        pendingUndoId = null;
        setChipState(chip, 'Undo', 'success', 'reverted');
        branchUndoJournalLoad();
        branchTimelineLoad();
-       alert("Undo successfully executed.");
+       logActivity("Undo Successfully Executed", { entry_id: id });
     }
 
   } catch (err) {
     setChipState(chip, 'Undo', 'failed', 'error');
-    alert(`Undo failed: ${err.message}`);
+    showInlineError(`Undo failed: ${err.message}`, errorContainer);
   }
 }
 

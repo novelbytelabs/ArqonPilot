@@ -6053,7 +6053,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <div class="bus-status-row">
       <div class="status-left">
         ArqonBus:
-        <span id="bus-status-chip" class="bus-chip disconnected">DISCONNECTED</span>
+        <span id="bus-status-chip" class="bus-chip disconnected" tabindex="0" role="status">DISCONNECTED</span>
       </div>
       <div class="system-menu" style="display:flex; gap:8px; align-items:center;">
         <button class="menu-btn" onclick="run('pilot.engine.stop', {})" title="Stop System"><span class="icon">⏹</span></button>
@@ -6063,7 +6063,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <!-- Active AGOrg Scope dropdown -->
       <div style="position:relative; display:inline-block;" class="agorg-dropdown" id="agorg-hero-dropdown-container">
         <button class="btn secondary" id="agorg-open-btn" style="margin-left: 16px; min-width: 140px; color:var(--text);" onclick="toggleAgorgDropdown(event)">
-          AGOrg: <span id="agorg-status-chip" style="color:#00F5FF; text-shadow: 0 0 5px rgba(0,245,255,0.4);">Loading...</span> ▼
+          AGOrg: <span id="agorg-status-chip" style="color:#00F5FF; text-shadow: 0 0 5px rgba(0,245,255,0.4);" tabindex="0" role="status">Loading...</span> ▼
         </button>
         <div class="agorg-dropdown-menu" id="agorg-hero-dropdown" onclick="event.stopPropagation()">
           <div class="agorg-drop-header">Loading registered repositories...</div>
@@ -6128,13 +6128,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <div class="card">
         <h3>System Status</h3>
         <div class="chip-row">
-          <span id="dash-policy-chip" class="chip neutral">Policy: unknown</span>
-          <span id="dash-hook-chip" class="chip neutral">Hook: unknown</span>
-          <span id="dash-drift-chip" class="chip neutral">Drift: unknown</span>
-          <span id="dash-bus-chip" class="chip neutral">Bus: unknown</span>
-          <span id="dash-db-chip" class="chip neutral">DB: unknown</span>
-          <span id="dash-gate-chip" class="chip neutral">Gate: unknown</span>
-          <span id="dash-push-chip" class="chip neutral">Push: unknown</span>
+          <span id="dash-policy-chip" class="chip neutral" tabindex="0" role="status">Policy: unknown</span>
+          <span id="dash-hook-chip" class="chip neutral" tabindex="0" role="status">Hook: unknown</span>
+          <span id="dash-drift-chip" class="chip neutral" tabindex="0" role="status">Drift: unknown</span>
+          <span id="dash-bus-chip" class="chip neutral" tabindex="0" role="status">Bus: unknown</span>
+          <span id="dash-db-chip" class="chip neutral" tabindex="0" role="status">DB: unknown</span>
+          <span id="dash-gate-chip" class="chip neutral" tabindex="0" role="status">Gate: unknown</span>
+          <span id="dash-push-chip" class="chip neutral" tabindex="0" role="status">Push: unknown</span>
         </div>
         <div class="row">
           <button class="btn secondary" onclick="dashRunPolicy()">Policy</button>
@@ -6218,9 +6218,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <h3>AGOrg Overview</h3>
         <div class="helper">Dashboard control summary for active AGOrg scope: score, unresolved issues, and class distribution.</div>
         <div class="chip-row">
-          <span id="dash-agorg-score-chip" class="chip neutral">Score: unknown</span>
-          <span id="dash-agorg-issues-chip" class="chip neutral">Issues: unknown</span>
-          <span id="dash-agorg-offpolicy-chip" class="chip neutral">Off-policy: unknown</span>
+          <span id="dash-agorg-score-chip" class="chip neutral" tabindex="0" role="status">Score: unknown</span>
+          <span id="dash-agorg-issues-chip" class="chip neutral" tabindex="0" role="status">Issues: unknown</span>
+          <span id="dash-agorg-offpolicy-chip" class="chip neutral" tabindex="0" role="status">Off-policy: unknown</span>
         </div>
         <div class="row">
           <button class="btn secondary" onclick="dashAgorgOverviewRefresh()">Refresh Overview</button>
@@ -6239,8 +6239,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <h3>Oracle + Heal Quick Ops</h3>
         <div class="helper">Fast path for day-to-day work: ask Oracle for context, then run Heal in plan mode first before applying.</div>
         <div class="chip-row">
-          <span id="dash-oracle-chip" class="chip neutral">Oracle: idle</span>
-          <span id="dash-heal-chip" class="chip neutral">Heal: idle</span>
+          <span id="dash-oracle-chip" class="chip neutral" tabindex="0" role="status">Oracle: idle</span>
+          <span id="dash-heal-chip" class="chip neutral" tabindex="0" role="status">Heal: idle</span>
         </div>
         <input id="dash-oracle-query" placeholder="where is branch sync implemented?" />
         <div class="row">
@@ -6470,6 +6470,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </section>
 
   <section class="panel" id="oracle">
+    <div id="oracle-empty-state" class="empty-state-notice" aria-live="polite"></div>
     <div class="sequence-strip">
       <span class="seq-step">Scan Index</span>
       <span class="seq-step">Run Query</span>
@@ -6478,33 +6479,40 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <div class="grid">
       <div class="card">
         <h3>Oracle Scan / Query</h3>
-        <div class="helper">`Scan Index` refreshes your code graph/vector index. `Run Query` asks Oracle over that indexed state.</div>
+        <div class="helper" id="oracle-scan-helper">`Scan Index` refreshes your code graph/vector index. `Run Query` asks Oracle over that indexed state.</div>
         <div class="chip-row">
-          <span id="oracle-chip" class="chip neutral">Oracle: idle</span>
+          <span id="oracle-chip" class="chip neutral" tabindex="0" role="status">Oracle: idle</span>
         </div>
-        <button id="oracle-scan-btn" class="btn" onclick="oracleScan()">Scan Index</button>
-        <input id="oracle-query" placeholder="where is branch sync implemented?" />
-        <button id="oracle-query-btn" class="btn secondary" onclick="oracleQuery()">Run Query</button>
+        <button id="oracle-scan-btn" class="btn" onclick="oracleScan()" aria-describedby="oracle-scan-helper">Scan Index</button>
+        <details class="subtle-block" style="margin-top:12px;">
+          <summary style="cursor:pointer; color:var(--text-muted); font-size:0.86rem; margin-bottom:8px;">Advanced: Query</summary>
+          <input id="oracle-query" placeholder="where is branch sync implemented?" />
+          <button id="oracle-query-btn" class="btn secondary" onclick="oracleQuery()">Run Query</button>
+        </details>
       </div>
       <div class="card">
-        <h3>Oracle Reports</h3>
-        <div class="row">
-          <button class="btn secondary" onclick="oracleLoadReports()">Refresh</button>
-          <button class="btn secondary" onclick="oracleViewReport()">View</button>
-        </div>
-        <select id="oracle-report-select"></select>
-      <div class="pre-wrap">
-        <div class="pre-actions">
-          <button class="action-btn" onclick="copyToClipboard('oracle-report-content', this)">COPY</button>
-          <button class="action-btn" onclick="clearElement('oracle-report-content')">CLEAR</button>
-        </div>
-        <pre id="oracle-report-content">No report selected.</pre>
-      </div>
+        <details class="subtle-block">
+          <summary style="cursor:pointer; color:var(--text-muted); font-size:0.86rem; margin-bottom:8px;">Advanced: Oracle Reports</summary>
+          <h3>Oracle Reports</h3>
+          <div class="row">
+            <button class="btn secondary" onclick="oracleLoadReports()">Refresh</button>
+            <button class="btn secondary" onclick="oracleViewReport()">View</button>
+          </div>
+          <select id="oracle-report-select"></select>
+          <div class="pre-wrap">
+            <div class="pre-actions">
+              <button class="action-btn" onclick="copyToClipboard('oracle-report-content', this)">COPY</button>
+              <button class="action-btn" onclick="clearElement('oracle-report-content')">CLEAR</button>
+            </div>
+            <pre id="oracle-report-content">No report selected.</pre>
+          </div>
+        </details>
       </div>
     </div>
   </section>
 
   <section class="panel" id="heal">
+    <div id="heal-empty-state" class="empty-state-notice" aria-live="polite"></div>
     <div class="sequence-strip">
       <span class="seq-step">Plan Only</span>
       <span class="seq-step">Review Response/Timeline</span>
@@ -6513,23 +6521,26 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <div class="grid">
       <div class="card">
         <h3>Heal Controls</h3>
-        <div class="helper">Recommended sequence: `Plan Only` first, inspect response/timeline, then `Run Heal` only when the plan is acceptable.</div>
+        <div class="helper" id="heal-plan-helper">Recommended sequence: `Plan Only` first, inspect response/timeline, then `Run Heal` only when the plan is acceptable.</div>
         <div class="chip-row">
-          <span id="heal-chip" class="chip neutral">Heal: idle</span>
+          <span id="heal-chip" class="chip neutral" tabindex="0" role="status">Heal: idle</span>
         </div>
-        <input id="heal-log-file" placeholder="test_output.json" value="test_output.json" />
-        <input id="heal-target" placeholder="optional target file/crate" />
+        <details class="subtle-block" style="margin-top:12px; margin-bottom:12px;">
+          <summary style="cursor:pointer; color:var(--text-muted); font-size:0.86rem; margin-bottom:8px;">Advanced Options</summary>
+          <input id="heal-log-file" placeholder="test_output.json" value="test_output.json" />
+          <input id="heal-target" placeholder="optional target file/crate" />
+          <div class="row">
+            <input id="heal-max-attempts" placeholder="max attempts" value="2" />
+            <input id="heal-max-files" placeholder="max files (plan mode)" value="5" />
+          </div>
+          <label style="font-size:0.82rem;color:#a8b9e3;">
+            <input id="heal-verbose" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
+            verbose output
+          </label>
+        </details>
         <div class="row">
-          <input id="heal-max-attempts" placeholder="max attempts" value="2" />
-          <input id="heal-max-files" placeholder="max files (plan mode)" value="5" />
-        </div>
-        <label style="font-size:0.82rem;color:#a8b9e3;">
-          <input id="heal-verbose" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
-          verbose output
-        </label>
-        <div class="row">
-          <button id="heal-plan-btn" class="btn secondary" onclick="healPlan()">Plan Only</button>
-          <button id="heal-run-btn" class="btn" onclick="healRun()">Run Heal</button>
+          <button id="heal-plan-btn" class="btn secondary" onclick="healPlan()" aria-describedby="heal-plan-helper">Plan Only</button>
+          <button id="heal-run-btn" class="btn" onclick="healRun()" aria-describedby="heal-plan-helper">Run Heal</button>
         </div>
       </div>
       <div class="card">
@@ -6547,9 +6558,11 @@ Recommended flow:
   </section>
 
   <section class="panel" id="dependencies">
+    <div id="dep-empty-state" class="empty-state-notice" aria-live="polite"></div>
     <div class="grid">
       <div class="card">
         <h3>Checks and Recovery</h3>
+        <div class="helper" id="dep-policy-helper" style="margin-bottom:12px;">Run Policy Check to verify dependencies and lockfiles across the active AGOrg against policy rules.</div>
         <div id="dep-status-grid" class="dep-status-grid">
           <div class="dep-status-card">
             <h4>Policy</h4>
@@ -6565,14 +6578,19 @@ Recommended flow:
           </div>
         </div>
         <div class="row">
-          <button class="btn secondary" onclick="depRun('policy')">Policy Check</button>
-          <button class="btn secondary" onclick="depRun('hook-policy')">Hook Policy</button>
-          <button class="btn secondary" onclick="depRun('drift')">Drift Report</button>
+          <button class="btn secondary" onclick="depRun('policy')" aria-describedby="dep-policy-helper">Policy Check</button>
         </div>
-        <div class="row">
-          <button class="btn secondary" onclick="depRun('gate')">Run Gate</button>
-          <button class="btn" onclick="depRun('repair')">Repair Lock (No Gate)</button>
-        </div>
+        <details class="subtle-block" style="margin-top:12px; margin-bottom:12px;">
+          <summary style="cursor:pointer; color:var(--text-muted); font-size:0.86rem; margin-bottom:8px;">Advanced Commands</summary>
+          <div class="row">
+            <button class="btn secondary" onclick="depRun('hook-policy')">Hook Policy</button>
+            <button class="btn secondary" onclick="depRun('drift')">Drift Report</button>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <button class="btn secondary" onclick="depRun('gate')">Run Gate</button>
+            <button class="btn" onclick="depRun('repair')">Repair Lock (No Gate)</button>
+          </div>
+        </details>
       <div class="pre-wrap">
         <div class="pre-actions">
           <button class="action-btn" onclick="copyToClipboard('dep-action-out', this)">COPY</button>
@@ -6617,7 +6635,7 @@ Recommended flow:
           <button class="btn secondary" onclick="branchClearSelection()">Clear Selection</button>
         </div>
         <div class="chip-row">
-          <span id="branch-matrix-source-chip" class="chip neutral">Matrix Source: unknown</span>
+          <span id="branch-matrix-source-chip" class="chip neutral" tabindex="0" role="status">Matrix Source: unknown</span>
         </div>
         <div id="branch-matrix-summary" class="helper">No matrix loaded yet.</div>
       <div class="pre-wrap">
@@ -6649,7 +6667,7 @@ Recommended flow:
         <div class="helper">Use Preview first, then Execute when response looks correct.</div>
         <div id="branch-preview-state" class="helper">No active preview token.</div>
         <div class="chip-row">
-          <span id="branch-create-chip" class="chip neutral">Create: idle</span>
+          <span id="branch-create-chip" class="chip neutral" tabindex="0" role="status">Create: idle</span>
         </div>
         <div class="helper">Branch name</div>
         <input id="branch-name" placeholder="feat/pilot-wave7" />
@@ -6663,9 +6681,9 @@ Recommended flow:
       <div class="card">
         <h3>Sync / Prune / Status</h3>
         <div class="chip-row">
-          <span id="branch-sync-chip" class="chip neutral">Sync: idle</span>
-          <span id="branch-prune-chip" class="chip neutral">Prune: idle</span>
-          <span id="branch-status-chip" class="chip neutral">Status: idle</span>
+          <span id="branch-sync-chip" class="chip neutral" tabindex="0" role="status">Sync: idle</span>
+          <span id="branch-prune-chip" class="chip neutral" tabindex="0" role="status">Prune: idle</span>
+          <span id="branch-status-chip" class="chip neutral" tabindex="0" role="status">Status: idle</span>
         </div>
         <div class="helper">Target branch to sync</div>
         <input id="sync-branch" placeholder="dev" value="dev" />
@@ -6686,7 +6704,7 @@ Recommended flow:
         <h3>Undo Journal</h3>
         <div class="helper">Recent destructive branch operations that can be reverted.</div>
         <div class="chip-row">
-          <span id="branch-undo-chip" class="chip neutral">Undo: idle</span>
+          <span id="branch-undo-chip" class="chip neutral" tabindex="0" role="status">Undo: idle</span>
         </div>
         <div class="pre-wrap" style="margin-top: 10px;">
           <div style="max-height: 250px; overflow: auto; border: 1px solid var(--border); border-radius: 8px;">
@@ -6724,8 +6742,8 @@ Recommended flow:
         <h3>Dependency DAG + Staged Apply (Primary Branch Flow)</h3>
         <div class="helper">Run DAG preview, then staged apply preview, then staged apply execute when approved.</div>
         <div class="chip-row">
-          <span id="branch-dag-chip" class="chip neutral">DAG: idle</span>
-          <span id="branch-apply-chip" class="chip neutral">Staged Apply: idle</span>
+          <span id="branch-dag-chip" class="chip neutral" tabindex="0" role="status">DAG: idle</span>
+          <span id="branch-apply-chip" class="chip neutral" tabindex="0" role="status">Staged Apply: idle</span>
         </div>
         <div class="row">
           <div style="flex:1;min-width:180px;">
@@ -6784,6 +6802,7 @@ Recommended flow:
   </section>
 
   <section class="panel" id="multi">
+    <div id="multi-empty-state" class="empty-state-notice" aria-live="polite"></div>
     <div class="sequence-strip">
       <span class="seq-step">Register</span>
       <span class="seq-step">List -> Status -> Order</span>
@@ -6802,14 +6821,14 @@ Recommended flow:
       </div>
       <div class="card">
         <h3>List / Status / Order / DAG / PR Plan</h3>
-        <div class="helper">Run in this order when uncertain: `List` -> `Status` -> `Order` -> `DAG` -> `PR Plan`.</div>
+        <div class="helper" id="multi-list-helper">Run in this order when uncertain: `List` -> `Status` -> `Order` -> `DAG` -> `PR Plan`.</div>
         <div class="chip-row">
-          <span id="multi-dag-chip" class="chip neutral">DAG: idle</span>
+          <span id="multi-dag-chip" class="chip neutral" tabindex="0" role="status">DAG: idle</span>
         </div>
         <input id="multi-group" placeholder="core" />
         <input id="multi-tags" placeholder="apply-pilot,wave7" />
         <div class="row">
-          <button class="btn secondary" onclick="multiList()">List</button>
+          <button class="btn secondary" onclick="multiList()" aria-describedby="multi-list-helper">List</button>
           <button class="btn secondary" onclick="multiStatus()">Status</button>
           <button class="btn secondary" onclick="multiOrder()">Order</button>
           <button id="multi-dag-btn" class="btn secondary" onclick="multiDag()">DAG</button>
@@ -6820,7 +6839,7 @@ Recommended flow:
         <h3>Staged Apply (Dependency-Aware)</h3>
         <div class="helper">Runs branch creation in dependency stages. Start with `Dry Run`; use `Execute` only after preview looks correct.</div>
         <div class="chip-row">
-          <span id="multi-apply-chip" class="chip neutral">Staged Apply: idle</span>
+          <span id="multi-apply-chip" class="chip neutral" tabindex="0" role="status">Staged Apply: idle</span>
         </div>
         <input id="multi-apply-branch" placeholder="feat/pilot-wave13" value="feat/pilot-wave13" />
         <input id="multi-apply-base" placeholder="dev" value="dev" />
@@ -6858,23 +6877,25 @@ Recommended flow:
           <button class="btn secondary" style="color:var(--rose); border-color:rgba(255,46,46,0.3);" onclick="agorgDelete()">Delete</button>
         </div>
 
-        <div class="section-box" style="margin-top:12px;">
-          <h4>Profile Preferences</h4>
-          <label class="field-label" for="agorg-profile-name">Profile Name</label>
-          <input id="agorg-profile-name" placeholder="primary" />
-          <label class="field-label" for="agorg-pref-default-branch">Default Branch</label>
-          <input id="agorg-pref-default-branch" placeholder="dev" />
-          <label class="field-label" for="agorg-pref-release-branch">Release Branch</label>
-          <input id="agorg-pref-release-branch" placeholder="main" />
-          <label class="check-label" style="margin-top:4px;">
-            <input id="agorg-pref-auto-prune" type="checkbox" />
-            Auto-prune stale AGO rows by default
-          </label>
-          <div class="row" style="margin-top:6px;">
-            <button class="btn secondary" onclick="agorgLoadPreferences()">Load Prefs</button>
-            <button class="btn secondary" onclick="agorgSavePreferences()">Save Prefs</button>
+        <details class="subtle-block" style="margin-top:12px;">
+          <summary style="cursor:pointer; color:var(--text-muted); font-size:0.86rem; margin-bottom:8px;">Profile Preferences</summary>
+          <div class="section-box" style="margin-top:0;">
+            <label class="field-label" for="agorg-profile-name">Profile Name</label>
+            <input id="agorg-profile-name" placeholder="primary" />
+            <label class="field-label" for="agorg-pref-default-branch">Default Branch</label>
+            <input id="agorg-pref-default-branch" placeholder="dev" />
+            <label class="field-label" for="agorg-pref-release-branch">Release Branch</label>
+            <input id="agorg-pref-release-branch" placeholder="main" />
+            <label class="check-label" style="margin-top:4px;">
+              <input id="agorg-pref-auto-prune" type="checkbox" />
+              Auto-prune stale AGO rows by default
+            </label>
+            <div class="row" style="margin-top:6px;">
+              <button class="btn secondary" onclick="agorgLoadPreferences()">Load Prefs</button>
+              <button class="btn secondary" onclick="agorgSavePreferences()">Save Prefs</button>
+            </div>
           </div>
-        </div>
+        </details>
       </div>
 
       <div class="card" style="display:flex; flex-direction:column;">
@@ -6976,11 +6997,14 @@ Recommended flow:
               git init each
             </label>
           </div>
-          <div class="section-box">
-            <h4>Sibling AGOs</h4>
-            <label class="field-label" for="agorg-create-siblings">One per line</label>
-            <textarea id="agorg-create-siblings" class="batch-list" placeholder="Core&#10;Pilot&#10;Sense"></textarea>
-          </div>
+          <details class="subtle-block" style="margin-top:12px;">
+            <summary style="cursor:pointer; color:var(--text-muted); font-size:0.86rem; margin-bottom:8px;">Advanced: Batch Setup</summary>
+            <div class="section-box" style="margin-top:0;">
+              <h4>Sibling AGOs</h4>
+              <label class="field-label" for="agorg-create-siblings">One per line</label>
+              <textarea id="agorg-create-siblings" class="batch-list" placeholder="Core&#10;Pilot&#10;Sense"></textarea>
+            </div>
+          </details>
         </div>
         <div class="row" style="margin-top:16px;">
           <button class="btn" onclick="agorgBatchCreate()">Batch Create & Register</button>

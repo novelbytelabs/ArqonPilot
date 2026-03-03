@@ -4463,6 +4463,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-postgres",
@@ -4495,6 +4496,8 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

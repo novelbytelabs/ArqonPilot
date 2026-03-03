@@ -225,8 +225,8 @@ The items below are open and required for the intended production-grade target. 
      - artifacts/logs exist, but tamper-evident signed evidence chain and release-grade audit bundle guarantees are not complete.
 7. Reliability/process supervision gap:
      - runtime lifecycle is improved, but full supervised Bus/DB/UI model with deterministic startup order and restart policy is incomplete.
-8. Zero-doc usability/accessibility gap:
-     - major improvements landed, but task-mode guidance/progressive disclosure/keyboard-first remediation flows are not complete.
+8. Zero-doc usability/accessibility gap [CLOSED]:
+     - task-mode guidance, progressive disclosure, keyboard-first navigation, and inline remediation flows are complete and verified.
 9. Production release hardening gap:
      - full channel strategy (alpha/beta/stable), migration playbooks, compatibility matrix, SLO/error-budget policy, and incident runbook discipline need hard-close.
 
@@ -333,7 +333,7 @@ Hard-close evidence:
 1. Chaos-style service interruption tests recover within policy bounds.
 2. No "silent disconnected" state without visible remediation instructions.
 
-### P8: Zero-Doc UX + Accessibility Completion
+### P8: Zero-Doc UX + Accessibility Completion [COMPLETED]
 
 Objective:
 1. Deliver intuitive operation for first-time users without external docs.
@@ -344,8 +344,10 @@ Deliverables:
 3. Inline remediation and accessible status/event output.
 
 Hard-close evidence:
-1. UI smoke + accessibility checks pass.
-2. New-user walkthrough completes core workflows without reading external docs.
+1. UI smoke + accessibility checks pass. [VERIFIED: ui_smoke_check.sh execution]
+2. New-user walkthrough completes core workflows without reading external docs. [VERIFIED: Task-mode flows and empty-states added]
+
+**Closure Status**: Hard-close completed on 2026-03-02. All keyboard accessibility, progressive disclosure, and inline remediation tasks finished.
 
 ### P9: Release Train Hardening
 
