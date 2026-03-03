@@ -1,0 +1,339 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Provenance Record Schema",
+  "description": "Comprehensive provenance record for FC-6: Provenance and Replay",
+  "definitions": {
+    "InputPayload": {
+      "type": "object",
+      "description": "Input parameters to the execution",
+      "properties": {
+        "command": {
+          "type": "string",
+          "enum": ["run", "replay", "repair", "readiness", "report"]
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["ArqonPilot", "ArqonBus", "ArqonLattice", "ArqonStudio", "ArqonHPO"]
+          }
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "policy_overrides": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "agorg_context": {
+          "type": "string"
+        },
+        "env_vars": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["command", "scope"]
+    },
+    "EnvironmentSummary": {
+      "type": "object",
+      "description": "Environment snapshot at execution time",
+      "properties": {
+        "rust_version": {
+          "type": "string"
+        },
+        "cargo_version": {
+          "type": "string"
+        },
+        "python_version": {
+          "type": "string"
+        },
+        "shell": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        },
+        "hostname": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "os_kernel": {
+          "type": "string"
+        },
+        "working_directory": {
+          "type": "string"
+        },
+        "frozen_policy_versions": {
+          "type": "object",
+          "properties": {
+            "core_rust": {
+              "type": "string",
+              "const": "1.82.0"
+            },
+            "packaging_rust": {
+              "type": "string",
+              "const": "1.88.0"
+            },
+            "protobuf": {
+              "type": "string",
+              "const": "4.25.8"
+            }
+          }
+        }
+      },
+      "required": ["rust_version", "cargo_version", "platform"]
+    },
+    "GitContext": {
+      "type": "object",
+      "description": "Git state at execution time",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "commit_short": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remotes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["branch", "commit"]
+    },
+    "ResolvedOperation": {
+      "type": "object",
+      "description": "A resolved operation to be executed",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["scope_check", "policy_check", "gate_execution", "repair", "report"]
+        },
+        "target": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "running", "completed", "failed", "skipped"]
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": ["id", "type", "command"]
+    },
+    "OutputRecord": {
+      "type": "object",
+      "description": "Execution output",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["SUCCESS", "FAILURE", "PARTIAL", "SKIPPED"]
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "duration_seconds": {
+          "type": "number"
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "failure_reason": {
+          "type": "string"
+        },
+        "failure_code": {
+          "type": "string"
+        },
+        "remediation_hint": {
+          "type": "string"
+        },
+        "gate_results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "gate": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "duration_ms": {
+                "type": "integer"
+              },
+              "output": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": ["status", "exit_code"]
+    },
+    "Artifact": {
+      "type": "object",
+      "description": "Generated artifact",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["log", "report", "lockfile", "evidence", "bundle"]
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "digest": {
+          "type": "string",
+          "description": "SHA256 digest of artifact content"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["name", "path", "type"]
+    },
+    "ProvenanceRecord": {
+      "type": "object",
+      "description": "Complete provenance record",
+      "required": [
+        "execution_id",
+        "timestamp",
+        "input",
+        "environment",
+        "git",
+        "resolved_operations",
+        "output",
+        "artifacts"
+      ],
+      "properties": {
+        "execution_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "parent_execution_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "For replay: the original execution being replayed"
+        },
+        "is_replay": {
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "$ref": "#/definitions/InputPayload"
+        },
+        "environment": {
+          "$ref": "#/definitions/EnvironmentSummary"
+        },
+        "git": {
+          "$ref": "#/definitions/GitContext"
+        },
+        "resolved_operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ResolvedOperation"
+          }
+        },
+        "output": {
+          "$ref": "#/definitions/OutputRecord"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Artifact"
+          }
+        },
+        "payload_digest": {
+          "type": "string",
+          "description": "SHA256 digest of the entire provenance record"
+        }
+      }
+    },
+    "ReplayBundle": {
+      "type": "object",
+      "description": "Complete bundle for deterministic replay",
+      "required": ["provenance", "signature", "replay_script"],
+      "properties": {
+        "provenance": {
+          "$ref": "#/definitions/ProvenanceRecord"
+        },
+        "signature": {
+          "type": "string",
+          "description": "Digital signature or hash for replay verification"
+        },
+        "replay_script": {
+          "type": "string",
+          "description": "Shell script to reproduce the execution"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files required for replay"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  "$ref": "#/definitions/ProvenanceRecord"
+}

@@ -733,6 +733,49 @@ fn classify_db_health(
     }
 }
 
+fn preflight_steps_from_action(action: &str, req_steps: Option<Vec<String>>) -> Vec<crate::preflight::model::PreflightStepType> {
+    use crate::preflight::model::PreflightStepType;
+    match action {
+        "policy" => vec![PreflightStepType::Policy],
+        "hook-policy" => vec![PreflightStepType::Hook],
+        "drift" => vec![PreflightStepType::Drift],
+        "gate" => vec![PreflightStepType::Gate],
+        "push" => vec![PreflightStepType::Push],
+        _ => {
+            if let Some(rlist) = req_steps {
+                let mut steps = Vec::new();
+                for s in rlist {
+                    match s.as_str() {
+                        "policy" => steps.push(PreflightStepType::Policy),
+                        "hook" => steps.push(PreflightStepType::Hook),
+                        "drift" => steps.push(PreflightStepType::Drift),
+                        "gate" => steps.push(PreflightStepType::Gate),
+                        "push" => steps.push(PreflightStepType::Push),
+                        _ => {}
+                    }
+                }
+                if steps.is_empty() {
+                    vec![
+                        PreflightStepType::Policy,
+                        PreflightStepType::Hook,
+                        PreflightStepType::Drift,
+                        PreflightStepType::Gate,
+                    ]
+                } else {
+                    steps
+                }
+            } else {
+                vec![
+                    PreflightStepType::Policy,
+                    PreflightStepType::Hook,
+                    PreflightStepType::Drift,
+                    PreflightStepType::Gate,
+                ]
+            }
+        }
+    }
+}
+
 async fn api_health(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     let cmd = bus_shim_command("status");
     let bus_future = run_local_script(&cmd);
@@ -3494,37 +3537,10 @@ async fn run_dependency_action(
     }
 
     let result = match (action, req.json) {
-        ("policy", true) => run_local_script("./scripts/verify_toolchain_policy.sh --json").await,
-        ("policy", false) => run_local_script("./scripts/verify_toolchain_policy.sh").await,
-        ("hook-policy", true) => {
-            run_local_script("./scripts/verify_git_hook_policy.sh --json").await
-        }
-        ("hook-policy", false) => run_local_script("./scripts/verify_git_hook_policy.sh").await,
-        ("drift", true) => run_local_script("./scripts/drift_report.sh --json").await,
-        ("drift", false) => run_local_script("./scripts/drift_report.sh").await,
-        ("gate", _) => run_local_script("./scripts/prepush_gate.sh").await,
-        ("preflight", _) => {
+
+        ("preflight", _) | ("policy", _) | ("hook-policy", _) | ("drift", _) | ("gate", _) => {
             use crate::preflight::{graph::run_preflight_graph, model::PreflightStepType};
-            let mut steps = Vec::new();
-            if let Some(rlist) = req.preflight_steps {
-                for s in rlist {
-                    match s.as_str() {
-                        "policy" => steps.push(PreflightStepType::Policy),
-                        "hook" => steps.push(PreflightStepType::Hook),
-                        "drift" => steps.push(PreflightStepType::Drift),
-                        "gate" => steps.push(PreflightStepType::Gate),
-                        "push" => steps.push(PreflightStepType::Push),
-                        _ => {}
-                    }
-                }
-            } else {
-                steps = vec![
-                    PreflightStepType::Policy,
-                    PreflightStepType::Hook,
-                    PreflightStepType::Drift,
-                    PreflightStepType::Gate,
-                ];
-            }
+            let steps = preflight_steps_from_action(action, req.preflight_steps.clone());
             let report = run_preflight_graph(
                 Path::new("."),
                 steps,
@@ -3659,28 +3675,31 @@ async fn export_evidence_bundle(
         Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     };
 
-    let policy_json = run_local_script("./scripts/verify_toolchain_policy.sh --json")
-        .await
-        .ok()
-        .map(|(code, out, err)| json!({"exit_code": code, "stdout": out, "stderr": err}));
-    let hook_json = run_local_script("./scripts/verify_git_hook_policy.sh --json")
-        .await
-        .ok()
-        .map(|(code, out, err)| json!({"exit_code": code, "stdout": out, "stderr": err}));
-    let drift_json = run_local_script("./scripts/drift_report.sh --json")
-        .await
-        .ok()
-        .map(|(code, out, err)| json!({"exit_code": code, "stdout": out, "stderr": err}));
+    use crate::preflight::{graph::run_preflight_graph, model::PreflightStepType};
+    let preflight_report = run_preflight_graph(
+        Path::new("."),
+        vec![
+            PreflightStepType::Policy,
+            PreflightStepType::Hook,
+            PreflightStepType::Drift,
+        ],
+        None,
+        None,
+    )
+    .await
+    .unwrap_or_default();
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let stamp = format!("{}", now);
+        .unwrap_or_default();
+    let now_secs = now.as_secs();
+    let now_nanos = now.subsec_nanos();
+    let stamp = format!("{}_{}", now_secs, now_nanos);
     let root = reports_root();
     if let Err(err) = fs::create_dir_all(&root) {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string());
     }
+    // Use both seconds and nanoseconds to avoid timestamp collision within same second
     let file_name = format!("evidence_bundle_{}.json", stamp);
     let file_path = root.join(&file_name);
 
@@ -3725,9 +3744,7 @@ async fn export_evidence_bundle(
             "gate_logs": gate_logs.len()
         },
         "policy": {
-            "toolchain_policy": policy_json,
-            "hook_policy": hook_json,
-            "drift_report": drift_json
+            "preflight_report": preflight_report
         },
         "history": history,
         "reports": reports,
@@ -4255,6 +4272,7 @@ mod tests {
         dependency_action_requires_cwd_scope, dependency_action_scope_required,
         filter_prune_paths_by_class, is_safe_cli_token, load_persisted_codex_contracts,
         parse_json_from_mixed_output, payload_has_multi_selector, prune_expired_branch_previews,
+        preflight_steps_from_action,
         resolve_branch_targets, scope_filter_rows, sorted_unique_ids, sorted_unique_tags,
         with_event_agorg_scope, BranchMatrixRow, BranchPreviewRecord, BranchRunRequest,
         CodexContractRecord,
@@ -4413,6 +4431,32 @@ mod tests {
         assert!(!running3);
         assert_eq!(state3, "UNAVAILABLE");
         assert!(note3.contains("status read failed"));
+    }
+
+    #[test]
+    fn test_preflight_steps_from_legacy_actions() {
+        let policy = preflight_steps_from_action("policy", None);
+        assert_eq!(policy.len(), 1);
+        let gate = preflight_steps_from_action("gate", None);
+        assert_eq!(gate.len(), 1);
+        let hook = preflight_steps_from_action("hook-policy", None);
+        assert_eq!(hook.len(), 1);
+    }
+
+    #[test]
+    fn test_preflight_steps_from_preflight_payload() {
+        let steps = preflight_steps_from_action(
+            "preflight",
+            Some(vec![
+                "policy".to_string(),
+                "drift".to_string(),
+                "unknown".to_string(),
+            ]),
+        );
+        assert_eq!(steps.len(), 2);
+
+        let fallback = preflight_steps_from_action("preflight", Some(vec!["invalid".to_string()]));
+        assert_eq!(fallback.len(), 4);
     }
 
     #[test]

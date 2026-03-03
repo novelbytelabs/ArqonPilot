@@ -40,6 +40,8 @@ theme:
 nav:
   - Home: "index.md"
   - Roadmap & Plan: "PRODUCTIONIZE.md"
+  - PRODUCTIONIZE Value: "productionize-value.md"
+  - Federated CI Program Value: "federated-ci-program-value.md"
   - Technical Debt: "tech-debt.md"
   - Release Playbook: "release-playbook.md"
   - Release Log: "release-log.md"

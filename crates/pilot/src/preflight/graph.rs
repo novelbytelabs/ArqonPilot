@@ -2,6 +2,7 @@ use crate::preflight::model::*;
 use miette::Result;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub async fn run_preflight_graph(
     repo_path: &Path,
@@ -49,6 +50,28 @@ pub async fn run_preflight_graph(
                     messages: vec![e.to_string()],
                 },
             ),
+        }
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let now_secs = now.as_secs();
+    let now_nanos = now.subsec_nanos();
+    let root = std::env::var("HOME")
+        .map(|h| PathBuf::from(h).join(".pilot").join("reports"))
+        .unwrap_or_else(|_| PathBuf::from("/tmp/pilot-reports"));
+    let _ = std::fs::create_dir_all(&root);
+    // Use both seconds and nanoseconds to avoid timestamp collision within same second
+    let report_name = format!("preflight_{}_{}.json", now_secs, now_nanos);
+    let report_path = root.join(&report_name);
+
+    report.evidence_path = Some(report_path.display().to_string());
+    if let Ok(json) = serde_json::to_string_pretty(&report) {
+        if let Err(e) = std::fs::write(&report_path, &json) {
+            eprintln!(
+                "Warning: Failed to write preflight evidence to {}: {}",
+                report_path.display(), e
+            );
         }
     }
 

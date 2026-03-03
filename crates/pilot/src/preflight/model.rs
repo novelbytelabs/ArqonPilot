@@ -28,6 +28,7 @@ pub enum PreflightStepType {
 pub struct PreflightReport {
     pub steps: Vec<PreflightStepItem>,
     pub final_status: PreflightStatus,
+    pub evidence_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +42,7 @@ impl PreflightReport {
         Self {
             steps: Vec::new(),
             final_status: PreflightStatus::Pass,
+            evidence_path: None,
         }
     }
 

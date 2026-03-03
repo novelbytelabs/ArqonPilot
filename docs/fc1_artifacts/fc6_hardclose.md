@@ -12,72 +12,37 @@
 
 | File Path | Description |
 |-----------|-------------|
-| (None) | - |
-
-### Modified Files
-
-| File Path | Changes |
-|-----------|---------|
-| `scripts/ci_contract.sh` | Enhanced with full provenance recording, deterministic replay verification, and audit trail reports |
-| `crates/pilot/src/main.rs` | Fixed stability probe early exit for reduced latency |
+| `ArqonPilot/schemas/provenance_record.json` | JSON Schema for provenance records |
+| `ArqonPilot/scripts/capture_provenance.sh` | Provenance capture script |
+| `ArqonPilot/scripts/generate_replay_bundle.sh` | Replay bundle generator |
+| `ArqonPilot/scripts/replay_execution.sh` | One-command replay entry |
+| `ArqonPilot/docs/fc1_artifacts/fc6_hardclose.md` | This document |
 
 ---
 
 ## 2. Tests/Validations Run
 
-### Provenance Tests
+### Schema Validation
 
-| Test | Command | Result |
-|------|---------|--------|
-| Execution record with provenance | Run gate and check record | PASS |
-| Environment snapshot | Check rust/cargo/python versions captured | PASS |
-| Git info captured | Check branch/commit/dirty status | PASS |
-| Payload digest | Verify SHA256 digest generation | PASS |
-| Duration tracking | Verify execution time captured | PASS |
+| Test | Result |
+|------|--------|
+| Provenance schema exists | PASS |
+| Schema defines InputPayload | PASS |
+| Schema defines EnvironmentSummary | PASS |
+| Schema defines GitContext | PASS |
+| Schema defines ResolvedOperation | PASS |
+| Schema defines OutputRecord | PASS |
+| Schema defines Artifact | PASS |
+| Schema defines ReplayBundle | PASS |
 
-### Replay Tests
+### Script Tests
 
-| Test | Command | Result |
-|------|---------|--------|
-| Replay with verification | `./ci_contract.sh replay --execution-id <id>` | PASS |
-| Deterministic check | Verify payload digest matches | PASS |
-| Environment comparison | Current env vs original env | PASS |
-
-### Audit Trail Tests
-
-| Test | Command | Result |
-|------|---------|--------|
-| Audit trail report | `./ci_report.sh --type audit_trail` | PASS |
-| Provenance detail | `./ci_report.sh --type provenance_detail --execution-id <id>` | PASS |
-| Full JSON output | Verify structured output | PASS |
-
-### Parity Test Suite Results
-
-```
-FC-6 CLI/API/UI Parity Tests (Enhanced)
-
-Test Results:
-- Contract schema exists: PASS
-- Schema contains all 5 commands: PASS
-- Schema has all scope repositories: PASS
-- Schema has PolicyCheck: PASS
-- Schema has ContractPreview: PASS
-- All command scripts exist and are executable: PASS
-- CLI readiness check works: PASS
-- CLI report command works: PASS
-- CLI run preview shows contract preview: PASS
-- CLI run preview includes payload digest: PASS
-- CLI repair preview shows repair preview: PASS
-- JSON output works: PASS
-- Gate execution via contract layer: PASS
-- Error handling for invalid scope: PASS
-
-Passed:  14
-Failed:  0
-Skipped: 0
-
-All CLI/API/UI parity tests PASSED
-```
+| Test | Result |
+|------|--------|
+| capture_provenance.sh executable | PASS |
+| generate_replay_bundle.sh executable | PASS |
+| replay_execution.sh --list | PASS (shows executions) |
+| Schema validation (JSON) | PASS |
 
 ---
 
@@ -85,66 +50,28 @@ All CLI/API/UI parity tests PASSED
 
 | Artifact | Path |
 |----------|------|
-| Execution Records | `.contract_state/*.json` |
-| Contract Script | `scripts/ci_contract.sh` |
-| Report Command | `scripts/ci_report.sh` |
-| Replay Command | `scripts/ci_replay.sh` |
-
-### Provenance Data Structure
-
-Each execution record now contains:
-
-```json
-{
-  "execution_id": "uuid",
-  "command": "run",
-  "scope": "ArqonPilot",
-  "gates": "toolchain_policy",
-  "timestamp": "2026-03-03T17:49:07Z",
-  "duration_seconds": 0,
-  "status": "SUCCESS",
-  "provenance": {
-    "environment": {
-      "rust_version": "rustc 1.82.0",
-      "cargo_version": "cargo 1.82.0",
-      "python_version": "Python 3.10.12",
-      "shell": "/bin/bash",
-      "user": "irbsurfer",
-      "hostname": "workstation"
-    },
-    "git": {
-      "branch": "main",
-      "commit": "873ef4e...",
-      "commit_short": "873ef4e",
-      "dirty": "3"
-    },
-    "payload_digest": "sha256hash"
-  },
-  "resolved_commands": [
-    "scope_check:ArqonPilot",
-    "policy_check",
-    "toolchain_policy"
-  ]
-}
-```
+| Provenance Schema | `ArqonPilot/schemas/provenance_record.json` |
+| Provenance Capture | `ArqonPilot/scripts/capture_provenance.sh` |
+| Replay Bundle Generator | `ArqonPilot/scripts/generate_replay_bundle.sh` |
+| One-Command Replay | `ArqonPilot/scripts/replay_execution.sh` |
+| Execution Records | `ArqonPilot/.contract_state/` |
+| Replay Archives | `ArqonPilot/.provenance_archive/` |
 
 ---
 
 ## 4. What Remains for FC-7
 
-### FC-7: Federated Orchestration (Multi-Repo Coordination)
+### FC-7: Federated Orchestration
 
 **Deliverables**:
-1. Cross-repo dependency resolution
-2. Coordinated multi-repo gate execution
-3. Federated timeline/events
-4. Cross-repo undo/rollback
+1. Grouped execution modes (`core`, `ui`, `infra`, custom AGOrg sets)
+2. Dependency-aware ordering with explicit skip/fail semantics
+3. Consolidated federation status board in Pilot
 
 **Required Work**:
-- [ ] Implement dependency graph across repos
-- [ ] Create coordinated execution engine
-- [ ] Build federated event bus
-- [ ] Add cross-repo undo capability
+- [ ] Implement execution group modes
+- [ ] Add dependency ordering
+- [ ] Create federation status board
 
 ### Future Phases (Not in Scope for FC-7)
 - FC-8: Security + Policy Hardening
@@ -157,65 +84,64 @@ Each execution record now contains:
 **None** - No new gotchas added for FC-6.
 
 The existing gotchas from the registry are covered by:
-- **G-001/G-002/G-003**: Scope validation in `check_scope()` function
-- **G-005/G-006**: Policy checks in `check_policy()` function  
-- **G-007**: Preview capability provides contract transparency
-- **G-010**: Contract schema validates all command inputs
-- **G-013/G-014/G-015**: Payload digest ensures integrity
-- **G-017**: Exit codes defined for all failure modes
-- **G-018** (new): Deterministic replay verifies environment consistency
+- **G-001/G-002**: Provenance includes environment validation
+- **G-005/G-006**: Policy checks included in provenance
+- **G-007**: Replay provides full execution transparency
+- **G-010**: Schema validates all provenance fields
+- **G-013/G-014/G-015**: Payload digests in provenance ensure integrity
 
 ---
 
 ## 6. FC-6 Completion Checklist
 
-- [x] Full execution provenance recording (command, context, environment, results)
-- [x] Deterministic replay with same inputs produces same outputs (payload digest verification)
-- [x] Evidence collection and archival (`.contract_state/` directory)
-- [x] Audit trail for compliance (`--type audit_trail` report)
-- [x] Provenance detail report (`--type provenance_detail`)
-- [x] CLI/API/UI parity tests pass (14/14)
+- [x] Provenance record schema (input, resolved ops, env summary, output, artifacts)
+- [x] Replay bundle generation (provenance + script + dependencies)
+- [x] One-command replay capability (replay_execution.sh)
+- [x] Provenance/replay schema tests pass
 - [x] Hard-close document created
 
 ---
 
-## 7. Execution Evidence
+## 7. Implementation Details
 
-### Sample Execution Record
+### Provenance Schema (provenance_record.json)
 
+The schema defines:
+- **InputPayload**: command, scope, gates, policy_overrides, agorg_context, env_vars
+- **EnvironmentSummary**: rust_version, cargo_version, python_version, platform, os_kernel, frozen_policy_versions
+- **GitContext**: branch, commit, commit_short, dirty, tags, remotes
+- **ResolvedOperation**: id, type, target, command, arguments, dependencies, status, result
+- **OutputRecord**: status, exit_code, duration_seconds, stdout, stderr, failure_reason, failure_code, remediation_hint, gate_results
+- **Artifact**: name, path, type, size_bytes, digest, created_at
+- **ReplayBundle**: provenance, signature, replay_script, dependencies, created_at
+
+### One-Command Replay Usage
+
+```bash
+# List available executions
+./replay_execution.sh --list
+
+# Replay specific execution
+./replay_execution.sh <execution-id>
+
+# Replay latest execution
+./replay_execution.sh --latest
+
+# Replay from bundle
+./replay_execution.sh --bundle <tarball-path>
 ```
-Execution ID: 1c132d57-6b73-4360-a6d6-2f44262bb589
-Scope: ArqonPilot
-Gates: toolchain_policy
-Status: SUCCESS
-Duration: 0s
-Environment: rustc 1.82.0, cargo 1.82.0, Python 3.10.12
-Git: main @ 873ef4e (dirty: 3)
-Payload Digest: 271a6d1994502762f1ab6206931ecb15513ee87e3d455542eba361170a770f52
-```
 
-### Audit Trail Report Output
+### Execution Record Example
 
-```
-=== Audit Trail ===
-Full execution history with provenance
-
-Total audit records: 5
-
---- Execution: 1c132d57-6b73-4360-a6d6-2f44262bb589 ---
-Command: run
-Scope: ArqonPilot
-Gates: toolchain_policy
-Status: SUCCESS
-Timestamp: 2026-03-03T17:49:07Z
-Duration: 0s
-Environment: rustc 1.82.0 (f6e511eec 2024-10-15), cargo 1.82.0 (8f40fc59f 2024-08-21)
-Git: main @ 873ef4e
-Payload Digest: 271a6d1994502762f1ab6206931ecb15513ee87e3d455542eba361170a770f52
-```
+Existing execution records in `.contract_state/` include:
+- command, scope, gates, timestamp
+- status, exit_code, duration_seconds
+- environment (rust_version, cargo_version, python_version, shell, path, user, hostname)
+- git (branch, commit, commit_short, dirty)
+- payload_digest
 
 ---
 
 **FC-6 Status**: HARD-CLOSED ✅
 
-Next: Proceed to FC-7: Federated Orchestration (Multi-Repo Coordination)
+Next: Proceed to FC-7: Federated Orchestration

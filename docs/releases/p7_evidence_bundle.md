@@ -44,14 +44,33 @@ Result:
 
 1. Passes successfully for `pilot` crate after P7 updates.
 
-Additional expected operator verification loop (manual runtime lane):
+Runtime chaos verification loop executed (2026-03-03T19:50:40Z):
 
-1. Start serve/UI.
-2. Observe `/api/health` baseline.
-3. Interrupt Bus/DB process intentionally.
-4. Observe degraded state transitions in `/api/health`.
-5. Trigger service restart.
-6. Confirm return to stable `RUNNING` states without flapping.
+```bash
+# baseline
+curl -s http://127.0.0.1:7788/api/health
+
+# interruption
+./scripts/arqonbus_shim.sh stop
+./scripts/pilot_local.sh db stop
+curl -s http://127.0.0.1:7788/api/health
+
+# recovery
+./scripts/pilot_local.sh services restart
+curl -s http://127.0.0.1:7788/api/health
+```
+
+Captured artifacts:
+
+1. `/home/irbsurfer/.pilot/reports/p7_health_20260303T195040Z_01_baseline.json`
+2. `/home/irbsurfer/.pilot/reports/p7_health_20260303T195040Z_02_degraded.json`
+3. `/home/irbsurfer/.pilot/reports/p7_health_20260303T195040Z_03_recovered.json`
+
+Observed state transition evidence:
+
+1. Baseline: `bus=RUNNING`, `db=RUNNING`, `ok=true`
+2. Degraded: `bus=RUNNING`, `db=STOPPED`, `ok=false`
+3. Recovered: `bus=RUNNING`, `db=RUNNING`, `ok=true`
 
 ## Acceptance Mapping to P7
 

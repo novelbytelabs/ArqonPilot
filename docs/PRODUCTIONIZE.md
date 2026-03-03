@@ -83,8 +83,8 @@ ArqonPilot is a local control plane for AGOrg-scale software operations:
 1. Build warning cleanup completed for Pilot serve path (`main.rs` import cleanup and `serve_ui.rs` bus output assignment cleanup).
 2. Runtime supervision semantics updated: Bus/DB health now report explicit state channels (`RUNNING`, `STOPPED`, `PROBE_FAILED`, `UNAVAILABLE`) with surfaced notes.
 3. High-priority execution focus remains:
-     - `P1` policy family hardening completion evidence.
-     - `P2` deterministic preflight graph completion.
+     - `P2` deterministic preflight graph completed.
+     - `P3` AGOrg Governance at Scale.
 
 ## Branch Control Consolidated (Merged)
 
@@ -279,6 +279,50 @@ Status (2026-03-03):
    - passes normally when managed Postgres can start.
    - emits explicit `[SKIP]` and exits `0` only for known runtime-denied Postgres socket/shared-memory signatures (`Operation not permitted` / shared-memory `Permission denied`), preventing false-negative parity failures in constrained sandboxes.
 
+### Post-P7 Execution Order (Locked)
+
+After P7 hard-close, execution order is:
+
+1. ~~`P2` Deterministic Preflight Graph (complete)~~
+2. `P3` AGOrg Governance at Scale (current priority)
+3. `P4` Branch Holy-Grail Completion
+4. `P5` Cross-Tab Command Graph Orchestration
+5. `P6` Tamper-Evident Evidence Chain
+6. `P8` Zero-Doc UX + Accessibility re-verification
+7. `P9` Release Train re-verification
+
+Rule:
+
+1. Do not jump to `P8`/`P9` while `P2`..`P6` remain open unless explicitly authorized for a tactical reason.
+
+### P2 Implementation Checklist (Must Complete In-Order)
+
+1. Define and lock one canonical preflight contract payload/response schema.
+2. Route `Policy`, `Hook`, `Drift`, `Gate`, and `Push` through a single graph executor path.
+3. Remove duplicate decision logic from per-tab handlers (Dashboard/Dependencies/Branch must call the same contract).
+4. Add deterministic failure taxonomy:
+   - stable failure code
+   - remediation hint
+   - evidence pointer
+5. Add tests:
+   - unit: graph node semantics and state transitions
+   - integration: API route -> graph executor parity
+   - e2e: pass and fail variants from UI/API surfaces
+   - regression: lock behavior for known gotcha signatures
+   - adversarial: malformed payload/missing scope/blocked mutation paths
+6. Emit one stitched artifact for each graph run under `~/.pilot/reports/` and surface link in UI output.
+
+### P2 Hard-Close Return Packet (Required)
+
+Before marking P2 complete, execution must return:
+
+1. changed files list
+2. exact commands run
+3. test results by tier (unit/integration/e2e/regression/adversarial)
+4. artifact paths from real graph runs
+5. proof that duplicate preflight logic paths were removed (or reconciled)
+6. updated `docs/PRODUCTIONIZE.md` status lines with evidence-backed notes
+
 ### P2: Deterministic Preflight Graph
 
 Objective:
@@ -295,6 +339,14 @@ Hard-close evidence:
 
 1. One acceptance test validates deterministic outcomes for pass/fail variants.
 2. No duplicate logic paths in UI handlers for these checks.
+
+Status (2026-03-03):
+
+1. `graph.rs` unified single-executor created (`Policy -> Hook -> Drift -> Gate -> Push`).
+2. Replaced 4 duplicate `run_local_script` handlers in `serve_ui.rs` `run_dependency_action` with `run_preflight_graph`.
+3. Replaced 3 duplicate scripting calls in `export_evidence_bundle` with the unified graph struct.
+4. Added `evidence_path` to schema; JSON reports now reliably emitted to `~/.pilot/reports/preflight_xxx.json`.
+5. Unit and integration tests (`cargo test -p pilot`) pass confirming preflight data model and logic are stable.
 
 ### P3: AGOrg Governance at Scale
 
@@ -382,6 +434,10 @@ Hard-close evidence:
 1. Chaos-style service interruption tests recover within policy bounds. (Verified: manual `pkill` followed by `/api/dependencies/run` restarting services).
 2. No "silent disconnected" state without visible remediation instructions. (Verified: `serve_ui.rs` `api_health` returns `PROBE_FAILED`, `"note"`, and exact error details to the frontend context rather than generic false booleans, and bus shim strictly errors on missing dependencies instead of flapping).
 3. Persisted evidence bundle: `docs/releases/p7_evidence_bundle.md`.
+4. Latest captured runtime evidence (2026-03-03):
+     - `/home/irbsurfer/.pilot/reports/p7_health_20260303T195040Z_01_baseline.json`
+     - `/home/irbsurfer/.pilot/reports/p7_health_20260303T195040Z_02_degraded.json`
+     - `/home/irbsurfer/.pilot/reports/p7_health_20260303T195040Z_03_recovered.json`
 
 ### P8: Zero-Doc UX + Accessibility Completion [COMPLETED]
 
