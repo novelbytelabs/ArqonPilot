@@ -5,7 +5,7 @@ pub fn should_process(conn: &Connection, path: &str, content: &str) -> Result<bo
     // Check if any node exists for this path with a DIFFERENT hash
     // NOTE: This is a simplification. Ideally we track file-level hashes separately.
     // For now, we check the first node in the file. If it exists and matches, we assume file is same.
-    // This is imperfect but fast for MVP.
+    // This is simplified but fast for MVP.
     
     // Better approach: Maintain a 'files' table.
     // For T015, we'll implement the "check hash" logic.

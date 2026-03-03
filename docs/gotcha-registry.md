@@ -242,7 +242,7 @@ Keep this file current whenever a new failure class appears.
   - This means: no tab switching, no API calls, no dropdown, no registry, no stream — the page is a static HTML shell.
 - Why this keeps happening:
   - The `<script>` block is ~1500 lines. DOM variable declarations appear in two separate clusters (~line 3264 and ~line 3315). When adding a new variable, it is easy to insert it in the first cluster without noticing the second cluster already declares the same name.
-  - `cargo check` does NOT validate JavaScript. The Rust code compiles perfectly even when the embedded JS is syntactically broken.
+  - `cargo check` does NOT validate JavaScript. The Rust code compiles without error even when the embedded JS is syntactically broken.
 - Recovery:
   1. Open browser DevTools Console (F12). If you see `SyntaxError: Identifier '...' has already been declared`, that is the problem.
   2. Search the `<script>` block in `serve_ui.rs` for the duplicated identifier: `grep -n 'const <varname>' serve_ui.rs`.

@@ -602,7 +602,7 @@ handle_mutation(cmd, idempotency_key, req_hash):
 5. run compliance continuously and export evidence.
 6. handle temporary exceptions with accountability and expiry.
 
-This is the required base for the “ultimate” AGOrg control plane.
+This is the required base for the comprehensive AGOrg control plane.
 
 ## 16. Implementation Reality Check (2026-03-03) — Hard-Close
 

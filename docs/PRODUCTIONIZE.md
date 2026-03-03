@@ -209,7 +209,7 @@ Dogfooding evidence requirements:
 
 ## Remaining Work (Authoritative Open Gaps)
 
-The items below are open and required for the intended "ultimate" production target. This replaces the prior minimal post-close note.
+The items below are open and required for the intended production-grade target. This replaces the prior minimal post-close note.
 
 1. Policy coverage gap:
      - branch policy is mature; first-class policy families for `dependency`, `release`, `security`, `quality`, and `runtime` are not yet fully implemented end-to-end.
@@ -387,7 +387,7 @@ Session startup requirement:
 1. Include in session notes which gotchas are relevant to current wave.
 2. If any matching signature appears, use the exact recovery path before adding code.
 
-## "Holy Grail" Build Posture (Decision Discipline)
+## Standard Build Posture (Decision Discipline)
 
 This project target is not "works in demo"; it is a safe, secure, auditable, operator-grade control plane.
 
