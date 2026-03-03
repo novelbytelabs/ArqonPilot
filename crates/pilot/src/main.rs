@@ -28,6 +28,8 @@ use config::Config;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shim_runtime::bus_shim_command;
 use std::collections::HashSet;
+use uuid::Uuid;
+use chrono::Utc;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -2984,7 +2986,7 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                 let path = canonicalize_path_lossy(&repo.path);
                 path_in_any_root(&path, &roots)
             });
-            let exceptions = gov_store.get_exceptions(active.id, kind).await?;
+            let exceptions = gov_store.get_effective_exceptions(active.id, kind).await?;
             let statuses = branch::branch_status(&repos);
             let mut violations = 0usize;
             let mut warnings = 0usize;
@@ -2993,30 +2995,34 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                 .iter()
                 .map(|st| {
                     let path = std::path::Path::new(&st.path);
+                    let ago_path = path.strip_prefix(std::path::Path::new(&active.root_path)).unwrap_or(path).display().to_string();
+                    let source_name = "Preview";
+                    let source_id = Some(active.id);
+
                     let eval = match kind.as_str() {
                         "branch" => {
                             let policy: governance::model::BranchPolicy = serde_json::from_value(record.policy_json.clone()).unwrap_or_default();
-                            governance::eval::evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions)
+                            governance::eval::evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions, &ago_path, source_name, source_id)
                         }
                         "dependency" => {
                             let policy: governance::model::DependencyPolicy = serde_json::from_value(record.policy_json.clone()).unwrap_or_default();
-                            governance::eval::evaluate_dependency_policy(&policy, path, &exceptions)
+                            governance::eval::evaluate_dependency_policy(&policy, path, &exceptions, &ago_path, source_name, source_id)
                         }
                         "release" => {
                             let policy: governance::model::ReleasePolicy = serde_json::from_value(record.policy_json.clone()).unwrap_or_default();
-                            governance::eval::evaluate_release_policy(&policy, path, &exceptions)
+                            governance::eval::evaluate_release_policy(&policy, path, &exceptions, &ago_path, source_name, source_id)
                         }
                         "security" => {
                             let policy: governance::model::SecurityPolicy = serde_json::from_value(record.policy_json.clone()).unwrap_or_default();
-                            governance::eval::evaluate_security_policy(&policy, path, &exceptions)
+                            governance::eval::evaluate_security_policy(&policy, path, &exceptions, &ago_path, source_name, source_id)
                         }
                         "quality" => {
                             let policy: governance::model::QualityPolicy = serde_json::from_value(record.policy_json.clone()).unwrap_or_default();
-                            governance::eval::evaluate_quality_policy(&policy, path, &exceptions)
+                            governance::eval::evaluate_quality_policy(&policy, path, &exceptions, &ago_path, source_name, source_id)
                         }
                         "runtime" => {
                             let policy: governance::model::RuntimePolicy = serde_json::from_value(record.policy_json.clone()).unwrap_or_default();
-                            governance::eval::evaluate_runtime_policy(&policy, path, &exceptions)
+                            governance::eval::evaluate_runtime_policy(&policy, path, &exceptions, &ago_path, source_name, source_id)
                         }
                         _ => governance::model::PolicyEvalReport::default()
                     };
@@ -3200,7 +3206,7 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                 let path = canonicalize_path_lossy(&repo.path);
                 path_in_any_root(&path, &roots)
             });
-            let exceptions = gov_store.get_exceptions(active.id, kind).await?;
+            let exceptions = gov_store.get_effective_exceptions(active.id, kind).await?;
             let statuses = branch::branch_status(&repos);
             let mut issues = 0usize;
             let mut off_policy = 0usize;
@@ -3208,30 +3214,34 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                 .iter()
                 .map(|st| {
                     let path = std::path::Path::new(&st.path);
+                    let ago_path = path.strip_prefix(std::path::Path::new(&active.root_path)).unwrap_or(path).display().to_string();
+                    let source_name = "Scan";
+                    let source_id = Some(active.id);
+
                     let eval = match kind.as_str() {
                         "branch" => {
                             let policy: governance::model::BranchPolicy = serde_json::from_value(record.clone()).unwrap_or_default();
-                            governance::eval::evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions)
+                            governance::eval::evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions, &ago_path, source_name, source_id)
                         }
                         "dependency" => {
                             let policy: governance::model::DependencyPolicy = serde_json::from_value(record.clone()).unwrap_or_default();
-                            governance::eval::evaluate_dependency_policy(&policy, path, &exceptions)
+                            governance::eval::evaluate_dependency_policy(&policy, path, &exceptions, &ago_path, source_name, source_id)
                         }
                         "release" => {
                             let policy: governance::model::ReleasePolicy = serde_json::from_value(record.clone()).unwrap_or_default();
-                            governance::eval::evaluate_release_policy(&policy, path, &exceptions)
+                            governance::eval::evaluate_release_policy(&policy, path, &exceptions, &ago_path, source_name, source_id)
                         }
                         "security" => {
                             let policy: governance::model::SecurityPolicy = serde_json::from_value(record.clone()).unwrap_or_default();
-                            governance::eval::evaluate_security_policy(&policy, path, &exceptions)
+                            governance::eval::evaluate_security_policy(&policy, path, &exceptions, &ago_path, source_name, source_id)
                         }
                         "quality" => {
                             let policy: governance::model::QualityPolicy = serde_json::from_value(record.clone()).unwrap_or_default();
-                            governance::eval::evaluate_quality_policy(&policy, path, &exceptions)
+                            governance::eval::evaluate_quality_policy(&policy, path, &exceptions, &ago_path, source_name, source_id)
                         }
                         "runtime" => {
                             let policy: governance::model::RuntimePolicy = serde_json::from_value(record.clone()).unwrap_or_default();
-                            governance::eval::evaluate_runtime_policy(&policy, path, &exceptions)
+                            governance::eval::evaluate_runtime_policy(&policy, path, &exceptions, &ago_path, source_name, source_id)
                         }
                         _ => governance::model::PolicyEvalReport::default()
                     };

@@ -4481,8 +4481,11 @@ name = "pilot-branch"
 version = "0.1.6"
 dependencies = [
  "anyhow",
+ "chrono",
  "pilot-multi",
  "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

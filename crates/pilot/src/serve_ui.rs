@@ -14,6 +14,7 @@ use pilot_branch as branch;
 use pilot_multi as multi;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fs;
@@ -519,6 +520,10 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/dependencies/logs", get(get_dependency_logs))
         .route("/api/branch/matrix", post(api_branch_matrix))
         .route("/api/branch/run", post(api_branch_run))
+        .route("/api/branch/conflict-radar", post(api_branch_conflict_radar))
+        .route("/api/branch/undo-journal", get(api_branch_undo_journal))
+        .route("/api/branch/undo", post(api_branch_undo))
+        .route("/api/branch/timeline", get(api_branch_timeline))
         .route(
             "/api/system/temporary_components",
             get(get_temporary_components),
@@ -969,7 +974,15 @@ async fn branch_policy_violation(
         if branch.is_empty() {
             return Some("branch is required for create".to_string());
         }
-        let report = evaluate_branch_policy(&policy, "create", &branch, &exceptions);
+        let report = evaluate_branch_policy(
+            &policy,
+            "create",
+            &branch,
+            &exceptions,
+            "",
+            "Active Scope",
+            state.agorg_store.get_active_agorg().await.ok().flatten().map(|a| a.id),
+        );
         if report.blocked {
             let msgs = report
                 .violations
@@ -990,7 +1003,15 @@ async fn branch_policy_violation(
         if branch.is_empty() {
             return Some("branch is required for multi apply".to_string());
         }
-        let report = evaluate_branch_policy(&policy, "create", &branch, &exceptions);
+        let report = evaluate_branch_policy(
+            &policy,
+            "create",
+            &branch,
+            &exceptions,
+            "",
+            "Active Scope",
+            state.agorg_store.get_active_agorg().await.ok().flatten().map(|a| a.id),
+        );
         if report.blocked {
             let msgs = report
                 .violations
@@ -1209,13 +1230,33 @@ async fn api_branch_run(
             );
         }
 
-        let report = evaluate_branch_policy(&policy, "create", &branch_name, &exceptions);
-        if report.blocked {
-            let body = json!({
-                "error": "Governance Policy Violation: Branch creation blocked",
-                "policy_report": report
-            });
-            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        let registry = multi::MultiRegistry::open(&multi::MultiRegistry::default_db_path())
+            .unwrap(); 
+        let roots = scope_roots(&scope);
+        let repos = match resolve_branch_targets(&registry, &req, &roots) {
+            Ok(v) => v,
+            Err(e) => return error_response(StatusCode::BAD_REQUEST, &e),
+        };
+
+        for repo in repos {
+            let repo_path = canonicalize_path_lossy(&repo.path);
+            let ago_path = repo_path.strip_prefix(Path::new(&scope.root_path)).unwrap_or(&repo_path).display().to_string();
+            let report = evaluate_branch_policy(
+                &policy,
+                "create",
+                &branch_name,
+                &exceptions,
+                &ago_path,
+                "Override",
+                Some(scope.id),
+            );
+            if report.blocked {
+                let body = json!({
+                    "error": format!("Governance Policy Violation in {}: Branch creation blocked", repo.name),
+                    "policy_report": report
+                });
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
         }
     }
 
@@ -1437,6 +1478,42 @@ async fn api_branch_run(
         "response": response
     }));
 
+    // P4: Emit timeline event
+    let branch_name = req.branch.clone().unwrap_or_default();
+    let success = response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let failures = response.get("failures").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let timeline_event = branch::BranchTimelineEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: Utc::now().to_rfc3339(),
+        scope_id: Some(scope.id.to_string()),
+        action: action.clone(),
+        branch: branch_name.clone(),
+        base_branch: base_branch.clone(),
+        repos: repos.iter().map(|r| r.name.clone()).collect(),
+        dry_run,
+        success,
+        repo_count: repos.len(),
+        failures,
+        conflict_count: 0,
+        undo_entry_ids: vec![],
+        details: json!({"response_summary": {
+            "ok": success,
+            "failures": failures,
+        }}),
+    };
+    let _ = branch::emit_branch_event(&timeline_event);
+
+    // P4: Include confirmation metadata in preview responses
+    let mut response = response;
+    if dry_run {
+        let (confirmation_type, confirmation_phrase) =
+            required_confirmation(&policy, &action, &branch_name);
+        response["confirmation_required"] = json!({
+            "type": confirmation_type,
+            "phrase": confirmation_phrase,
+        });
+    }
+
     let decision_result = if response
         .get("ok")
         .and_then(|v| v.as_bool())
@@ -1466,6 +1543,192 @@ async fn api_branch_run(
         .await;
 
     Json(response).into_response()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P4 API Handlers
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ConflictRadarRequest {
+    branch: String,
+    base_branch: Option<String>,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+}
+
+async fn api_branch_conflict_radar(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<ConflictRadarRequest>,
+) -> Response {
+    let scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let registry = match branch_registry() {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let roots = scope_roots(&scope);
+    let filter = multi::RepoFilter {
+        group: req.group.clone(),
+        tags: req.tags.clone().unwrap_or_default(),
+    };
+    let mut repos = match registry.list_repos(&filter) {
+        Ok(v) => v,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    repos.retain(|repo| {
+        let path = canonicalize_path_lossy(&repo.path);
+        path_in_any_root(&path, &roots)
+    });
+    let base_branch = req.base_branch.as_deref().unwrap_or("main");
+    let results = branch::conflict_radar(&repos, &req.branch, base_branch);
+    let has_any_conflicts = results.iter().any(|r| r.has_conflicts);
+    let conflict_count = results.iter().filter(|r| r.has_conflicts).count();
+
+    Json(json!({
+        "ok": true,
+        "branch": req.branch,
+        "base_branch": base_branch,
+        "has_conflicts": has_any_conflicts,
+        "conflict_count": conflict_count,
+        "repo_count": repos.len(),
+        "results": results
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct UndoJournalQuery {
+    limit: Option<usize>,
+}
+
+async fn api_branch_undo_journal(
+    State(state): State<Arc<UiState>>,
+    Query(q): Query<UndoJournalQuery>,
+) -> Response {
+    let scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let limit = q.limit.unwrap_or(50).min(500);
+    let entries = branch::list_undo_journal(Some(&scope.id.to_string()), limit);
+
+    Json(json!({
+        "ok": true,
+        "scope_id": scope.id,
+        "count": entries.len(),
+        "entries": entries
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct UndoRequest {
+    entry_id: String,
+    #[serde(default)]
+    dry_run: Option<bool>,
+}
+
+async fn api_branch_undo(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<UndoRequest>,
+) -> Response {
+    let scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if !state.allow_mutations {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "undo blocked in read-only UI mode; restart pilot serve with --ui-allow-mutations",
+        );
+    }
+    let dry_run = req.dry_run.unwrap_or(true);
+    let entries = branch::list_undo_journal(Some(&scope.id.to_string()), 500);
+    let entry = match entries.iter().find(|e| e.id == req.entry_id) {
+        Some(e) => e,
+        None => {
+            return error_response(
+                StatusCode::NOT_FOUND,
+                "Undo entry not found in current scope",
+            )
+        }
+    };
+    if entry.undone {
+        return error_response(StatusCode::CONFLICT, "This operation has already been undone");
+    }
+
+    let outcome = branch::execute_undo(entry, dry_run);
+
+    if outcome.success && !dry_run {
+        let _ = branch::mark_undone(&entry.id);
+
+        // Emit timeline event for the undo
+        let timeline_event = branch::BranchTimelineEvent {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            scope_id: Some(scope.id.to_string()),
+            action: "undo".to_string(),
+            branch: entry.branch_name.clone(),
+            base_branch: String::new(),
+            repos: vec![entry.repo.clone()],
+            dry_run: false,
+            success: outcome.success,
+            repo_count: 1,
+            failures: if outcome.success { 0 } else { 1 },
+            conflict_count: 0,
+            undo_entry_ids: vec![entry.id.clone()],
+            details: json!({"undone_action": entry.action, "prior_ref": entry.prior_ref}),
+        };
+        let _ = branch::emit_branch_event(&timeline_event);
+    }
+
+    Json(json!({
+        "ok": outcome.success,
+        "dry_run": dry_run,
+        "entry_id": entry.id,
+        "outcome": outcome
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct TimelineQuery {
+    limit: Option<usize>,
+    offset: Option<usize>,
+    action: Option<String>,
+}
+
+async fn api_branch_timeline(
+    State(state): State<Arc<UiState>>,
+    Query(q): Query<TimelineQuery>,
+) -> Response {
+    let scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let limit = q.limit.unwrap_or(50).min(500);
+    let offset = q.offset.unwrap_or(0);
+    let events = branch::query_branch_timeline(
+        Some(scope.id.to_string()),
+        q.action.as_deref(),
+        limit,
+        offset,
+    );
+
+    Json(json!({
+        "ok": true,
+        "scope_id": scope.id,
+        "count": events.len(),
+        "limit": limit,
+        "offset": offset,
+        "events": events
+    }))
+    .into_response()
 }
 
 async fn get_history() -> Response {
@@ -4803,6 +5066,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
       --rose: #FF2E2E;
       --glass-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
       --glass-border: rgba(255, 255, 255, 0.05);
+      
+      --gov-inherited: #7C3AED;
+      --gov-override: #F59E0B;
+      --gov-conflict: #EF4444;
     }
     * { box-sizing: border-box; margin: 0; }
 
@@ -4866,6 +5133,21 @@ const INDEX_HTML: &str = r#"<!doctype html>
       max-width: 100%;
       padding: 0;
     }
+
+    /* ═══════════ Governance Tables ═══════════ */
+    .gov-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 12px; }
+    .gov-table th { text-align: left; padding: 10px; border-bottom: 2px solid var(--border); color: var(--muted); text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em; }
+    .gov-table td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    .gov-table tr:hover { background: rgba(255, 255, 255, 0.02); }
+    
+    .source-pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500; }
+    .source-pill.agorg { background: rgba(124, 58, 237, 0.15); color: #C4B5FD; border: 1px solid rgba(124, 58, 237, 0.3); }
+    .source-pill.ago { background: rgba(245, 158, 11, 0.15); color: #FCD34D; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .source-pill.default { background: rgba(148, 163, 184, 0.1); color: var(--muted); border: 1px solid var(--border); }
+    
+    .override-tag { margin-left: 6px; color: var(--gov-override); font-size: 0.68rem; font-weight: 700; text-transform: uppercase; }
+    .conflict-warning { color: var(--gov-conflict); font-weight: 600; font-size: 0.75rem; display: flex; align-items: center; gap: 4px; }
+    .inheritance-trace { font-size: 0.78rem; color: var(--muted); border-left: 2px solid var(--gov-inherited); padding-left: 10px; margin: 8px 0; }
 
     /* ═══════════ Top Nav / Hero ═══════════ */
     .hero {
@@ -6168,6 +6450,45 @@ Recommended flow:
           <button id="branch-status-btn" class="btn secondary" onclick="branchStatus()">Status</button>
         </div>
       </div>
+
+      <div class="card">
+        <h3>Undo Journal</h3>
+        <div class="helper">Recent destructive branch operations that can be reverted.</div>
+        <div class="chip-row">
+          <span id="branch-undo-chip" class="chip neutral">Undo: idle</span>
+        </div>
+        <div class="pre-wrap" style="margin-top: 10px;">
+          <div style="max-height: 250px; overflow: auto; border: 1px solid var(--border); border-radius: 8px;">
+            <table class="branch-matrix-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Action</th>
+                  <th>Repo</th>
+                  <th>Branch</th>
+                  <th>Prior Ref</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="branch-undo-body">
+                <tr><td colspan="7" class="muted">Loading undo journal...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Branch Timeline</h3>
+        <div class="helper">Chronological history of branch mutations.</div>
+        <div class="row">
+          <button id="branch-timeline-refresh-btn" class="btn secondary" onclick="branchTimelineLoad()">Refresh Timeline</button>
+        </div>
+        <div id="branch-timeline-list" style="margin-top: 10px; max-height: 400px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px;">
+          <div class="muted">No timeline events loaded.</div>
+        </div>
+      </div>
       <div class="card">
         <h3>Dependency DAG + Staged Apply (Primary Branch Flow)</h3>
         <div class="helper">Run DAG preview, then staged apply preview, then staged apply execute when approved.</div>
@@ -6864,7 +7185,15 @@ async fn api_settings_simulate_policy(
     let evaluations: Vec<Value> = statuses
         .iter()
         .map(|st| {
-            let report = evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions);
+            let report = evaluate_branch_policy(
+                &policy,
+                "create",
+                &st.current_branch,
+                &exceptions,
+                &st.path,
+                "AGOrg",
+                Some(active_scope.id),
+            );
             violations += report.violations.len();
             warnings += report.warnings.len();
             if report.blocked {
@@ -7191,7 +7520,7 @@ async fn api_settings_compliance_scan(
     }
     let statuses = branch::branch_status(&repos);
     let gov_store = GovernanceStore::new(state.agorg_store.dsn());
-    let exceptions = match gov_store.get_exceptions(active_scope.id, "branch").await {
+    let exceptions = match gov_store.get_effective_exceptions(active_scope.id, &req.kind).await {
         Ok(v) => v,
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
@@ -7209,46 +7538,56 @@ async fn api_settings_compliance_scan(
     let mut off_policy = 0usize;
     let mut details: Vec<Value> = Vec::with_capacity(statuses.len());
     for st in &statuses {
-        let repo_path = canonicalize_path_lossy(Path::new(&st.path))
+        let repo_path_str = canonicalize_path_lossy(Path::new(&st.path))
             .display()
             .to_string();
-        let (source, policy_json) = match gov_store
-            .get_ago_policy_override(active_scope.id, repo_path.as_str(), &req.kind)
+        
+        let (policy_record, source_name) = match gov_store
+            .get_effective_policy_record(active_scope.id, repo_path_str.as_str(), &req.kind)
             .await
         {
-            Ok(Some(p)) => ("ago", p.policy_json),
-            Ok(None) => match gov_store.get_policy(active_scope.id, &req.kind).await {
-                Ok(Some(p)) => ("agorg", p.policy_json),
-                _ => ("fallback_default", default_policy_json.clone()),
-            },
-            Err(_) => ("fallback_default", default_policy_json.clone()),
+            Ok(Some((p, name))) => (p, name),
+            _ => (AgorgPolicyRecord {
+                id: Uuid::nil(),
+                agorg_id: Uuid::nil(),
+                ago_path: None,
+                policy_kind: req.kind.clone(),
+                version: 0,
+                policy_json: default_policy_json.clone(),
+                status: "default".to_string(),
+                updated_at: Utc::now(),
+                updated_by: "system".to_string(),
+            }, "Default".to_string()),
         };
+
+        let policy_json = policy_record.policy_json.clone();
+        let source_id = if policy_record.version > 0 { Some(policy_record.agorg_id) } else { None };
 
         let path = Path::new(&st.path);
         let eval = match req.kind.as_str() {
             "branch" => {
                 let policy: BranchPolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions)
+                evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions, &repo_path_str, &source_name, source_id)
             }
             "dependency" => {
                 let policy: DependencyPolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_dependency_policy(&policy, path, &exceptions)
+                evaluate_dependency_policy(&policy, path, &exceptions, &repo_path_str, &source_name, source_id)
             }
             "release" => {
                 let policy: ReleasePolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_release_policy(&policy, path, &exceptions)
+                evaluate_release_policy(&policy, path, &exceptions, &repo_path_str, &source_name, source_id)
             }
             "security" => {
                 let policy: SecurityPolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_security_policy(&policy, path, &exceptions)
+                evaluate_security_policy(&policy, path, &exceptions, &repo_path_str, &source_name, source_id)
             }
             "quality" => {
                 let policy: QualityPolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_quality_policy(&policy, path, &exceptions)
+                evaluate_quality_policy(&policy, path, &exceptions, &repo_path_str, &source_name, source_id)
             }
             "runtime" => {
                 let policy: RuntimePolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_runtime_policy(&policy, path, &exceptions)
+                evaluate_runtime_policy(&policy, path, &exceptions, &repo_path_str, &source_name, source_id)
             }
             _ => PolicyEvalReport::default()
         };
@@ -7262,7 +7601,9 @@ async fn api_settings_compliance_scan(
             "repo": st.repo,
             "path": st.path,
             "branch": st.current_branch,
-            "policy_source": source,
+            "policy_source": source_name,
+            "policy_source_id": source_id,
+            "is_override": policy_record.ago_path.is_some(),
             "blocked": eval.blocked,
             "violations": eval.violations.len(),
             "warnings": eval.warnings.len()
@@ -7333,47 +7674,42 @@ async fn api_settings_policy_resolve(
         .to_string();
     let gov_store = GovernanceStore::new(state.agorg_store.dsn());
 
-    let ago_record = match gov_store
-        .get_ago_policy_override(active_scope.id, canonical_repo.as_str(), &req.kind)
+    let (policy_record, source_name) = match gov_store
+        .get_effective_policy_record(active_scope.id, canonical_repo.as_str(), &req.kind)
         .await
     {
-        Ok(v) => v,
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Ok(Some((p, name))) => (p, name),
+        _ => (AgorgPolicyRecord {
+            id: Uuid::nil(),
+            agorg_id: Uuid::nil(),
+            ago_path: None,
+            policy_kind: req.kind.clone(),
+            version: 0,
+            policy_json: match req.kind.as_str() {
+                "branch" => serde_json::to_value(BranchPolicy::default()),
+                "dependency" => serde_json::to_value(DependencyPolicy::default()),
+                "release" => serde_json::to_value(ReleasePolicy::default()),
+                "security" => serde_json::to_value(SecurityPolicy::default()),
+                "quality" => serde_json::to_value(QualityPolicy::default()),
+                "runtime" => serde_json::to_value(RuntimePolicy::default()),
+                _ => serde_json::to_value(BranchPolicy::default()),
+            }.unwrap_or(json!({})),
+            status: "default".to_string(),
+            updated_at: Utc::now(),
+            updated_by: "system".to_string(),
+        }, "Default".to_string()),
     };
-    if let Some(r) = ago_record {
-        return Json(json!({
-            "ok": true,
-            "repo_path": canonical_repo,
-            "kind": req.kind,
-            "source": "ago_policy",
-            "version": r.version,
-            "status": r.status,
-            "resolved_policy": r.policy_json
-        }))
-        .into_response();
-    }
-    let agorg_record = match gov_store.get_policy(active_scope.id, &req.kind).await {
-        Ok(v) => v,
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-    if let Some(r) = agorg_record {
-        return Json(json!({
-            "ok": true,
-            "repo_path": canonical_repo,
-            "kind": req.kind,
-            "source": "agorg_policy",
-            "version": r.version,
-            "status": r.status,
-            "resolved_policy": r.policy_json
-        }))
-        .into_response();
-    }
+
     Json(json!({
         "ok": true,
         "repo_path": canonical_repo,
         "kind": req.kind,
-        "source": "fallback_default",
-        "resolved_policy": BranchPolicy::default()
+        "source": source_name,
+        "source_id": if policy_record.version > 0 { Some(policy_record.agorg_id) } else { None },
+        "is_override": policy_record.ago_path.is_some(),
+        "version": policy_record.version,
+        "status": policy_record.status,
+        "resolved_policy": policy_record.policy_json
     }))
     .into_response()
 }

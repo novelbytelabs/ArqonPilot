@@ -3,6 +3,31 @@
 This is the canonical list of recurring failures, their signature, and exact recovery flow.
 Keep this file current whenever a new failure class appears.
 
+## G-040: Uuid Serialization Mismatch (Option<i64> vs String)
+
+- Signature:
+  - `Expected Option<i64> found String` or `mismatched types: expected struct String, found struct Uuid`
+  - impacts API payload serialization/deserialization when extending governance models.
+- Cause:
+  - Some generic `Audit` event fields historically expected `i64` or implicit integers. New P4 structs (`BranchUndoEntry`, `BranchTimelineEvent`) generate UUID v4s for `scope_id`, leading to mismatch across boundaries.
+- Recovery:
+  1. Standardize on `Option<String>` for `scope_id` inside events and journals.
+  2. For Uuid structs like `eval::Scope`, explicitly call `.id.to_string()` when packing into `Option<String>`.
+  3. Ensure SQL `as_deref()` comparisons account for this string projection.
+
+## G-018: Widespread compilation failure after `evaluate_*_policy` signature changes
+
+- Signature:
+  - `error[E0061]: this function takes 7 arguments but 4 arguments were supplied`
+  - impacts `serve_ui.rs` (API routes) and `main.rs` (CLI preview/scan).
+- Cause:
+  - Adding traceback or context metadata (like `policy_source_id` or `current_ago_path`) to the core evaluation engine (`eval.rs`) breaks loosely coupled call sites in the UI presentation layer and CLI.
+- Recovery:
+  1. Use `cargo check -p pilot` early when modifying `eval.rs`.
+  2. Map all call sites in `serve_ui.rs` (in `branch_policy_violation` and `api_branch_run`).
+  3. Map all call sites in `main.rs` (in `PolicyCommands::Preview` and `PolicyCommands::Scan`).
+  4. Ensure arguments like `(&policy, path, &exceptions, &current_ago_path, &source_name, source_id)` are correctly passed to match the updated AST.
+
 ## G-001: Rust 1.82 drift to `edition2024` crates
 
 - Signature:

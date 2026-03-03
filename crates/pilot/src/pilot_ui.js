@@ -243,7 +243,9 @@ let latestCodexContractId = '';
 let currentTab = 'dashboard';
 let branchMatrixRows = [];
 let branchSelectedRepoIds = new Set();
+let currentBranchScope = null;
 let branchPreviewTokens = { create: null, sync: null, prune: null };
+let branchPreviewData = { create: null, sync: null, prune: null };
 let branchLogItems = [];
 let agorgDiscoveryCache = null;
 let agorgApprovedPaths = new Set();
@@ -1014,16 +1016,89 @@ function branchMatrixRequest() {
 function refreshBranchPreviewState() {
   if (!branchPreviewState) return;
   const parts = [];
+  let blockedByConflicts = false;
+
   for (const action of ['create', 'sync', 'prune']) {
-    if (branchPreviewTokens[action]) parts.push(`${action}=ready`);
+    if (branchPreviewTokens[action]) {
+      const data = branchPreviewData[action];
+      let details = `<div style="margin-top: 8px;"><strong>${action}</strong> preview ready.</div>`;
+
+      // Conflict Radar Rendering
+      if (data && data.conflicts && data.conflicts.has_conflicts) {
+        blockedByConflicts = true;
+        details += `<div class="warn" style="margin-top: 4px;">🚨 <strong>Conflicts Detected:</strong> ${data.conflicts.conflict_count} repos. Execution blocked.</div>`;
+        const c_list = data.conflicts.results.filter(r => r.has_conflicts).map(r => 
+          `<div><strong>${r.repo}</strong>: ${r.conflicting_files.join(', ')}</div>`
+        ).join('');
+        details += `<div style="font-size: 0.85em; margin-left: 10px; color: var(--text-muted);">${c_list}</div>`;
+      }
+
+      // Confirmation Gate Rendering
+      if (data && data.confirmation_required && data.confirmation_required.type !== 'None' && data.confirmation_required.type !== 'Standard') {
+        const ctype = data.confirmation_required.type;
+        const phrase = data.confirmation_required.phrase || 'CONFIRM';
+        if (ctype === 'TypedPhrase' || ctype === 'DoubleConfirm') {
+           details += `<div style="margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 4px;">
+              <div class="helper" style="color: var(--color-warn);">⚠️ Protected branch policy requires typed confirmation.</div>
+              <input type="text" id="branch-confirm-${action}" placeholder="Type '${phrase}' to confirm" style="width: 100%; border-color: var(--color-warn);" onkeyup="checkBranchConfirm('${action}', '${phrase}')" />
+            </div>`;
+        }
+      }
+      parts.push(details);
+    }
   }
-  branchPreviewState.textContent = parts.length
-    ? ('Preview tokens ready: ' + parts.join(', '))
+
+  branchPreviewState.innerHTML = parts.length
+    ? parts.join('')
     : 'No active preview token.';
+
+  // Disable exec buttons if blocked by conflicts or needing typed confirm
+  const btns = {
+    create: document.getElementById('branch-create-exec-btn'),
+    sync: document.getElementById('branch-sync-exec-btn'),
+    prune: document.getElementById('branch-prune-exec-btn')
+  };
+  
+  for (const [action, btn] of Object.entries(btns)) {
+    if (!btn) continue;
+    if (blockedByConflicts && branchPreviewTokens[action]) {
+       btn.disabled = true;
+       btn.title = "Blocked by conflicts";
+       continue;
+    }
+    const data = branchPreviewData[action];
+    if (branchPreviewTokens[action] && data && data.confirmation_required) {
+      const ctype = data.confirmation_required.type;
+      if (ctype === 'TypedPhrase' || ctype === 'DoubleConfirm') {
+         btn.disabled = true; // wait for checkBranchConfirm
+         btn.title = "Requires typed confirmation";
+      } else {
+         btn.disabled = false;
+         btn.title = "";
+      }
+    } else {
+       btn.disabled = !branchPreviewTokens[action];
+       btn.title = branchPreviewTokens[action] ? "" : "Run preview first";
+    }
+  }
 }
+
+window.checkBranchConfirm = function(action, requiredPhrase) {
+  const input = document.getElementById(`branch-confirm-${action}`);
+  const btn = document.getElementById(`branch-${action}-exec-btn`);
+  if (!input || !btn) return;
+  if (input.value === requiredPhrase) {
+    btn.disabled = false;
+    btn.title = "";
+  } else {
+    btn.disabled = true;
+    btn.title = "Requires typed confirmation";
+  }
+};
 
 function invalidateBranchPreviews(reason) {
   branchPreviewTokens = { create: null, sync: null, prune: null };
+  branchPreviewData = { create: null, sync: null, prune: null };
   refreshBranchPreviewState();
   if (reason) {
     branchAddLogEntry({
@@ -1275,9 +1350,14 @@ async function branchLoadMatrix() {
       payload: msg
     });
     setChipState(branchMatrixSourceChip, 'Matrix Source', 'fail', 'error');
+    appendLive({ source: 'branch_matrix', error: String(err) });
   } finally {
-    if (branchMatrixRefreshBtn) setButtonBusy(branchMatrixRefreshBtn, false, null);
+    if (branchMatrixRefreshBtn) setButtonBusy(branchMatrixRefreshBtn, false, 'Refresh Matrix');
   }
+
+  // Fire P4 loads
+  branchUndoJournalLoad();
+  branchTimelineLoad();
 }
 
 function branchSelectVisible() {
@@ -1376,9 +1456,11 @@ async function runBranchAction(payload, opts = {}) {
     const ok = !!data.ok;
     if (ok && isMutatingAction && payload.dry_run === true && data.preview_token) {
       branchPreviewTokens[action] = data.preview_token;
+      branchPreviewData[action] = data;
       refreshBranchPreviewState();
     } else if (ok && isExecute) {
       branchPreviewTokens[action] = null;
+      branchPreviewData[action] = null;
       refreshBranchPreviewState();
     } else if (!ok && isExecute) {
       branchPreviewTokens[action] = null;
@@ -3666,14 +3748,88 @@ let settingsActiveSimulationId = "";
 
 function settingsSetStatus(data, level = 'info') {
   if (!settingsStatusOut) return;
-  const rendered = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-  settingsStatusOut.textContent = rendered;
+  
+  if (data && typeof data === 'object' && data.ok) {
+     if (data.details && Array.isArray(data.details)) {
+        settingsStatusOut.innerHTML = renderComplianceTable(data);
+     } else if (data.resolved_policy) {
+        settingsStatusOut.innerHTML = renderResolvedPolicy(data);
+     } else {
+        settingsStatusOut.textContent = JSON.stringify(data, null, 2);
+     }
+  } else {
+    const rendered = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    settingsStatusOut.textContent = rendered;
+  }
+
   if (settingsStatusPanel) {
     settingsStatusPanel.classList.remove('ok', 'warn', 'fail');
     if (level === 'success') settingsStatusPanel.classList.add('ok');
     if (level === 'warn') settingsStatusPanel.classList.add('warn');
     if (level === 'error') settingsStatusPanel.classList.add('fail');
   }
+}
+
+function renderComplianceTable(data) {
+  let html = `
+    <div style="margin-bottom:10px; font-weight:600; color:var(--primary);">
+      Compliance Scan: ${data.kind} (${data.status})
+    </div>
+    <table class="gov-table">
+      <thead>
+        <tr>
+          <th>Repo / Path</th>
+          <th>Source</th>
+          <th>Status</th>
+          <th>Issues</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+  
+  data.details.forEach(repo => {
+    const sourceClass = repo.is_override ? 'ago' : (repo.policy_source === 'Default' ? 'default' : 'agorg');
+    const sourceLabel = repo.policy_source + (repo.is_override ? ' (Override)' : '');
+    const statusColor = repo.blocked ? 'var(--rose)' : (repo.violations > 0 ? 'var(--accent)' : '#10B981');
+    
+    html += `
+      <tr>
+        <td>
+          <div style="font-weight:500;">${repo.repo}</div>
+          <div style="font-size:0.7rem; color:var(--muted);">${repo.path}</div>
+        </td>
+        <td>
+          <span class="source-pill ${sourceClass}">${sourceLabel}</span>
+        </td>
+        <td style="color:${statusColor}; font-weight:600;">
+          ${repo.blocked ? 'BLOCKED' : (repo.violations > 0 ? 'VIOLATIONS' : 'PASS')}
+        </td>
+        <td>
+          ${repo.violations}V / ${repo.warnings}W
+        </td>
+      </tr>
+    `;
+  });
+  
+  html += `</tbody></table>`;
+  return html;
+}
+
+function renderResolvedPolicy(data) {
+  const sourceClass = data.is_override ? 'ago' : (data.source === 'Default' ? 'default' : 'agorg');
+  return `
+    <div style="margin-bottom:15px;">
+      <div style="font-weight:600; color:var(--primary); margin-bottom:4px;">Resolved ${data.kind} Policy</div>
+      <div class="inheritance-trace">
+        Source: <span class="source-pill ${sourceClass}">${data.source}</span>
+        ${data.is_override ? '<span class="override-tag">Local Override</span>' : ''}
+        <div style="font-size:0.7rem; margin-top:4px;">Version: ${data.version} | Status: ${data.status}</div>
+      </div>
+    </div>
+    <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:4px; font-family:'JetBrains Mono',monospace; font-size:0.8rem; border:1px solid var(--border);">
+      <pre style="margin:0;">${JSON.stringify(data.resolved_policy, null, 2)}</pre>
+    </div>
+  `;
 }
 
 function settingsShowError(message, context = null) {
@@ -3954,6 +4110,177 @@ async function settingsResolvePolicy() {
   }
   
   settingsSetStatus(res, 'success');
+}
+
+async function branchTimelineLoad(offset = 0) {
+  const btn = document.getElementById('branch-timeline-refresh-btn');
+  const list = document.getElementById('branch-timeline-list');
+  if (!list) return;
+  if (btn) setButtonBusy(btn, true, 'Loading...');
+
+  try {
+    const res = await fetch(`/api/branch/timeline?offset=${offset}&limit=50`);
+    const data = await res.json();
+    if (!data.ok) {
+      list.innerHTML = `<div class="warn">Failed to load timeline: ${data.error || 'Unknown error'}</div>`;
+      return;
+    }
+
+    if (!data.events || data.events.length === 0) {
+      list.innerHTML = `<div class="muted">No timeline events found for this scope.</div>`;
+      return;
+    }
+
+    list.innerHTML = data.events.map(ev => {
+      const isOk = ev.success;
+      const statusIcon = isOk ? '✅' : '❌';
+      const action = ev.action.toUpperCase();
+      const undoBadge = ev.undo_entry_ids && ev.undo_entry_ids.length > 0 
+        ? `<span class="badge" style="background:var(--color-warn);color:#000;font-size:0.75em;margin-left:8px;">undoable</span>` 
+        : '';
+        
+      const dryRunBadge = ev.dry_run ? `<span class="badge neutral" style="font-size:0.75em;margin-left:8px;">dry-run</span>` : '';
+      const repos = Array.isArray(ev.repos) ? ev.repos.join(', ') : 'N/A';
+      const detailStr = (ev.details && ev.details.response_summary && ev.details.response_summary.error) 
+        ? `<div style="color:var(--color-failed); font-size: 0.85em; margin-top: 4px;">Error: ${ev.details.response_summary.error}</div>`
+        : '';
+
+      return `
+        <div style="border-bottom: 1px solid var(--border); padding: 8px 0; font-family: var(--font-mono);">
+          <div>
+             <span style="color:var(--text-muted); font-size:0.85em;">[${new Date(ev.timestamp).toLocaleString()}]</span> 
+             ${statusIcon} <strong>${action}</strong> on <em>${ev.branch}</em> 
+             ${dryRunBadge} ${undoBadge}
+          </div>
+          <div style="font-size: 0.9em; margin-top: 4px;">
+            <span style="color:var(--text-muted);">Repos (${ev.repo_count}):</span> ${repos}
+          </div>
+          ${detailStr}
+        </div>
+      `;
+    }).join('');
+
+  } catch (err) {
+    list.innerHTML = `<div class="warn">Failed to load timeline: ${err.message}</div>`;
+  } finally {
+    if (btn) setButtonBusy(btn, false, 'Refresh Timeline');
+  }
+}
+
+async function branchUndoJournalLoad() {
+  const chip = document.getElementById('branch-undo-chip');
+  const tbody = document.getElementById('branch-undo-body');
+  if (!tbody) return;
+
+  setChipState(chip, 'Undo Journal', 'running', 'loading');
+
+  try {
+    const res = await fetch(`/api/branch/undo-journal?limit=20`);
+    const data = await res.json();
+    if (!data.ok) {
+      setChipState(chip, 'Undo Journal', 'failed', 'failed');
+      tbody.innerHTML = `<tr><td colspan="7" class="warn">Failed to load journal: ${data.error}</td></tr>`;
+      return;
+    }
+
+    if (!data.entries || data.entries.length === 0) {
+      setChipState(chip, 'Undo Journal', 'success', 'empty');
+      tbody.innerHTML = `<tr><td colspan="7" class="muted">No undo entries found.</td></tr>`;
+      return;
+    }
+
+    setChipState(chip, 'Undo Journal', 'success', `${data.entries.length} entries`);
+
+    tbody.innerHTML = data.entries.map(ev => {
+      const time = new Date(ev.timestamp).toLocaleString();
+      const isUndone = ev.undone;
+      const statusClass = isUndone ? 'muted' : '';
+      const statusText = isUndone ? 'Reverted' : 'Active';
+      const actionHtml = isUndone 
+        ? `<button class="btn secondary" disabled>Undone</button>`
+        : `<button class="btn secondary" onclick="branchUndoExecute('${ev.id}', true)">Preview Undo</button>`;
+
+      return `
+        <tr class="${statusClass}">
+          <td>${time}</td>
+          <td>${ev.action}</td>
+          <td>${ev.repo}</td>
+          <td>${ev.branch_name}</td>
+          <td style="font-family: monospace; font-size: 0.85em;">${ev.prior_ref.substring(0, 8)}</td>
+          <td>${statusText}</td>
+          <td>${actionHtml}</td>
+        </tr>
+      `;
+    }).join('');
+
+  } catch (err) {
+    setChipState(chip, 'Undo Journal', 'failed', 'error');
+    tbody.innerHTML = `<tr><td colspan="7" class="warn">Failed to load journal: ${err.message}</td></tr>`;
+  }
+}
+
+let pendingUndoId = null;
+
+async function branchUndoExecute(id, dryRun) {
+  const chip = document.getElementById('branch-undo-chip');
+  if (!dryRun && pendingUndoId !== id) {
+     alert("Please preview before executing.");
+     return;
+  }
+  
+  if (dryRun) {
+     const confirmPrompt = confirm("Previewing undo. After clicking OK, a real 'Execute Undo' button will replace this if the preview is successful.");
+     if (!confirmPrompt) return;
+  } else {
+     const confirmPrompt = confirm("Are you sure you want to revert this branch mutation? This is a destructive operation.");
+     if (!confirmPrompt) return;
+  }
+
+  setChipState(chip, 'Undo', 'running', dryRun ? 'previewing' : 'executing');
+
+  try {
+    const res = await fetch('/api/branch/undo', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify({ entry_id: id, dry_run: dryRun })
+    });
+    const data = await res.json();
+    if (!data.ok) {
+       setChipState(chip, 'Undo', 'failed', 'failed');
+       alert(`Undo failed:\n${JSON.stringify(data.outcome, null, 2)}`);
+       return;
+    }
+
+    if (dryRun) {
+       pendingUndoId = id;
+       setChipState(chip, 'Undo', 'success', 'preview ok');
+       // Morph the button for the specific row (quick hack since we don't hold the row reference strictly)
+       branchUndoJournalLoad().then(() => {
+          setTimeout(() => {
+             const rows = document.getElementById('branch-undo-body').querySelectorAll('tr');
+             rows.forEach(r => {
+                const btn = r.querySelector('button');
+                if (btn && btn.getAttribute('onclick') === `branchUndoExecute('${id}', true)`) {
+                   btn.textContent = "EXECUTE UNDO";
+                   btn.className = "btn"; // Make it primary
+                   btn.setAttribute('onclick', `branchUndoExecute('${id}', false)`);
+                }
+             });
+          }, 100);
+       });
+       alert(`Preview successful. The branch will be reverted to ${data.outcome.new_ref || data.outcome.prior_ref}.\nMessage: ${data.outcome.message}`);
+    } else {
+       pendingUndoId = null;
+       setChipState(chip, 'Undo', 'success', 'reverted');
+       branchUndoJournalLoad();
+       branchTimelineLoad();
+       alert("Undo successfully executed.");
+    }
+
+  } catch (err) {
+    setChipState(chip, 'Undo', 'failed', 'error');
+    alert(`Undo failed: ${err.message}`);
+  }
 }
 
 bootUi();

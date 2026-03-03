@@ -3,6 +3,26 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+/// Graduated confirmation gate types for destructive branch operations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfirmationType {
+    /// No extra confirmation required
+    None,
+    /// Simple checkbox / "Execute" button
+    Standard,
+    /// Must type an exact phrase to confirm
+    TypedPhrase,
+    /// Typed phrase + countdown timer before enable
+    DoubleConfirm,
+}
+
+impl Default for ConfirmationType {
+    fn default() -> Self {
+        ConfirmationType::Standard
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum EnforcementLevel {
@@ -38,6 +58,14 @@ pub struct NamingPolicy {
 pub struct ProtectedBranchesPolicy {
     pub level: EnforcementLevel,
     pub patterns: Vec<String>,
+    #[serde(default = "default_typed_phrase")]
+    pub confirmation_type: ConfirmationType,
+    #[serde(default)]
+    pub confirmation_phrase: Option<String>,
+}
+
+fn default_typed_phrase() -> ConfirmationType {
+    ConfirmationType::TypedPhrase
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -45,6 +73,8 @@ pub struct LifecyclePolicy {
     pub auto_prune_merged: LevelEnabled,
     pub prune_requires_confirmation: bool,
     pub confirmation_phrase: String,
+    #[serde(default = "default_typed_phrase")]
+    pub prune_confirmation_type: ConfirmationType,
     pub max_stale_days: LevelDays,
 }
 
@@ -101,6 +131,8 @@ impl Default for BranchPolicy {
                     "release".to_string(),
                     "release/*".to_string(),
                 ],
+                confirmation_type: ConfirmationType::TypedPhrase,
+                confirmation_phrase: Some("CONFIRM".to_string()),
             },
             lifecycle: LifecyclePolicy {
                 auto_prune_merged: LevelEnabled {
@@ -109,6 +141,7 @@ impl Default for BranchPolicy {
                 },
                 prune_requires_confirmation: true,
                 confirmation_phrase: "PRUNE".to_string(),
+                prune_confirmation_type: ConfirmationType::TypedPhrase,
                 max_stale_days: LevelDays {
                     level: EnforcementLevel::Off,
                     days: 30,
@@ -271,7 +304,31 @@ pub struct PolicyEvalResult {
     pub violation: String,
     pub fix_suggestion: String,
     pub policy_source: String,
+    pub policy_source_id: Option<Uuid>,
+    pub policy_source_name: String,
     pub override_available: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GovernanceReconcileReport {
+    pub agorg_id: Uuid,
+    pub agorg_name: String,
+    pub timestamp: DateTime<Utc>,
+    pub total_agos: usize,
+    pub compliant_count: usize,
+    pub violation_count: usize,
+    pub warning_count: usize,
+    pub ago_statuses: Vec<AgoComplianceStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AgoComplianceStatus {
+    pub ago_path: String,
+    pub ago_name: String,
+    pub is_compliant: bool,
+    pub violation_count: usize,
+    pub warning_count: usize,
+    pub reports: Vec<(String, PolicyEvalReport)>, // (kind, report)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

@@ -251,6 +251,75 @@ impl GovernanceStore {
         Ok(())
     }
 
+    pub async fn get_agorg_name(&self, agorg_id: Uuid) -> Result<Option<String>> {
+        let client = self.connect().await?;
+        let row = client
+            .query_opt("SELECT name FROM agorgs WHERE id = $1", &[&agorg_id])
+            .await
+            .into_diagnostic()?;
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    pub async fn get_effective_policy_record(
+        &self,
+        agorg_id: Uuid,
+        ago_path: &str,
+        policy_kind: &str,
+    ) -> Result<Option<(AgorgPolicyRecord, String)>> {
+        let client = self.connect().await?;
+        
+        // Recursive query to find the nearest policy (override or general) in the AGOrg hierarchy
+        let row = client
+            .query_opt(
+                "WITH RECURSIVE hierarchy(agorg_id, parent_agorg_id, depth) AS (
+                    SELECT id, parent_agorg_id, 0 FROM agorgs WHERE id = $1
+                    UNION ALL
+                    SELECT a.id, a.parent_agorg_id, h.depth + 1
+                    FROM agorgs a
+                    JOIN hierarchy h ON a.id = h.parent_agorg_id
+                    WHERE h.depth < 10 -- Safety cap for recursion
+                )
+                SELECT p.id, p.agorg_id, p.ago_path, p.policy_kind, p.version, p.policy_json, p.status, p.updated_at, p.updated_by, a.name as source_name
+                FROM hierarchy h
+                JOIN agorgs a ON h.agorg_id = a.id
+                CROSS JOIN LATERAL (
+                    (SELECT id, agorg_id, ago_path, policy_kind, version, policy_json, status, updated_at, updated_by
+                     FROM agorg_policies
+                     WHERE agorg_id = h.agorg_id AND policy_kind = $2 AND ago_path = $3 AND status = 'active'
+                     ORDER BY version DESC LIMIT 1)
+                    UNION ALL
+                    (SELECT id, agorg_id, ago_path, policy_kind, version, policy_json, status, updated_at, updated_by
+                     FROM agorg_policies
+                     WHERE agorg_id = h.agorg_id AND policy_kind = $2 AND ago_path IS NULL AND status = 'active'
+                     ORDER BY version DESC LIMIT 1)
+                ) p
+                ORDER BY h.depth ASC, (p.ago_path IS NULL) ASC
+                LIMIT 1",
+                &[&agorg_id, &policy_kind, &ago_path],
+            )
+            .await
+            .into_diagnostic()?;
+
+        match row {
+            Some(r) => {
+                let rec = AgorgPolicyRecord {
+                    id: r.get(0),
+                    agorg_id: r.get(1),
+                    ago_path: r.get(2),
+                    policy_kind: r.get(3),
+                    version: r.get(4),
+                    policy_json: r.get(5),
+                    status: r.get(6),
+                    updated_at: r.get(7),
+                    updated_by: r.get(8),
+                };
+                let source_name: String = r.get(9);
+                Ok(Some((rec, source_name)))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub async fn get_exceptions(
         &self,
         agorg_id: Uuid,
@@ -262,6 +331,50 @@ impl GovernanceStore {
                 "SELECT id, agorg_id, ago_path, policy_kind, rule_path, reason, ticket_ref, owner, expires_at, created_at
                  FROM policy_exceptions
                  WHERE agorg_id = $1 AND policy_kind = $2",
+                &[&agorg_id, &policy_kind],
+            )
+            .await
+            .into_diagnostic()?;
+
+        let mut exceptions = Vec::new();
+        for r in rows {
+            exceptions.push(PolicyException {
+                id: r.get(0),
+                agorg_id: r.get(1),
+                ago_path: r.get(2),
+                policy_kind: r.get(3),
+                rule_path: r.get(4),
+                reason: r.get(5),
+                ticket_ref: r.get(6),
+                owner: r.get(7),
+                expires_at: r.get(8),
+                created_at: r.get(9),
+            });
+        }
+        Ok(exceptions)
+    }
+
+    pub async fn get_effective_exceptions(
+        &self,
+        agorg_id: Uuid,
+        policy_kind: &str,
+    ) -> Result<Vec<PolicyException>> {
+        let client = self.connect().await?;
+        // Recursive query to find all relevant AGOrgs in the parent chain
+        let rows = client
+            .query(
+                "WITH RECURSIVE hierarchy(agorg_id, parent_agorg_id, depth) AS (
+                    SELECT id, parent_agorg_id, 0 FROM agorgs WHERE id = $1
+                    UNION ALL
+                    SELECT a.id, a.parent_agorg_id, h.depth + 1
+                    FROM agorgs a
+                    JOIN hierarchy h ON a.id = h.parent_agorg_id
+                    WHERE h.depth < 10
+                )
+                SELECT e.id, e.agorg_id, e.ago_path, e.policy_kind, e.rule_path, e.reason, e.ticket_ref, e.owner, e.expires_at, e.created_at
+                FROM policy_exceptions e
+                JOIN hierarchy h ON e.agorg_id = h.agorg_id
+                WHERE e.policy_kind = $2",
                 &[&agorg_id, &policy_kind],
             )
             .await

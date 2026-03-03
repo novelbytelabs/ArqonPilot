@@ -6,4 +6,7 @@ edition.workspace = true
 [dependencies]
 anyhow = "1.0.100"
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+chrono = { workspace = true, features = ["serde"] }
 pilot-multi = { path = "../pilot-multi" }
