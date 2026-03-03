@@ -3,4 +3,7 @@ site/
 **/*.db
 **/*.lance
 .pilot/
+.contract_state/
+.p1db/
+.pilot_test_tmp/
  
