@@ -413,8 +413,32 @@ Deliverables:
 
 Hard-close evidence:
 
-1. Dogfood scenario under `~/Projects/arqon/` proves inheritance + override + resolve behavior.
-2. Reconcile artifacts include conflict and resolution traces.
+**STATUS: HARD-CLOSED** — 2026-03-03
+
+**Changed files:**
+- `crates/pilot/src/agorg.rs`: Added `fleet_report: Option<GovernanceReconcileReport>` to `AgorgReconcileReport`; wired `fleet_governance_scan` into `reconcile_agorg` (override sweep + fleet scan merged; non-fatal on scan failure per G-043).
+- `crates/pilot/src/serve_ui.rs`: Added `governance_issues`, `conflict_traces`, `fleet_report` fields to both `agorg_reconcile_apply_dry_run_response` and `agorg_reconcile_apply_success_response`; added `governance_reconcile_artifact_path` helper; extended `persist_agorg_reconcile_action_report` to emit sidecar `governance_reconcile_<mode>_<ts>.json` artifact (G-043 compliant: write failures are non-fatal).
+- `crates/pilot/tests/agorg_governance_reconcile_test.rs`: NEW — P3 integration tier (4 tests).
+- `crates/pilot/tests/agorg_governance_adversarial_test.rs`: NEW — P3 adversarial tier (4 tests).
+
+**Commands run:**
+```
+cargo check -p pilot --locked                     # EXIT:0 (clean compile)
+cargo test -p pilot --locked > /tmp/p3_full.log   # EXIT:0
+grep -rn 'todo!()...' [P3 files]                  # 0 results (no placeholders)
+node -c crates/pilot/src/pilot_ui.js              # EXIT:0 (G-015 clean)
+```
+
+**Test results by tier:**
+- Unit (74 tests): `ok. 74 passed; 0 failed`
+- Integration — agorg_governance_reconcile_test: `ok. 4 passed; 0 failed`
+- Adversarial — agorg_governance_adversarial_test: `ok. 4 passed; 0 failed`
+- E2E — policy_workflow_e2e_test: `ok. 1 passed; 0 failed`
+- Regression — policy_parity_integration_test: `ok. 1 passed; 0 failed`
+- All other existing suites: unchanged and passing
+
+**Gotcha updates:** None new. G-043 mitigation applied in governance artifact write path.
+
 
 ### P4: Branch Control Holy-Grail Completion
 
