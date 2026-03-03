@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
+use crate::service_supervisor::{supervised_start, RetryPolicy};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{broadcast, Mutex};
@@ -57,6 +58,7 @@ struct UiState {
     codex_contracts_log: PathBuf,
     branch_previews: Arc<Mutex<HashMap<String, BranchPreviewRecord>>>,
     agorg_store: AgorgStore,
+    server_start_time_unix: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -460,22 +462,56 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
     }
     let state = Arc::new(UiState {
         instance_id: cfg.instance_id.clone(),
-        bus: cfg.bus,
-        events: event_tx,
+        bus: cfg.bus.clone(),
+        events: event_tx.clone(),
         allow_mutations: cfg.allow_mutations,
         allowed_commands: cfg.allowed_commands,
         codex_contracts: Arc::new(Mutex::new(contract_seed)),
         codex_contracts_log,
         branch_previews: Arc::new(Mutex::new(HashMap::new())),
         agorg_store,
+        server_start_time_unix: now_unix(),
     });
+
+    let policy = RetryPolicy::default();
 
     if state.allow_mutations {
         let store = state.agorg_store.clone();
-        tokio::spawn(async move {
-            let _ = store.ensure_managed_db().await;
-        });
+        
+        // 1. Supervised DB Startup (Blocking)
+        println!("[Supervisor] Ensuring Managed DB is online...");
+        supervised_start(
+            "Managed Database",
+            || {
+                let store = store.clone();
+                async move {
+                    store.ensure_managed_db().await.map_err(|e| e.to_string())
+                }
+            },
+            policy.clone()
+        ).await?;
+
+        // 2. Supervised Bus Startup (Blocking)
+        println!("[Supervisor] Ensuring ArqonBus is online...");
+        supervised_start(
+            "ArqonBus",
+            || async {
+                let (code, out, err) = run_local_script(&bus_shim_command("start")).await
+                    .map_err(|e| e.to_string())?;
+                if code != 0 {
+                    return Err(format!("Shim exited with {}: {}", code, err));
+                }
+                if !bus_shim_running(&out, &err) {
+                    return Err("Bus reported start success but is not actually running".to_string());
+                }
+                Ok(())
+            },
+            policy
+        ).await?;
     }
+
+    // Now safe to spawn telemetry listener
+    spawn_bus_telemetry_listener(cfg.bus.clone(), event_tx.clone());
 
     let app = Router::new()
         .route("/", get(index))
@@ -486,6 +522,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/report", get(get_report_content))
         .route("/api/codex/contracts", get(get_codex_contracts))
         .route("/api/codex/contract", get(get_codex_contract))
+        .route("/api/health", get(api_health))
         .route("/api/agorg/list", get(api_agorg_list))
         .route("/api/agorg/active", get(api_agorg_active))
         .route("/api/agorg/scope_snapshot", get(api_agorg_scope_snapshot))
@@ -613,10 +650,47 @@ async fn static_pilot_ui_js() -> impl IntoResponse {
 }
 
 async fn favicon() -> impl IntoResponse {
-    Response::builder()
-        .header("Content-Type", "image/x-icon")
-        .body(axum::body::Body::from(FAVICON_ICO))
-        .unwrap()
+    let blank_ico: Vec<u8> = vec![];
+    ([(axum::http::header::CONTENT_TYPE, "image/x-icon")], blank_ico)
+}
+
+async fn api_health(State(state): State<Arc<UiState>>) -> impl IntoResponse {
+    let cmd = bus_shim_command("status");
+    let bus_future = run_local_script(&cmd);
+    let db_future = state.agorg_store.managed_db_status();
+    
+    let db_start = std::time::Instant::now();
+    let (bus_res, db_res) = tokio::join!(bus_future, db_future);
+    let latency_ms = db_start.elapsed().as_millis() as u64;
+
+    let bus_running = match bus_res {
+        Ok((code, out, err)) => code == 0 && bus_shim_running(&out, &err),
+        Err(_) => false,
+    };
+
+    let db_running = match db_res {
+        Ok(Some(status)) => status.running,
+        Ok(None) => true, // managed DB explicitly disabled
+        Err(_) => false,
+    };
+
+    let ok = bus_running && db_running;
+    let uptime_secs = now_unix().saturating_sub(state.server_start_time_unix);
+
+    let body = json!({
+        "ok": ok,
+        "bus": {
+            "running": bus_running,
+            "latency_ms": latency_ms
+        },
+        "db": {
+            "running": db_running,
+            "latency_ms": latency_ms
+        },
+        "uptime_secs": uptime_secs
+    });
+
+    Json(body).into_response()
 }
 
 async fn run_command(
@@ -2750,7 +2824,7 @@ async fn resolve_agorg_ref_optional(
     }
 }
 
-fn bus_shim_running(stdout: &str, stderr: &str) -> bool {
+pub fn bus_shim_running(stdout: &str, stderr: &str) -> bool {
     let combined = format!("{stdout}\n{stderr}");
     combined.contains("RUNNING")
 }
@@ -2954,53 +3028,55 @@ async fn run_dependency_action(
             }
         };
     }
+    
+    let policy = RetryPolicy::default();
+
     if action == "db-restart" {
-        return match state.agorg_store.stop_managed_db().await {
-            Ok(_) => match state.agorg_store.ensure_managed_db().await {
-                Ok(Some(status)) => {
-                    let ok = status.running;
-                    let body = json!({
-                        "ok": ok,
-                        "action": action,
-                        "exit_code": 0,
-                        "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
-                        "stderr": ""
-                    });
-                    let _ = state.events.send(json!({
-                        "source": "dependency_action",
-                        "action": action,
-                        "success": ok,
-                        "exit_code": 0
-                    }));
-                    Json(body).into_response()
-                }
-                Ok(None) => {
-                    let body = json!({
-                        "ok": true,
-                        "action": action,
-                        "exit_code": 0,
-                        "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
-                        "stderr": ""
-                    });
-                    let _ = state.events.send(json!({
-                        "source": "dependency_action",
-                        "action": action,
-                        "success": true,
-                        "exit_code": 0
-                    }));
-                    Json(body).into_response()
-                }
-                Err(err) => {
-                    let _ = state.events.send(json!({
-                        "source": "dependency_action",
-                        "action": action,
-                        "success": false,
-                        "exit_code": 1,
-                        "error": err.to_string()
-                    }));
-                    error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string())
-                }
+        let store = state.agorg_store.clone();
+        let _ = store.stop_managed_db().await;
+        return match supervised_start(
+            "Managed Database (Restart)",
+            || {
+                let s = store.clone();
+                async move { s.ensure_managed_db().await.map_err(|e| e.to_string()) }
             },
+            policy.clone(),
+        )
+        .await
+        {
+            Ok(Some(status)) => {
+                let ok = status.running;
+                let body = json!({
+                    "ok": ok,
+                    "action": action,
+                    "exit_code": if ok { 0 } else { 1 },
+                    "stdout": serde_json::to_string_pretty(&status).unwrap_or_default(),
+                    "stderr": ""
+                });
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": ok,
+                    "exit_code": if ok { 0 } else { 1 }
+                }));
+                Json(body).into_response()
+            }
+            Ok(None) => {
+                let body = json!({
+                    "ok": true,
+                    "action": action,
+                    "exit_code": 0,
+                    "stdout": "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set",
+                    "stderr": ""
+                });
+                let _ = state.events.send(json!({
+                    "source": "dependency_action",
+                    "action": action,
+                    "success": true,
+                    "exit_code": 0
+                }));
+                Json(body).into_response()
+            }
             Err(err) => {
                 let _ = state.events.send(json!({
                     "source": "dependency_action",
@@ -3057,59 +3133,115 @@ async fn run_dependency_action(
         action,
         "services-start" | "services-stop" | "services-restart"
     ) {
+        let mut bus_running = false;
+        let mut db_running = false;
+        let mut bus_out = String::new();
+        let mut bus_err = String::new();
+        let mut db_stdout = String::new();
+
+        let store = state.agorg_store.clone();
+        
+        let db_result = match action {
+            "services-stop" => store.stop_managed_db().await.map(|_| ()).map_err(|e| e.to_string()),
+            "services-start" => {
+                supervised_start(
+                    "Managed Database",
+                    || {
+                        let s = store.clone();
+                        async move { s.ensure_managed_db().await.map_err(|e| e.to_string()) }
+                    },
+                    policy.clone()
+                ).await.map(|_| ()).map_err(|e| e.to_string())
+            }
+            _ => { // services-restart
+                let _ = store.stop_managed_db().await;
+                supervised_start(
+                    "Managed Database (Restart)",
+                    || {
+                        let s = store.clone();
+                        async move { s.ensure_managed_db().await.map_err(|e| e.to_string()) }
+                    },
+                    policy.clone()
+                ).await.map(|_| ()).map_err(|e| e.to_string())
+            }
+        };
+
+        match db_result {
+            Ok(_) => {
+                if let Ok(Some(st)) = store.managed_db_status().await {
+                    db_running = st.running;
+                    db_stdout = serde_json::to_string_pretty(&st).unwrap_or_default();
+                } else if let Ok(None) = store.managed_db_status().await {
+                    db_running = true;
+                    db_stdout = "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set".to_string();
+                }
+            }
+            Err(e) => {
+                db_stdout = format!("DB Error: {}", e);
+            }
+        }
+
         let bus_cmd = match action {
-            "services-start" => bus_shim_command("start"),
             "services-stop" => bus_shim_command("stop"),
+            "services-start" => bus_shim_command("start"),
             _ => bus_shim_command("restart"),
         };
-        let bus_result = run_local_script(&bus_cmd).await;
-        let db_result = match action {
-            "services-start" => state.agorg_store.ensure_managed_db().await,
-            "services-stop" => state.agorg_store.stop_managed_db().await,
-            _ => {
-                let _ = state.agorg_store.stop_managed_db().await;
-                state.agorg_store.ensure_managed_db().await
+
+        if action == "services-stop" {
+            let (code, out, err) = run_local_script(&bus_cmd).await.unwrap_or((1, "".into(), "Failed to run bus wrapper".into()));
+            bus_running = code == 0 && bus_shim_running(&out, &err);
+            bus_out = out;
+            bus_err = err;
+        } else {
+            let bus_res = supervised_start(
+                "ArqonBus",
+                || async {
+                    let (code, out, err) = run_local_script(&bus_cmd).await.map_err(|e| e.to_string())?;
+                    if code != 0 {
+                        return Err(format!("Shim exited {code}: {err}"));
+                    }
+                    if !bus_shim_running(&out, &err) {
+                        return Err("Bus reported OK but is not running".to_string());
+                    }
+                    Ok((code, out, err))
+                },
+                policy.clone()
+            ).await;
+            
+            match bus_res {
+                Ok((code, ref out, ref err)) => {
+                    bus_running = code == 0 && bus_shim_running(out, err);
+                    bus_out = out.to_string();
+                    bus_err = err.to_string();
+                }
+                Err(e) => {
+                    bus_out = format!("Bus Error: {}", e);
+                }
             }
+        }
+        
+        let ok = match action {
+            "services-stop" => !bus_running && !db_running,
+            _ => bus_running && db_running,
         };
-        return match (bus_result, db_result) {
-            (Ok((bus_code, bus_out, bus_err)), Ok(db_status_opt)) => {
-                let bus_running = bus_code == 0 && bus_shim_running(&bus_out, &bus_err);
-                let (db_running, db_stdout) = match db_status_opt {
-                    Some(status) => (
-                        status.running,
-                        serde_json::to_string_pretty(&status).unwrap_or_default(),
-                    ),
-                    None => (
-                        true,
-                        "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set".to_string(),
-                    ),
-                };
-                let ok = match action {
-                    "services-stop" => !bus_running && !db_running,
-                    _ => bus_running && db_running,
-                };
-                let body = json!({
-                    "ok": ok,
-                    "action": action,
-                    "exit_code": if ok { 0 } else { 1 },
-                    "bus_running": bus_running,
-                    "db_running": db_running,
-                    "stdout": format!("Bus:\n{}\n{}\n\nDB:\n{}", bus_out, bus_err, db_stdout),
-                    "stderr": ""
-                });
-                let _ = state.events.send(json!({
-                    "source": "dependency_action",
-                    "action": action,
-                    "success": ok,
-                    "exit_code": if ok { 0 } else { 1 },
-                    "bus_running": bus_running,
-                    "db_running": db_running
-                }));
-                Json(body).into_response()
-            }
-            (Err(err), _) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-            (_, Err(err)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-        };
+        let body = json!({
+            "ok": ok,
+            "action": action,
+            "exit_code": if ok { 0 } else { 1 },
+            "bus_running": bus_running,
+            "db_running": db_running,
+            "stdout": format!("Bus:\n{}\n{}\n\nDB:\n{}", bus_out, bus_err, db_stdout),
+            "stderr": ""
+        });
+        let _ = state.events.send(json!({
+            "source": "dependency_action",
+            "action": action,
+            "success": ok,
+            "exit_code": if ok { 0 } else { 1 },
+            "bus_running": bus_running,
+            "db_running": db_running
+        }));
+        return Json(body).into_response();
     }
 
     let result = match (action, req.json) {
@@ -3159,9 +3291,25 @@ async fn run_dependency_action(
             }
         }
         ("repair", _) => run_local_script("./scripts/repair_lock_182.sh --no-gate").await,
-        ("bus-start", _) => run_local_script(&bus_shim_command("start")).await,
+        ("bus-start", _) => {
+            let res = supervised_start("ArqonBus (Start)", || async {
+                let (code, out, err) = run_local_script(&bus_shim_command("start")).await.map_err(|e| e.to_string())?;
+                if code != 0 { return Err(err); }
+                if !bus_shim_running(&out, &err) { return Err("Not running".into()); }
+                Ok((code, out, err))
+            }, policy.clone()).await;
+            match res { Ok(v) => Ok(v), Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) }
+        }
         ("bus-stop", _) => run_local_script(&bus_shim_command("stop")).await,
-        ("bus-restart", _) => run_local_script(&bus_shim_command("restart")).await,
+        ("bus-restart", _) => {
+            let res = supervised_start("ArqonBus (Restart)", || async {
+                let (code, out, err) = run_local_script(&bus_shim_command("restart")).await.map_err(|e| e.to_string())?;
+                if code != 0 { return Err(err); }
+                if !bus_shim_running(&out, &err) { return Err("Not running".into()); }
+                Ok((code, out, err))
+            }, policy.clone()).await;
+            match res { Ok(v) => Ok(v), Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) }
+        }
         ("bus-status", _) => run_local_script(&bus_shim_command("status")).await,
         ("push", _) => {
             let branch = req.branch.as_deref().unwrap_or("main");
@@ -4781,7 +4929,7 @@ fn read_report_file(path: &str, max_bytes: usize) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&clipped).to_string())
 }
 
-async fn run_local_script(cmd: &str) -> std::io::Result<(i32, String, String)> {
+pub async fn run_local_script(cmd: &str) -> std::io::Result<(i32, String, String)> {
     let child = TokioCommand::new("bash")
         .arg("-lc")
         .arg(cmd)

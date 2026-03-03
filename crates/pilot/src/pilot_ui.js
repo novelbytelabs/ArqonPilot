@@ -4330,4 +4330,25 @@ async function dashVerifyEvidence() {
   }
 }
 
+function startHealthHeartbeat() {
+  setInterval(async () => {
+    try {
+      const res = await fetchJsonSafe('/api/health');
+      if (res && res.ok) {
+        setBusStatus(res.bus_running, res.uptime_secs ? `Uptime: ${res.uptime_secs}s` : 'OK');
+        if (dashDbChip) {
+           setChipState(dashDbChip, 'DB: ' + (res.db_running ? 'RUNNING' : 'STOPPED'), res.db_running ? 'success' : 'failed');
+        }
+      } else {
+        setBusStatus(false, 'Heartbeat Failed');
+        if (dashDbChip) setChipState(dashDbChip, 'DB: UNKNOWN', 'failed');
+      }
+    } catch (e) {
+      setBusStatus(false, e.message);
+      if (dashDbChip) setChipState(dashDbChip, 'DB: ERROR', 'failed');
+    }
+  }, 5000);
+}
+
 bootUi();
+startHealthHeartbeat();

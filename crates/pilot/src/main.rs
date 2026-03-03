@@ -4,6 +4,7 @@ mod bus;
 mod config;
 mod db_runtime;
 mod governance;
+pub mod service_supervisor;
 mod serve_ui;
 mod shim_runtime;
 pub mod preflight;
@@ -78,6 +79,10 @@ enum Commands {
     Agorg(AgorgArgs),
     /// Managed local Postgres runtime operations
     Db(DbArgs),
+    /// ArqonBus standalone operations
+    Bus(BusArgs),
+    /// Orchestrate all supervised background services (DB + Bus)
+    Services(ServicesArgs),
     /// Run Pilot as an ArqonBus command bridge
     Serve(ServeArgs),
     /// Governance and Settings operations
@@ -850,6 +855,18 @@ struct DbArgs {
     command: DbCommands,
 }
 
+#[derive(Args)]
+struct BusArgs {
+    #[command(subcommand)]
+    command: BusCommands,
+}
+
+#[derive(Args)]
+struct ServicesArgs {
+    #[command(subcommand)]
+    command: ServicesCommands,
+}
+
 #[derive(Subcommand)]
 enum DbCommands {
     /// Initialize and start managed local Postgres if needed
@@ -859,6 +876,30 @@ enum DbCommands {
     /// Stop managed local Postgres
     Stop,
     /// Show managed local Postgres status and DSN
+    Status,
+}
+
+#[derive(Subcommand)]
+enum BusCommands {
+    /// Start ArqonBus
+    Start,
+    /// Stop ArqonBus
+    Stop,
+    /// Restart ArqonBus
+    Restart,
+    /// Show ArqonBus status
+    Status,
+}
+
+#[derive(Subcommand)]
+enum ServicesCommands {
+    /// Start all supervised background services (DB + Bus)
+    Start,
+    /// Stop all background services
+    Stop,
+    /// Restart all background services
+    Restart,
+    /// Show status for all services
     Status,
 }
 
@@ -2063,9 +2104,11 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
                 },
             }
         }
-        Commands::Agorg(args) => run_agorg(args).await,
+        Commands::Agorg(args) => run_agorg(&args).await,
         Commands::Settings(args) => run_settings(args).await,
-        Commands::Db(args) => run_db(args).await,
+        Commands::Db(args) => run_db(&args).await,
+        Commands::Bus(args) => run_bus(&args).await,
+        Commands::Services(args) => run_services(&args).await,
         Commands::Serve(args) => {
             let cfg = bus::BusBridgeConfig {
                 ws_url: args.ws_url.clone(),
@@ -2568,6 +2611,30 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Db(DbArgs {
             command: DbCommands::Status,
         }) => "db.status",
+        Commands::Bus(BusArgs {
+            command: BusCommands::Start,
+        }) => "bus.start",
+        Commands::Bus(BusArgs {
+            command: BusCommands::Stop,
+        }) => "bus.stop",
+        Commands::Bus(BusArgs {
+            command: BusCommands::Restart,
+        }) => "bus.restart",
+        Commands::Bus(BusArgs {
+            command: BusCommands::Status,
+        }) => "bus.status",
+        Commands::Services(ServicesArgs {
+            command: ServicesCommands::Start,
+        }) => "services.start",
+        Commands::Services(ServicesArgs {
+            command: ServicesCommands::Stop,
+        }) => "services.stop",
+        Commands::Services(ServicesArgs {
+            command: ServicesCommands::Restart,
+        }) => "services.restart",
+        Commands::Services(ServicesArgs {
+            command: ServicesCommands::Status,
+        }) => "services.status",
         Commands::Serve(_) => "serve",
         Commands::Settings(_) => "settings.branch",
         Commands::Policy(PolicyArgs {
@@ -2617,54 +2684,183 @@ fn command_name(command: &Commands) -> &'static str {
 }
 
 async fn run_db(args: &DbArgs) -> Result<CommandReport> {
-    let manager = PilotDbManager::from_env();
+    let store = AgorgStore::from_instance("default".to_string());
     match args.command {
-        DbCommands::Ensure => {
-            manager.ensure_ready().await?;
-            let status = manager.status().await?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&status).into_diagnostic()?
-            );
-            Ok(CommandReport::ok(
-                "db.ensure",
-                "Managed DB ensured and ready".to_string(),
-            ))
+        DbCommands::Ensure | DbCommands::Start => {
+            println!("Ensuring managed PostgreSQL is running...");
+            match store.ensure_managed_db().await {
+                Ok(Some(status)) => {
+                    println!("Managed DB is running!");
+                    println!("DSN: {}", status.dsn);
+                    Ok(CommandReport::ok(
+                        "db.ensure",
+                        "Managed Postgres is running",
+                    ))
+                }
+                Ok(None) => {
+                    println!("Managed DB starting is disabled (PILOT_AGORG_DATABASE_URL is set)");
+                    Ok(CommandReport::ok(
+                        "db.ensure",
+                        "Managed Postgres explicitly disabled",
+                    ))
+                }
+                Err(e) => Err(miette!("Failed to ensure database: {}", e)),
+            }
         }
-        DbCommands::Start => {
-            manager.start().await?;
-            let status = manager.status().await?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&status).into_diagnostic()?
-            );
-            Ok(CommandReport::ok(
-                "db.start",
-                "Managed DB started".to_string(),
-            ))
+        DbCommands::Stop => match store.stop_managed_db().await {
+            Ok(Some(_)) => {
+                println!("Managed PostgreSQL stopped.");
+                Ok(CommandReport::ok(
+                    "db.stop",
+                    "Managed Postgres stopped gracefully",
+                ))
+            }
+            Ok(None) => {
+                println!("Managed PostgreSQL was not running.");
+                Ok(CommandReport::ok("db.stop", "Managed Postgres not running"))
+            }
+            Err(e) => Err(miette!("Failed to stop database: {}", e)),
+        },
+        DbCommands::Status => match store.managed_db_status().await {
+            Ok(Some(status)) => {
+                println!("Status: {}", if status.running { "RUNNING" } else { "STOPPED" });
+                if status.running {
+                    println!("DSN: {}", status.dsn);
+                }
+                Ok(CommandReport::ok("db.status", "Managed Postgres status retrieved"))
+            }
+            Ok(None) => {
+                println!("Status: DISABLED (PILOT_AGORG_DATABASE_URL is set)");
+                Ok(CommandReport::ok("db.status", "Managed Postgres explicitly disabled"))
+            }
+            Err(e) => Err(miette!("Failed to check database status: {}", e)),
+        },
+    }
+}
+
+async fn run_bus(args: &BusArgs) -> Result<CommandReport> {
+    let action = match args.command {
+        BusCommands::Start => "start",
+        BusCommands::Stop => "stop",
+        BusCommands::Restart => "restart",
+        BusCommands::Status => "status",
+    };
+    
+    let cmd = shim_runtime::bus_shim_command(action);
+    let (code, out, err) = serve_ui::run_local_script(&cmd)
+        .await
+        .map_err(|e| miette!("Failed to execute bus shim: {}", e))?;
+        
+    println!("{}", out);
+    if !err.is_empty() {
+        eprintln!("{}", err);
+    }
+    
+    if code != 0 {
+        Err(miette!("Bus {} failed with code {}", action, code))
+    } else {
+        Ok(CommandReport::ok(&format!("bus.{}", action), &format!("Bus {} ok", action)))
+    }
+}
+
+async fn run_services(args: &ServicesArgs) -> Result<CommandReport> {
+    let policy = crate::service_supervisor::RetryPolicy::default();
+    let store = AgorgStore::from_instance("default".to_string());
+    
+    match args.command {
+        ServicesCommands::Stop => {
+            println!("Stopping ArqonBus...");
+            let cmd = shim_runtime::bus_shim_command("stop");
+            let _ = serve_ui::run_local_script(&cmd).await;
+            
+            println!("Stopping Managed DB...");
+            let _ = store.stop_managed_db().await;
+            
+            println!("Services stopped.");
+            Ok(CommandReport::ok("services.stop", "Services stopped"))
         }
-        DbCommands::Stop => {
-            manager.stop().await?;
-            let status = manager.status().await?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&status).into_diagnostic()?
-            );
-            Ok(CommandReport::ok(
-                "db.stop",
-                "Managed DB stopped".to_string(),
-            ))
+        ServicesCommands::Start => {
+            println!("Starting Managed DB...");
+            crate::service_supervisor::supervised_start(
+                "Managed Database",
+                || {
+                    let s = store.clone();
+                    async move { s.ensure_managed_db().await.map_err(|e| e.to_string()) }
+                },
+                policy.clone()
+            ).await?;
+            
+            println!("Starting ArqonBus...");
+            crate::service_supervisor::supervised_start(
+                "ArqonBus",
+                || async {
+                    let cmd = shim_runtime::bus_shim_command("start");
+                    let (code, out, err) = serve_ui::run_local_script(&cmd).await.map_err(|e| e.to_string())?;
+                    if code != 0 { return Err(err); }
+                    if !serve_ui::bus_shim_running(&out, &err) { return Err("Not running".into()); }
+                    Ok((code, out, err))
+                },
+                policy
+            ).await?;
+            
+            println!("Services started successfully.");
+            Ok(CommandReport::ok("services.start", "Services started"))
         }
-        DbCommands::Status => {
-            let status = manager.status().await?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&status).into_diagnostic()?
-            );
-            Ok(CommandReport::ok(
-                "db.status",
-                "Managed DB status".to_string(),
-            ))
+        ServicesCommands::Restart => {
+            println!("Stopping ArqonBus...");
+            let _ = serve_ui::run_local_script(&shim_runtime::bus_shim_command("stop")).await;
+            println!("Stopping Managed DB...");
+            let _ = store.stop_managed_db().await;
+            
+            println!("Restarting Managed DB...");
+            crate::service_supervisor::supervised_start(
+                "Managed Database",
+                || {
+                    let s = store.clone();
+                    async move { s.ensure_managed_db().await.map_err(|e| e.to_string()) }
+                },
+                policy.clone()
+            ).await?;
+            
+            println!("Restarting ArqonBus...");
+            crate::service_supervisor::supervised_start(
+                "ArqonBus",
+                || async {
+                    let cmd = shim_runtime::bus_shim_command("start");
+                    let (code, out, err) = serve_ui::run_local_script(&cmd).await.map_err(|e| e.to_string())?;
+                    if code != 0 { return Err(err); }
+                    if !serve_ui::bus_shim_running(&out, &err) { return Err("Not running".into()); }
+                    Ok((code, out, err))
+                },
+                policy
+            ).await?;
+            
+            println!("Services restarted successfully.");
+            Ok(CommandReport::ok("services.restart", "Services restarted"))
+        }
+        ServicesCommands::Status => {
+            let db = store.managed_db_status().await.unwrap_or(None);
+            let cmd = shim_runtime::bus_shim_command("status");
+            let bus = serve_ui::run_local_script(&cmd).await;
+            
+            println!("--- DB Status ---");
+            if let Some(st) = db {
+                println!("Running: {}", st.running);
+                if st.running {
+                    println!("DSN: {}", st.dsn);
+                }
+            } else {
+                println!("DISABLED (PILOT_AGORG_DATABASE_URL is set)");
+            }
+            
+            println!("\n--- Bus Status ---");
+            if let Ok((_code, out, err)) = bus {
+                print!("{}", out);
+                if !err.is_empty() { print!("{}", err); }
+            } else {
+                println!("Status check failed");
+            }
+            Ok(CommandReport::ok("services.status", "Status retrieved"))
         }
     }
 }
