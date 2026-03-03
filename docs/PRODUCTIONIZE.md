@@ -527,6 +527,53 @@ Every handoff must include:
 
 1. No placeholders, no stubs, no fake-success paths in production code paths.
 2. Every wave ends with hard-close evidence (tests + artifact path + doc update in same iteration).
+
+## New AI Bootstrap Protocol (No-Drift Start)
+
+Use this protocol whenever a fresh AI session is assigned work on this plan.
+
+### Mandatory Memory Refresh Order
+
+1. `docs/PRODUCTIONIZE.md` (this file; authoritative scope and open waves)
+2. `docs/gotcha-registry.md` (failure signatures and operational traps)
+3. `docs/operator-runbook.md` (real operator flows and expected commands)
+4. `docs/troubleshooting.md` (known runtime failure handling)
+5. `docs/settings-tab-and-governance-plan.md` (governance architecture decisions)
+6. `crates/pilot/src/serve_ui.rs` (UI transport/orchestration and service actions)
+7. `crates/pilot/src/agorg.rs` and `crates/pilot/src/db_runtime.rs` (AGOrg + managed DB runtime)
+8. `scripts/prepush_gate.sh`, `scripts/verify_toolchain_policy.sh`, `scripts/repair_lock_182.sh` (guardrail enforcement)
+
+### Startup Validation Checklist (Required Before Coding)
+
+1. Confirm frozen versions are understood and unchanged:
+     - core Rust `1.82.0`
+     - packaging Rust `1.88.0`
+     - protobuf `4.25.8`
+2. Confirm current open wave focus and blocker from this file.
+3. Run an initial reality check (not assumptions):
+     - service status path currently failing
+     - exact command output captured for evidence
+4. State a concrete implementation loop:
+     - reproduce -> isolate -> fix -> verify -> document
+
+### Anti-Drift Guardrails
+
+1. Do not declare a wave closed without:
+     - passing tests
+     - artifact/log paths
+     - plan status update
+2. Do not rely on claim-only summaries; require command evidence.
+3. Do not introduce placeholders/shims/stubs/fake-success behavior.
+4. If behavior differs between local UI and CLI/CI, stop and reconcile root cause before proceeding.
+
+### P7-Specific Start Condition (Current Priority)
+
+1. Reproduce Bus/DB STOPPED-state regression from active operator command path.
+2. Identify whether failure is:
+     - actual process termination, or
+     - false-negative health/status reporting.
+3. Implement deterministic supervision/health semantics and verify with restart/interruption tests.
+4. Update this plan section with exact hard-close evidence once done.
 3. Frozen policy is immutable unless explicitly revised in this document and `scripts/frozen_versions.sh`.
 4. All new failure modes are appended to `docs/gotcha-registry.md` with signature + remediation.
 5. No hidden tab bypasses: shared contracts are authoritative across Dashboard and specialist tabs.

@@ -30,6 +30,7 @@ pub struct PilotDbManager {
 pub struct DbStatus {
     pub initialized: bool,
     pub running: bool,
+    pub error_note: Option<String>,
     pub mode: String,
     pub endpoint: String,
     pub dsn: String,
@@ -204,11 +205,13 @@ impl PilotDbManager {
         let log_file = self
             .select_log_file()
             .unwrap_or_else(|_| self.log_file.clone());
-        let running = if initialized {
-            self.is_running().await.unwrap_or(false)
+        let running_res = if initialized {
+            self.is_running().await
         } else {
-            false
+            Ok(false)
         };
+        let running = running_res.as_ref().copied().unwrap_or(false);
+        let error_note = running_res.err().map(|e| e.to_string());
         let endpoint = match self.db_mode() {
             DbMode::Tcp => format!("127.0.0.1:{}", self.port),
             DbMode::UnixSocket => format!("{}/.s.PGSQL.{}", self.socket_dir.display(), self.port),
@@ -216,6 +219,7 @@ impl PilotDbManager {
         Ok(DbStatus {
             initialized,
             running,
+            error_note,
             mode: self.endpoint_mode().to_string(),
             endpoint,
             dsn: self.target_dsn(),

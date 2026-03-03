@@ -22,7 +22,8 @@ if [[ -z "$SS_BIN" ]]; then
   elif [[ -x /bin/ss ]]; then
     SS_BIN="/bin/ss"
   else
-    SS_BIN="ss"
+    echo "[shim] ERROR: 'ss' utility not found. Please install iproute2 or set SS_BIN." >&2
+    exit 1
   fi
 fi
 
