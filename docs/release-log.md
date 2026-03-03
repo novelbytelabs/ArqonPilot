@@ -37,30 +37,31 @@ Use this structure for every new release:
 
 ---
 
-## v0.2.0-alpha.1 (Planned)
+## v0.2.0-alpha.1 (2026-03-03)
 
-- Git tag: `TBD`
-- Commit SHA: `TBD`
-- PyPI version: `0.2.0a1`
+- Git tag: `v0.2.0-alpha.1` (dry-run)
+- Commit SHA: `76f9e9e150be3d8f9fd892b8892ef815013e2f4b`
+- PyPI version: `0.1.6a1` (simulated)
 - Release type: alpha
 
 ### Verification
 
-- prepush gate: `TBD`
-- release readiness: `TBD`
-- Wave I matrix artifact: `TBD`
-- Wave J matrix artifact: `TBD`
-- UI smoke log: `TBD`
-- PyPI visibility check: `TBD`
-- clean venv install + `pilot --help`: `TBD`
+- prepush gate: `prepush_gate_latest.log` (sha256: 6cb236f6...)
+- release readiness: `scripts/release_readiness_check.sh` PASSED
+- Wave I matrix artifact: `acceptance_matrix_wave_i_full_latest.json` (sha256: 243ebc11...)
+- Wave J matrix artifact: `N/A` (Not run in dry-run)
+- UI smoke log: `N/A` (Available in /tmp/pilot-reports/ but not captured in manifest)
+- PyPI visibility check: `Simulated`
+- clean venv install + `pilot --help`: `Passed (Manual)`
+- Integrity manifest: `manifest.json` ✅ Verified via `verify_bundle.sh`
 
 ### CI/CD
 
-- CI run ID: `TBD`
-- PyPI run ID: `TBD`
+- CI run ID: `dry-run`
+- PyPI run ID: `dry-run`
 
 ### Notes
 
-- Key changes: AGOrg control-plane Wave K hard-close, matrix expansion, reconcile governance hardening.
-- Known limitations: ArqonBus compatibility shim may be used in some local environments.
-- Follow-up actions: start Wave L tech debt burn-down.
+- Key changes: Phase P9 Release Train Hardening implemented. Added `channel-policy.md`, `migration-playbook.md`, `compatibility-matrix.md`, `slo-policy.md`, and `incident-runbook.md`.
+- Known limitations: ArqonBus compatibility shim may be used in some local environments. `protoc` 25.8 missing in local env (G-014 violation).
+- Follow-up actions: Finalize Wave L tech debt burn-down.

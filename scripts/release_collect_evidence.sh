@@ -92,8 +92,72 @@ cat > "${OUT_DIR}/SUMMARY.md" <<EOF
 $(ls -1 "${OUT_DIR}" | sed 's/^/- /')
 EOF
 
+# Generate JSON manifest with hashes
+echo "Generating manifest.json..."
+(
+  cd "${OUT_DIR}"
+  echo "[" > manifest.json
+  first=true
+  for f in *; do
+    if [[ "$f" == "manifest.json" ]]; then continue; fi
+    hash=$(sha256sum "$f" | cut -d' ' -f1)
+    if [ "$first" = true ]; then first=false; else echo "," >> manifest.json; fi
+    echo "  {\"file\": \"$f\", \"sha256\": \"$hash\", \"timestamp\": \"$STAMP\"}" >> manifest.json
+  done
+  echo "]" >> manifest.json
+)
+
+# Generate verify_bundle.sh
+cat > "${OUT_DIR}/verify_bundle.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$DIR"
+
+echo "Checking Arqon Pilot Release Evidence Integrity..."
+if [ ! -f manifest.json ]; then
+  echo "❌ FAIL: manifest.json missing"
+  exit 1
+fi
+
+MISM_COUNT=0
+TOTAL=$(jq '. | length' manifest.json)
+for i in $(seq 0 $(($TOTAL - 1))); do
+    item=$(jq -r ".[$i]" manifest.json)
+    file=$(echo "$item" | jq -r '.file')
+    expected=$(echo "$item" | jq -r '.sha256')
+    
+    if [ ! -f "$file" ]; then
+        echo "❌ MISSING: $file"
+        MISM_COUNT=$((MISM_COUNT + 1))
+        continue
+    fi
+    
+    actual=$(sha256sum "$file" | cut -d' ' -f1)
+    if [ "$actual" == "$expected" ]; then
+        echo "✅ OK: $file"
+    else
+        echo "❌ MISMATCH: $file (expected $expected, got $actual)"
+        MISM_COUNT=$((MISM_COUNT + 1))
+    fi
+done
+
+if [ "$MISM_COUNT" -eq 0 ]; then
+    echo "--- ALL OK: Release Evidence Integrity Verified ---"
+    exit 0
+else
+    echo "--- FAILED: $MISM_COUNT integrity errors found ---"
+    exit 1
+fi
+EOF
+chmod +x "${OUT_DIR}/verify_bundle.sh"
+
 echo ""
-echo "Release evidence collected at:"
+echo "Release evidence collected and manifest generated at:"
 echo "  ${OUT_DIR}"
 echo "Summary:"
 echo "  ${OUT_DIR}/SUMMARY.md"
+echo "Manifest:"
+echo "  ${OUT_DIR}/manifest.json"
+echo "Verification Script:"
+echo "  ${OUT_DIR}/verify_bundle.sh"

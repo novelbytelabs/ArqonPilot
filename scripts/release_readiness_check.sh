@@ -9,39 +9,42 @@ core_cargo() {
   rustup run "$PILOT_CORE_RUST_VERSION" cargo "$@"
 }
 
-echo "[1/4] Locked compile"
-core_cargo check -p pilot --locked
-
-echo "[2/4] Targeted locked CLI/E2E tests"
-core_cargo test -p pilot --locked \
-  --test e2e_wave6_dryrun_test \
-  --test branch_cli_test \
-  --test multi_cli_test \
-  --test navigate_cli_test \
-  --test secure_cli_test \
-  --test plan_cli_test \
-  --test create_cli_test \
-  --test know_cli_test \
-  --test heal_cli_test \
-  --test oracle_cli_test \
-  --test report_cli_test
-
-echo "[3/4] Command surface smoke check"
-core_cargo run -q -p pilot -- --help >/tmp/pilot_help.txt
-if command -v rg >/dev/null 2>&1; then
-  rg -n "oracle|heal|navigate|branch|multi|secure|plan|create|know|init" /tmp/pilot_help.txt >/dev/null
-else
-  grep -En "oracle|heal|navigate|branch|multi|secure|plan|create|know|init" /tmp/pilot_help.txt >/dev/null
-fi
-
-echo "[4/4] Rust toolchain pin check"
-if command -v rg >/dev/null 2>&1; then
-  rg -n "^channel = \"${PILOT_CORE_RUST_VERSION//./\\.}\"$" rust-toolchain.toml >/dev/null
-else
-  grep -En "^channel = \"${PILOT_CORE_RUST_VERSION//./\\.}\"$" rust-toolchain.toml >/dev/null
-fi
-
-echo "[policy] Toolchain and lockfile policy checks"
+echo "[1/7] Toolchain and lockfile policy check"
 ./scripts/verify_toolchain_policy.sh
 
-echo "Release readiness check passed."
+echo "[2/7] Locked compile"
+core_cargo check -p pilot --locked
+
+echo "[3/7] Full locked test suite"
+core_cargo test -p pilot --locked
+
+echo "[4/7] Command surface smoke check"
+core_cargo run -q -p pilot -- --help >/tmp/pilot_help.txt
+pattern="oracle|heal|navigate|branch|multi|secure|plan|create|know|init"
+if grep -qE "$pattern" /tmp/pilot_help.txt; then
+  echo "✅ Command surface OK"
+else
+  echo "❌ Command surface FAIL"
+  exit 1
+fi
+
+echo "[5/7] JS Syntax Check (G-015 prevention)"
+if command -v node >/dev/null 2>&1; then
+  node -c crates/pilot/src/pilot_ui.js
+  echo "✅ JS Syntax OK"
+else
+  echo "⚠️ node not found, skipping JS syntax check"
+fi
+
+echo "[6/7] Duplicate Const Check (G-015 prevention)"
+./scripts/check_duplicate_consts.py
+
+echo "[7/7] Rust toolchain pin check"
+if grep -q "channel = \"${PILOT_CORE_RUST_VERSION}\"" rust-toolchain.toml; then
+  echo "✅ rust-toolchain.toml OK"
+else
+  echo "❌ rust-toolchain.toml FAIL"
+  exit 1
+fi
+
+echo "All release readiness gates passed."

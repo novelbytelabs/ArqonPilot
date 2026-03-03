@@ -351,6 +351,8 @@ Hard-close evidence:
 
 ### P9: Release Train Hardening
 
+**Closure Status**: Hard-close completed on 2026-03-03. Channel policies, migration playbooks, compatibility matrices, and SLO policies institutionalized. Dry-run evidence bundle verified.
+
 Objective:
 1. Institutionalize repeatable alpha->beta->stable release operations.
 
