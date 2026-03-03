@@ -50,6 +50,25 @@ Keep this file current whenever a new failure class appears.
      - `./scripts/pilot_local.sh db status`
      - `./scripts/pilot_local.sh bus status`
 
+## G-043: Preflight evidence write can fail (`Permission denied`) while tests still pass
+
+- Signature:
+  - `Warning: Failed to write preflight evidence to ~/.pilot/reports/preflight_<...>.json: Permission denied (os error 13)`
+  - Seen during `cargo test -p pilot --locked test_preflight_graph_pass -- --nocapture`.
+- Cause:
+  - Test/runtime user cannot write to `~/.pilot/reports` (ownership/permissions drift), but graph semantics still pass because file-write is surfaced as warning.
+- Recovery:
+  1. Repair report directory ownership/permissions:
+     - `mkdir -p ~/.pilot/reports`
+     - `chmod u+rwx ~/.pilot ~/.pilot/reports`
+     - `chown -R "$USER":"$USER" ~/.pilot`
+  2. Re-run targeted graph tests:
+     - `cargo test -p pilot --locked test_preflight_graph_pass -- --nocapture`
+  3. Verify fresh artifact exists:
+     - `ls -lt ~/.pilot/reports/preflight_*.json | head`
+- Prevention:
+  - Include a writable-report-dir check in preflight hard-close packet evidence whenever artifact emission is claimed.
+
 ## G-018: Widespread compilation failure after `evaluate_*_policy` signature changes
 
 - Signature:

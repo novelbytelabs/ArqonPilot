@@ -29,6 +29,7 @@ pilot-secure = { path = "../pilot-secure" }
 pilot-plan = { path = "../pilot-plan" }
 pilot-create = { path = "../pilot-create" }
 pilot-know = { path = "../pilot-know" }
+regex = "1.11"
 
 [dev-dependencies]
 assert_cmd = "2.1.1"

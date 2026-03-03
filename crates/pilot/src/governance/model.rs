@@ -3,6 +3,106 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+/// Command categories for allowlist-based mutation scope control
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandCategory {
+    /// Read-only operations (list, status, query)
+    Read,
+    /// Branch creation operations
+    BranchCreate,
+    /// Branch modification operations (sync, merge)
+    BranchModify,
+    /// Branch deletion/destructive operations (prune, delete)
+    BranchDestroy,
+    /// Policy operations (preview, apply)
+    Policy,
+    /// Release operations
+    Release,
+    /// Admin operations (services, db)
+    Admin,
+}
+
+impl CommandCategory {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "read" => Some(CommandCategory::Read),
+            "branch_create" | "create" => Some(CommandCategory::BranchCreate),
+            "branch_modify" | "modify" | "sync" => Some(CommandCategory::BranchModify),
+            "branch_destroy" | "destroy" | "prune" => Some(CommandCategory::BranchDestroy),
+            "policy" => Some(CommandCategory::Policy),
+            "release" => Some(CommandCategory::Release),
+            "admin" => Some(CommandCategory::Admin),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            CommandCategory::Read => "read",
+            CommandCategory::BranchCreate => "branch_create",
+            CommandCategory::BranchModify => "branch_modify",
+            CommandCategory::BranchDestroy => "branch_destroy",
+            CommandCategory::Policy => "policy",
+            CommandCategory::Release => "release",
+            CommandCategory::Admin => "admin",
+        }
+    }
+}
+
+/// Command allowlist with mutation scope enforcement
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommandAllowlist {
+    /// Enabled command categories
+    pub enabled_categories: Vec<CommandCategory>,
+    /// Explicitly blocked commands (by name)
+    pub blocked_commands: Vec<String>,
+    /// Commands requiring typed confirmation
+    pub confirmation_required: Vec<String>,
+    /// Default scope if not specified
+    pub default_scope: CommandScope,
+}
+
+impl Default for CommandAllowlist {
+    fn default() -> Self {
+        Self {
+            enabled_categories: vec![
+                CommandCategory::Read,
+                CommandCategory::BranchCreate,
+                CommandCategory::BranchModify,
+                CommandCategory::BranchDestroy,
+                CommandCategory::Policy,
+            ],
+            blocked_commands: vec![],
+            confirmation_required: vec![
+                "branch prune".to_string(),
+                "branch delete".to_string(),
+                "multi apply".to_string(),
+                "policy apply".to_string(),
+            ],
+            default_scope: CommandScope::Local,
+        }
+    }
+}
+
+/// Execution scope for mutation control
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum CommandScope {
+    /// Local only - no remote mutations
+    Local,
+    /// Dry-run mode - preview only
+    DryRun,
+    /// Full execution with remote mutations
+    Full,
+}
+
+impl CommandScope {
+    pub fn allows_mutation(&self) -> bool {
+        matches!(self, CommandScope::Full)
+    }
+}
+
 /// Graduated confirmation gate types for destructive branch operations.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +143,9 @@ pub struct BranchPolicy {
     pub lifecycle: LifecyclePolicy,
     pub sync: SyncPolicy,
     pub create: CreatePolicy,
+    /// Mutation control policy for command allowlist and scope enforcement (FC-8)
+    #[serde(default)]
+    pub mutation_control: MutationControlPolicy,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -102,6 +205,38 @@ pub struct CreatePolicy {
     pub base_branch_default: String,
 }
 
+/// Mutation control policy for command allowlist and scope enforcement (FC-8)
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MutationControlPolicy {
+    /// Command allowlist configuration
+    pub command_allowlist: CommandAllowlist,
+    /// Require typed confirmation for protected branch operations
+    pub protected_branch_confirmation: bool,
+    /// Enable secrets-safe logging (redact patterns in evidence)
+    pub secrets_safe_logging: bool,
+    /// Patterns to redact from logs (regex)
+    pub redaction_patterns: Vec<String>,
+    /// Default confirmation type for destructive operations
+    pub destructive_confirmation_type: ConfirmationType,
+}
+
+impl Default for MutationControlPolicy {
+    fn default() -> Self {
+        Self {
+            command_allowlist: CommandAllowlist::default(),
+            protected_branch_confirmation: true,
+            secrets_safe_logging: true,
+            redaction_patterns: vec![
+                r"(?i)(api[_-]?key|secret[_-]?key|password|token|auth)[\s:=]+[\S]+".to_string(),
+                r"(?i)ghp_[a-zA-Z0-9]{36}".to_string(),
+                r"(?i)github_pat_[a-zA-Z0-9_]{22,}".to_string(),
+                r"sk-[a-zA-Z0-9]{48}".to_string(),
+            ],
+            destructive_confirmation_type: ConfirmationType::TypedPhrase,
+        }
+    }
+}
+
 impl Default for BranchPolicy {
     fn default() -> Self {
         Self {
@@ -155,6 +290,7 @@ impl Default for BranchPolicy {
                 require_preview: true,
                 base_branch_default: "main".to_string(),
             },
+            mutation_control: MutationControlPolicy::default(),
         }
     }
 }

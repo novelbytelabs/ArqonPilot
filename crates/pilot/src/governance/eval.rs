@@ -2,6 +2,7 @@ use super::model::*;
 use crate::agorg::AgorgStore;
 use crate::governance::store::GovernanceStore;
 use chrono::{Datelike, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -1056,6 +1057,159 @@ fn get_current_branch(repo_path: &Path) -> Option<String> {
     }
 }
 
+/// Resolve the strongest applicable confirmation requirement for a branch operation.
+/// Returns (ConfirmationType, optional required phrase).
+pub fn required_confirmation(
+    policy: &BranchPolicy,
+    action: &str,
+    branch: &str,
+) -> (ConfirmationType, Option<String>) {
+    // Prune always uses lifecycle confirmation
+    if action == "prune" {
+        return (
+            policy.lifecycle.prune_confirmation_type.clone(),
+            Some(policy.lifecycle.confirmation_phrase.clone()),
+        );
+    }
+
+    // Check if branch matches any protected pattern
+    let is_protected = policy.protected_branches.patterns.iter().any(|pat| {
+        if pat.ends_with('*') {
+            let prefix = &pat[..pat.len() - 1];
+            branch.starts_with(prefix)
+        } else {
+            branch == pat
+        }
+    });
+
+    if is_protected {
+        return (
+            policy.protected_branches.confirmation_type.clone(),
+            policy.protected_branches.confirmation_phrase.clone(),
+        );
+    }
+
+    // For destructive actions, use mutation control policy
+    if action == "delete" || action == "force-push" {
+        if policy.mutation_control.protected_branch_confirmation {
+            return (
+                policy.mutation_control.destructive_confirmation_type.clone(),
+                Some("CONFIRM".to_string()),
+            );
+        }
+    }
+
+    // Non-protected, non-prune: standard confirmation
+    (ConfirmationType::Standard, None)
+}
+
+/// Command allowlist check result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllowlistCheckResult {
+    pub allowed: bool,
+    pub category: Option<String>,
+    pub requires_confirmation: bool,
+    pub blocked_reason: Option<String>,
+}
+
+/// Check if a command is allowed by the mutation control policy
+pub fn check_command_allowlist(
+    policy: &MutationControlPolicy,
+    command: &str,
+) -> AllowlistCheckResult {
+    // Check blocked commands list
+    for blocked in &policy.command_allowlist.blocked_commands {
+        if command.to_lowercase().contains(&blocked.to_lowercase()) {
+            return AllowlistCheckResult {
+                allowed: false,
+                category: None,
+                requires_confirmation: false,
+                blocked_reason: Some(format!("Command '{}' is explicitly blocked", command)),
+            };
+        }
+    }
+
+    // Check if command requires confirmation
+    let requires_confirmation = policy
+        .command_allowlist
+        .confirmation_required
+        .iter()
+        .any(|c| command.to_lowercase().contains(&c.to_lowercase()));
+
+    // Determine category - use command prefix matching to avoid false positives
+    let command_lower = command.to_lowercase();
+    let category = if command_lower.starts_with("list") 
+        || command_lower.starts_with("status") 
+        || command_lower.starts_with("query")
+        || command_lower.starts_with("show") 
+        || command_lower.starts_with("get") {
+        Some("read".to_string())
+    } else if command_lower.starts_with("create") {
+        Some("branch_create".to_string())
+    } else if command_lower.starts_with("sync") || command_lower.starts_with("merge") {
+        Some("branch_modify".to_string())
+    } else if command_lower.starts_with("prune") || command_lower.starts_with("delete") {
+        Some("branch_destroy".to_string())
+    } else if command_lower.starts_with("policy") {
+        Some("policy".to_string())
+    } else if command_lower.starts_with("release") {
+        Some("release".to_string())
+    } else if command_lower.starts_with("service") || command_lower.starts_with("db") {
+        Some("admin".to_string())
+    } else {
+        None
+    };
+
+    // Check if category is enabled
+    if let Some(ref cat) = category {
+        let enabled = policy.command_allowlist.enabled_categories.iter().any(|c| {
+            c.as_str() == cat
+        });
+
+        if !enabled {
+            return AllowlistCheckResult {
+                allowed: false,
+                category: Some(cat.clone()),
+                requires_confirmation: false,
+                blocked_reason: Some(format!("Category '{}' is not enabled", cat)),
+            };
+        }
+    }
+
+    AllowlistCheckResult {
+        allowed: true,
+        category,
+        requires_confirmation,
+        blocked_reason: None,
+    }
+}
+
+/// Redact secrets from a string using the policy's redaction patterns
+pub fn redact_secrets(
+    policy: &MutationControlPolicy,
+    input: &str,
+) -> String {
+    if !policy.secrets_safe_logging {
+        return input.to_string();
+    }
+
+    let mut result = input.to_string();
+
+    for pattern in &policy.redaction_patterns {
+        match regex::Regex::new(pattern) {
+            Ok(re) => {
+                result = re.replace_all(&result, "[REDACTED]").to_string();
+            }
+            Err(e) => {
+                // Log warning for invalid patterns to help with configuration debugging
+                eprintln!("Warning: invalid redaction pattern '{}': {}", pattern, e);
+            }
+        }
+    }
+
+    result
+}
+
 // -----------------------------------------------------------------------------
 // TESTS
 // -----------------------------------------------------------------------------
@@ -1413,38 +1567,4 @@ license = "GPL-3.0"
     }
 }
 
-/// Resolve the strongest applicable confirmation requirement for a branch operation.
-/// Returns (ConfirmationType, optional required phrase).
-pub fn required_confirmation(
-    policy: &BranchPolicy,
-    action: &str,
-    branch: &str,
-) -> (ConfirmationType, Option<String>) {
-    // Prune always uses lifecycle confirmation
-    if action == "prune" {
-        return (
-            policy.lifecycle.prune_confirmation_type.clone(),
-            Some(policy.lifecycle.confirmation_phrase.clone()),
-        );
-    }
 
-    // Check if branch matches any protected pattern
-    let is_protected = policy.protected_branches.patterns.iter().any(|pat| {
-        if pat.ends_with('*') {
-            let prefix = &pat[..pat.len() - 1];
-            branch.starts_with(prefix)
-        } else {
-            branch == pat
-        }
-    });
-
-    if is_protected {
-        return (
-            policy.protected_branches.confirmation_type.clone(),
-            policy.protected_branches.confirmation_phrase.clone(),
-        );
-    }
-
-    // Non-protected, non-prune: standard confirmation
-    (ConfirmationType::Standard, None)
-}

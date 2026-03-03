@@ -98,6 +98,10 @@ pub struct AgorgReconcileReport {
     pub issues: Vec<AgorgReconcileIssue>,
     pub governance_issues: Vec<GovernanceReconcileIssue>,
     pub conflict_traces: Vec<crate::governance::model::PolicyConflictTrace>,
+    /// Full per-AGO compliance report from the unified fleet governance scan.
+    /// `None` if the fleet scan could not be executed (DB unavailable, etc.);
+    /// the reconcile result is still valid without it.
+    pub fleet_report: Option<crate::governance::model::GovernanceReconcileReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -867,6 +871,10 @@ impl AgorgStore {
             "quality",
             "runtime",
         ];
+
+        // --- Override registry sweep: orphan + expired detection ------------------
+        // This runs first so we can detect orphan/expired independent of the fleet scan.
+        let mut override_ago_paths: HashSet<String> = HashSet::new();
         for fam in families {
             if let Ok(overrides) = gov_store.list_overrides(agorg.id, fam).await {
                 for ov in overrides {
@@ -889,6 +897,8 @@ impl AgorgStore {
                             ),
                             remediation: "Revoke the override or restore the AGO".to_string(),
                         });
+                    } else {
+                        override_ago_paths.insert(ov.ago_path.clone());
                     }
                     if let Some(exp) = ov.expires_at {
                         if exp < chrono::Utc::now() {
@@ -914,12 +924,90 @@ impl AgorgStore {
             }
         }
 
+        // --- Fleet governance scan: per-AGO, per-family compliance evaluation ------
+        // Runs against all 6 policy families for every AGO under this AGOrg.
+        // Errors from the fleet scan are non-fatal: reconcile still completes with
+        // structural results, and fleet_report is None.
+        let fleet_report = match crate::governance::eval::fleet_governance_scan(
+            &gov_store,
+            self,
+            agorg.id,
+        )
+        .await
+        {
+            Ok(report) => {
+                // Translate per-AGO compliance violations into GovernanceReconcileIssue entries.
+                // We emit one issue per AGO that has a violation, per family, so that the
+                // reconcile reporting surface is actionable (not just a summary count).
+                for status in &report.ago_statuses {
+                    for (family, eval_report) in &status.evaluations {
+                        for violation in &eval_report.violations {
+                            governance_issues.push(GovernanceReconcileIssue {
+                                ago_path: status.ago_path.clone(),
+                                policy_kind: family.clone(),
+                                issue_type: "policy_violation".to_string(),
+                                severity: "error".to_string(),
+                                message: format!(
+                                    "[{}] rule={} :: {}",
+                                    family, violation.rule, violation.violation
+                                ),
+                                remediation: violation.fix_suggestion.clone(),
+                            });
+                        }
+                        for warning in &eval_report.warnings {
+                            governance_issues.push(GovernanceReconcileIssue {
+                                ago_path: status.ago_path.clone(),
+                                policy_kind: family.clone(),
+                                issue_type: "policy_warning".to_string(),
+                                severity: "warning".to_string(),
+                                message: format!(
+                                    "[{}] rule={} :: {}",
+                                    family, warning.rule, warning.violation
+                                ),
+                                remediation: warning.fix_suggestion.clone(),
+                            });
+                        }
+                    }
+                    // Collect conflict traces for AGOs with overrides that weren't already
+                    // captured by the override sweep above.
+                    if status.is_overridden && !override_ago_paths.contains(&status.ago_path) {
+                        for fam in families {
+                            if let Ok(trace) = gov_store
+                                .resolve_with_trace(agorg.id, &status.ago_path, fam)
+                                .await
+                            {
+                                if trace.chain.len() > 1 {
+                                    conflict_traces.push(trace);
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(report)
+            }
+            Err(e) => {
+                // Non-fatal: surface as a governance warning so operators know the scan
+                // could not complete (e.g. DB unavailable during restricted test runtime).
+                governance_issues.push(GovernanceReconcileIssue {
+                    ago_path: "<fleet>".to_string(),
+                    policy_kind: "all".to_string(),
+                    issue_type: "fleet_scan_failed".to_string(),
+                    severity: "warning".to_string(),
+                    message: format!("Fleet governance scan could not complete: {}", e),
+                    remediation:
+                        "Ensure the managed DB is running and governance schema is initialized."
+                            .to_string(),
+                });
+                None
+            }
+        };
+
         Ok(AgorgReconcileReport {
             agorg_id: agorg.id,
             agorg_name: agorg.name,
             root_path: agorg.root_path,
             total_agos: agos.len(),
-            issue_count: issues.len(),
+            issue_count: issues.len() + governance_issues.iter().filter(|g| g.severity == "error").count(),
             off_policy_count: prune_candidate_paths.len(),
             class_counts,
             prune_candidate_paths,
@@ -927,6 +1015,7 @@ impl AgorgStore {
             issues,
             governance_issues,
             conflict_traces,
+            fleet_report,
         })
     }
 

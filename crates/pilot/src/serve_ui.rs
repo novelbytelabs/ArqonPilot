@@ -2714,6 +2714,9 @@ fn agorg_reconcile_apply_dry_run_response(report: &agorg::AgorgReconcileReport) 
         "dry_run": true,
         "planned_prune_count": report.prune_candidate_paths.len(),
         "planned_prune_paths": report.prune_candidate_paths,
+        "governance_issues": report.governance_issues,
+        "conflict_traces": report.conflict_traces,
+        "fleet_report": report.fleet_report,
         "report": report
     })
 }
@@ -2727,6 +2730,9 @@ fn agorg_reconcile_apply_success_response(
         "ok": true,
         "dry_run": false,
         "pruned": pruned,
+        "governance_issues": after.governance_issues,
+        "conflict_traces": after.conflict_traces,
+        "fleet_report": after.fleet_report,
         "before": before,
         "after": after
     })
@@ -4527,6 +4533,7 @@ mod tests {
             }],
             governance_issues: vec![],
             conflict_traces: vec![],
+            fleet_report: None,
         }
     }
 
@@ -5140,6 +5147,12 @@ fn agorg_reconcile_action_report_path(ts: &str, mode: &str) -> PathBuf {
     reports_root().join(format!("agorg_reconcile_{}_{}.json", mode, ts))
 }
 
+/// Governance-specific sidecar artifact: inheritance chain, override registry, per-AGO compliance.
+/// Written alongside the main reconcile artifact for every dry-run and apply call.
+fn governance_reconcile_artifact_path(ts: &str, mode: &str) -> PathBuf {
+    reports_root().join(format!("governance_reconcile_{}_{}.json", mode, ts))
+}
+
 fn temporary_components_inventory_report_path(ts: &str) -> PathBuf {
     reports_root().join(format!("temporary_components_inventory_{}.json", ts))
 }
@@ -5173,13 +5186,43 @@ fn persist_agorg_policy_report(report: &agorg::AgorgReconcileReport) -> std::io:
 }
 
 fn persist_agorg_reconcile_action_report(mode: &str, payload: &Value) -> std::io::Result<String> {
-    let path = agorg_reconcile_action_report_path(&now_stamp(), mode);
+    let ts = now_stamp();
+    let path = agorg_reconcile_action_report_path(&ts, mode);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let body = serde_json::to_string_pretty(payload)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     fs::write(&path, body)?;
+
+    // Write sidecar governance artifact if the payload includes a fleet_report.
+    // This surfaces inheritance chains and per-AGO compliance independently of the main report.
+    // G-043: write errors here are non-fatal — reconcile must not fail on artifact write.
+    if let Some(fleet_report) = payload.get("fleet_report") {
+        let gov_path = governance_reconcile_artifact_path(&ts, mode);
+        let governance_artifact = serde_json::json!({
+            "mode": mode,
+            "timestamp": ts,
+            "fleet_report": fleet_report,
+            "governance_issues": payload.get("governance_issues"),
+            "conflict_traces": payload.get("conflict_traces")
+        });
+        match serde_json::to_string_pretty(&governance_artifact) {
+            Ok(gov_body) => {
+                if let Err(e) = fs::write(&gov_path, gov_body) {
+                    eprintln!(
+                        "Warning [G-043]: governance artifact write failed at {}: {}",
+                        gov_path.display(),
+                        e
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning [G-043]: governance artifact serialization failed: {}", e);
+            }
+        }
+    }
+
     Ok(path.display().to_string())
 }
 

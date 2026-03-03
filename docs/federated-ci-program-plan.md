@@ -139,14 +139,16 @@ Program wave status (authoritative):
 5. FC-5: HARD-CLOSED
 6. FC-6: HARD-CLOSED
 7. FC-7: HARD-CLOSED
-8. FC-8: ACTIVE TARGET
+8. FC-8: HARD-CLOSED (2026-03-03)
 9. FC-9: PENDING
+
+Hard-close evidence:
+- [`docs/fc1_artifacts/fc8_hardclose.md`](docs/fc1_artifacts/fc8_hardclose.md)
 
 Immediate directive:
 
-1. Start FC-8 now.
-2. Do not reopen FC-7 unless a regression is discovered with reproducible evidence.
-3. If FC-7 regression is detected, log it in gotchas and attach a corrective artifact before resuming FC-8.
+1. Start FC-9 now.
+2. Do not reopen FC-8 unless a regression is discovered with reproducible evidence.
 
 ## 8) Execution Waves (Federated CI Program)
 
