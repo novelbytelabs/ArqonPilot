@@ -1,0 +1,228 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pilot CI Contract Command",
+  "description": "Typed schema for Pilot CI Contract Layer commands: run, replay, repair, readiness, report",
+  "definitions": {
+    "CommandType": {
+      "type": "string",
+      "enum": ["run", "replay", "repair", "readiness", "report"],
+      "description": "Available CI contract commands"
+    },
+    "ScopeCheck": {
+      "type": "object",
+      "required": ["repo_scope", "agorg_context"],
+      "properties": {
+        "repo_scope": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["ArqonPilot", "ArqonBus", "ArqonLattice", "ArqonStudio", "ArqonHPO"]
+          },
+          "description": "Target scope repositories for the command"
+        },
+        "agorg_context": {
+          "type": "string",
+          "description": "AGOrg scope enforcement context"
+        },
+        "enforcement_level": {
+          "type": "string",
+          "enum": ["strict", "lenient", "advisory"],
+          "default": "strict"
+        }
+      }
+    },
+    "PolicyCheck": {
+      "type": "object",
+      "required": ["toolchain_policy", "frozen_versions"],
+      "properties": {
+        "toolchain_policy": {
+          "type": "object",
+          "properties": {
+            "core_rust_version": {
+              "type": "string",
+              "const": "1.82.0"
+            },
+            "packaging_rust_version": {
+              "type": "string",
+              "const": "1.88.0"
+            },
+            "protobuf_version": {
+              "type": "string",
+              "const": "4.25.8"
+            }
+          }
+        },
+        "frozen_versions": {
+          "type": "boolean",
+          "default": true
+        },
+        "gate_contract_enforced": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "ContractPreview": {
+      "type": "object",
+      "description": "Preview of contract changes before execution",
+      "required": ["command", "resolved_commands", "payload_digest"],
+      "properties": {
+        "command": {
+          "$ref": "#/definitions/CommandType"
+        },
+        "resolved_commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of resolved commands to be executed"
+        },
+        "payload_digest": {
+          "type": "string",
+          "description": "SHA256 digest of the command payload"
+        },
+        "preview_timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "requires_confirmation": {
+          "type": "boolean"
+        },
+        "confirmation_type": {
+          "type": "string",
+          "enum": ["none", "standard", "typed_phrase", "double_confirm"]
+        }
+      }
+    },
+    "RunCommand": {
+      "type": "object",
+      "required": ["command", "scope", "policy", "gates"],
+      "properties": {
+        "command": {
+          "const": "run"
+        },
+        "scope": {
+          "$ref": "#/definitions/ScopeCheck"
+        },
+        "policy": {
+          "$ref": "#/definitions/PolicyCheck"
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["toolchain_policy", "prepush_gate", "push_safe", "lock_repair", "ci_parity"]
+          },
+          "description": "Gates to execute"
+        },
+        "preview": {
+          "$ref": "#/definitions/ContractPreview"
+        }
+      }
+    },
+    "ReplayCommand": {
+      "type": "object",
+      "required": ["command", "execution_id", "scope"],
+      "properties": {
+        "command": {
+          "const": "replay"
+        },
+        "execution_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Previous execution ID to replay"
+        },
+        "scope": {
+          "$ref": "#/definitions/ScopeCheck"
+        },
+        "policy": {
+          "$ref": "#/definitions/PolicyCheck"
+        },
+        "preview": {
+          "$ref": "#/definitions/ContractPreview"
+        }
+      }
+    },
+    "RepairCommand": {
+      "type": "object",
+      "required": ["command", "repair_type", "scope"],
+      "properties": {
+        "command": {
+          "const": "repair"
+        },
+        "repair_type": {
+          "type": "string",
+          "enum": ["lock_repair", "drift_correction", "policy_reset", "scope_recovery"]
+        },
+        "scope": {
+          "$ref": "#/definitions/ScopeCheck"
+        },
+        "policy": {
+          "$ref": "#/definitions/PolicyCheck"
+        },
+        "preview": {
+          "$ref": "#/definitions/ContractPreview"
+        },
+        "force": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "ReadinessCommand": {
+      "type": "object",
+      "required": ["command", "scope"],
+      "properties": {
+        "command": {
+          "const": "readiness"
+        },
+        "scope": {
+          "$ref": "#/definitions/ScopeCheck"
+        },
+        "policy": {
+          "$ref": "#/definitions/PolicyCheck"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["toolchain", "gates", "dependencies", "connectivity", "contracts"]
+          },
+          "default": ["toolchain", "gates", "dependencies"]
+        }
+      }
+    },
+    "ReportCommand": {
+      "type": "object",
+      "required": ["command", "report_type", "scope"],
+      "properties": {
+        "command": {
+          "const": "report"
+        },
+        "report_type": {
+          "type": "string",
+          "enum": ["execution_summary", "gate_status", "policy_compliance", "drift_analysis", "scope_audit"]
+        },
+        "scope": {
+          "$ref": "#/definitions/ScopeCheck"
+        },
+        "execution_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["json", "markdown", "html"],
+          "default": "json"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/definitions/RunCommand"},
+    {"$ref": "#/definitions/ReplayCommand"},
+    {"$ref": "#/definitions/RepairCommand"},
+    {"$ref": "#/definitions/ReadinessCommand"},
+    {"$ref": "#/definitions/ReportCommand"}
+  ]
+}

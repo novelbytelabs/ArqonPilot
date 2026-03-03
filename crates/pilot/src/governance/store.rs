@@ -1,4 +1,6 @@
-use super::model::{AgorgPolicyRecord, InheritanceStep, PolicyConflictTrace, PolicyException, PolicyOverrideRecord};
+use super::model::{
+    AgorgPolicyRecord, InheritanceStep, PolicyConflictTrace, PolicyException, PolicyOverrideRecord,
+};
 use chrono::{DateTime, Utc};
 use miette::{IntoDiagnostic, Result};
 use tokio_postgres::{Client, NoTls};
@@ -318,7 +320,12 @@ impl GovernanceStore {
         Ok(saved)
     }
 
-    pub async fn revoke_override(&self, agorg_id: Uuid, ago_path: &str, policy_kind: &str) -> Result<()> {
+    pub async fn revoke_override(
+        &self,
+        agorg_id: Uuid,
+        ago_path: &str,
+        policy_kind: &str,
+    ) -> Result<()> {
         let mut client = self.connect().await?;
         let tx = client.transaction().await.into_diagnostic()?;
         tx.execute(
@@ -353,7 +360,7 @@ impl GovernanceStore {
         policy_kind: &str,
     ) -> Result<Option<(AgorgPolicyRecord, String)>> {
         let client = self.connect().await?;
-        
+
         // Recursive query to find the nearest policy (override or general) in the AGOrg hierarchy
         let row = client
             .query_opt(
@@ -463,7 +470,11 @@ impl GovernanceStore {
                     winner_source = "ago_override".to_string();
                 } else if has_fleet_policy {
                     winner_index = Some(i);
-                    winner_source = if depth == 0 { "agorg_active".to_string() } else { "parent_agorg".to_string() };
+                    winner_source = if depth == 0 {
+                        "agorg_active".to_string()
+                    } else {
+                        "parent_agorg".to_string()
+                    };
                 }
             }
         }
@@ -482,7 +493,7 @@ impl GovernanceStore {
                 "SELECT version FROM agorg_policies WHERE agorg_id = $1 AND policy_kind = $2 AND ago_path IS NOT DISTINCT FROM $3 AND status = 'active' ORDER BY version DESC LIMIT 1",
                 &[&resolved_agorg_id, &policy_kind, &path_param]
             ).await.into_diagnostic()?;
-            
+
             if let Some(p) = policy_row {
                 resolved_version = p.get(0);
             }

@@ -311,7 +311,10 @@ pub fn conflict_radar(
                         merge_base: String::new(),
                         ahead: 0,
                         behind: 0,
-                        error: Some("Failed to compute merge-base; branch may not exist on remote".to_string()),
+                        error: Some(
+                            "Failed to compute merge-base; branch may not exist on remote"
+                                .to_string(),
+                        ),
                     };
                 }
             };
@@ -362,7 +365,10 @@ pub fn conflict_radar(
                         merge_base,
                         ahead,
                         behind,
-                        error: Some("git merge-tree --write-tree not available; upgrade to git 2.38+".to_string()),
+                        error: Some(
+                            "git merge-tree --write-tree not available; upgrade to git 2.38+"
+                                .to_string(),
+                        ),
                     }
                 }
             }
@@ -585,8 +591,7 @@ pub fn list_undo_journal(scope_id: Option<&str>, limit: usize) -> Vec<BranchUndo
 /// Mark an undo entry as executed in the journal.
 pub fn mark_undone(entry_id: &str) -> Result<()> {
     let path = undo_journal_path();
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| "Failed to read undo journal")?;
+    let content = std::fs::read_to_string(&path).with_context(|| "Failed to read undo journal")?;
 
     let updated: Vec<String> = content
         .lines()

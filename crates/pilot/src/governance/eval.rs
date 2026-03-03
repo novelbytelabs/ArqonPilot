@@ -1,10 +1,10 @@
 use super::model::*;
-use chrono::{Datelike, Utc};
-use std::path::{Path, PathBuf};
-use uuid::Uuid;
 use crate::agorg::AgorgStore;
 use crate::governance::store::GovernanceStore;
+use chrono::{Datelike, Utc};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 pub fn evaluate_branch_policy(
     policy: &BranchPolicy,
@@ -18,7 +18,15 @@ pub fn evaluate_branch_policy(
     let mut report = PolicyEvalReport::default();
     // naming policy
     if action == "create" || action == "sync" {
-        eval_naming(&policy.naming, branch_name, exceptions, &mut report, current_ago_path, source_name, source_id);
+        eval_naming(
+            &policy.naming,
+            branch_name,
+            exceptions,
+            &mut report,
+            current_ago_path,
+            source_name,
+            source_id,
+        );
         eval_protected(
             &policy.protected_branches,
             branch_name,
@@ -284,7 +292,7 @@ pub fn evaluate_dependency_policy(
             let has_package_lock = repo_path.join("package-lock.json").exists();
             let has_poetry_lock = repo_path.join("poetry.lock").exists();
             let has_pnpm_lock = repo_path.join("pnpm-lock.yaml").exists();
-            
+
             if !(has_cargo_lock || has_package_lock || has_poetry_lock || has_pnpm_lock) {
                 add_result(
                     &mut report,
@@ -301,9 +309,11 @@ pub fn evaluate_dependency_policy(
     }
 
     // DEP-001: Banned Packages & DEP-002: Allowed Licenses
-    if (policy.banned_packages.level != EnforcementLevel::Off && !policy.banned_packages.items.is_empty()) || 
-       (policy.allowed_licenses.level != EnforcementLevel::Off && !policy.allowed_licenses.items.is_empty()) {
-        
+    if (policy.banned_packages.level != EnforcementLevel::Off
+        && !policy.banned_packages.items.is_empty())
+        || (policy.allowed_licenses.level != EnforcementLevel::Off
+            && !policy.allowed_licenses.items.is_empty())
+    {
         // Scan Cargo.toml
         let cargo_toml = repo_path.join("Cargo.toml");
         if cargo_toml.exists() {
@@ -311,8 +321,13 @@ pub fn evaluate_dependency_policy(
                 match toml::from_str::<toml::Value>(&content) {
                     Ok(doc) => {
                         // Check License
-                        if policy.allowed_licenses.level != EnforcementLevel::Off && !is_excepted("dependency.DEP-002", exceptions, current_ago_path) {
-                            let license = doc.get("package").and_then(|p| p.get("license")).and_then(|l| l.as_str());
+                        if policy.allowed_licenses.level != EnforcementLevel::Off
+                            && !is_excepted("dependency.DEP-002", exceptions, current_ago_path)
+                        {
+                            let license = doc
+                                .get("package")
+                                .and_then(|p| p.get("license"))
+                                .and_then(|l| l.as_str());
                             if let Some(l) = license {
                                 if !policy.allowed_licenses.items.iter().any(|item| item == l) {
                                     add_result(
@@ -329,18 +344,28 @@ pub fn evaluate_dependency_policy(
                             }
                         }
                         // Check Dependencies
-                        if policy.banned_packages.level != EnforcementLevel::Off && !is_excepted("dependency.DEP-001", exceptions, current_ago_path) {
+                        if policy.banned_packages.level != EnforcementLevel::Off
+                            && !is_excepted("dependency.DEP-001", exceptions, current_ago_path)
+                        {
                             let deps = ["dependencies", "dev-dependencies", "build-dependencies"];
                             for group in deps {
                                 if let Some(d) = doc.get(group).and_then(|v| v.as_table()) {
                                     for (name, _) in d {
-                                        if policy.banned_packages.items.iter().any(|b| name.contains(b)) {
+                                        if policy
+                                            .banned_packages
+                                            .items
+                                            .iter()
+                                            .any(|b| name.contains(b))
+                                        {
                                             add_result(
                                                 &mut report,
                                                 "DEP-001",
                                                 &policy.banned_packages.level,
                                                 name,
-                                                &format!("Banned package '{}' detected in {}", name, group),
+                                                &format!(
+                                                    "Banned package '{}' detected in {}",
+                                                    name, group
+                                                ),
                                                 "Remove the banned dependency",
                                                 source_name,
                                                 source_id,
@@ -364,9 +389,11 @@ pub fn evaluate_dependency_policy(
             if let Ok(content) = std::fs::read_to_string(&pkg_json) {
                 if let Ok(json) = serde_json::from_str::<Value>(&content) {
                     // Check License
-                    if policy.allowed_licenses.level != EnforcementLevel::Off && !is_excepted("dependency.DEP-002", exceptions, current_ago_path) {
+                    if policy.allowed_licenses.level != EnforcementLevel::Off
+                        && !is_excepted("dependency.DEP-002", exceptions, current_ago_path)
+                    {
                         if let Some(l) = json.get("license").and_then(|v| v.as_str()) {
-                             if !policy.allowed_licenses.items.iter().any(|item| item == l) {
+                            if !policy.allowed_licenses.items.iter().any(|item| item == l) {
                                 add_result(
                                     &mut report,
                                     "DEP-002",
@@ -381,18 +408,28 @@ pub fn evaluate_dependency_policy(
                         }
                     }
                     // Check Dependencies
-                    if policy.banned_packages.level != EnforcementLevel::Off && !is_excepted("dependency.DEP-001", exceptions, current_ago_path) {
+                    if policy.banned_packages.level != EnforcementLevel::Off
+                        && !is_excepted("dependency.DEP-001", exceptions, current_ago_path)
+                    {
                         let groups = ["dependencies", "devDependencies", "peerDependencies"];
                         for group in groups {
                             if let Some(d) = json.get(group).and_then(|v| v.as_object()) {
                                 for (name, _) in d {
-                                    if policy.banned_packages.items.iter().any(|b| name.contains(b)) {
+                                    if policy
+                                        .banned_packages
+                                        .items
+                                        .iter()
+                                        .any(|b| name.contains(b))
+                                    {
                                         add_result(
                                             &mut report,
                                             "DEP-001",
                                             &policy.banned_packages.level,
                                             name,
-                                            &format!("Banned package '{}' detected in {}", name, group),
+                                            &format!(
+                                                "Banned package '{}' detected in {}",
+                                                name, group
+                                            ),
                                             "Remove or replace the banned dependency",
                                             source_name,
                                             source_id,
@@ -407,7 +444,10 @@ pub fn evaluate_dependency_policy(
         }
     }
 
-    report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
+    report.blocked = report
+        .violations
+        .iter()
+        .any(|v| v.level == EnforcementLevel::Block);
     report
 }
 
@@ -439,11 +479,18 @@ pub fn evaluate_release_policy(
     }
 
     // REL-001: Forbidden Days (UTC)
-    if policy.forbidden_days.level != EnforcementLevel::Off && !policy.forbidden_days.items.is_empty() {
+    if policy.forbidden_days.level != EnforcementLevel::Off
+        && !policy.forbidden_days.items.is_empty()
+    {
         if !is_excepted("release.REL-001", exceptions, current_ago_path) {
             let today = Utc::now().weekday().to_string(); // e.g. "Friday"
-            if policy.forbidden_days.items.iter().any(|d| d.eq_ignore_ascii_case(&today)) {
-                 add_result(
+            if policy
+                .forbidden_days
+                .items
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(&today))
+            {
+                add_result(
                     &mut report,
                     "REL-001",
                     &policy.forbidden_days.level,
@@ -464,11 +511,16 @@ pub fn evaluate_release_policy(
             if cargo_toml.exists() {
                 if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
                     if let Ok(doc) = content.parse::<toml::Value>() {
-                        let version = doc.get("package").and_then(|p| p.get("version")).and_then(|v| v.as_str());
+                        let version = doc
+                            .get("package")
+                            .and_then(|p| p.get("version"))
+                            .and_then(|v| v.as_str());
                         if let Some(v) = version {
                             // Simple semver regex check
-                            if !v.starts_with(|c: char| c.is_ascii_digit()) || v.split('.').count() < 2 {
-                                 add_result(
+                            if !v.starts_with(|c: char| c.is_ascii_digit())
+                                || v.split('.').count() < 2
+                            {
+                                add_result(
                                     &mut report,
                                     "REL-002",
                                     &policy.require_semver.level,
@@ -486,7 +538,10 @@ pub fn evaluate_release_policy(
         }
     }
 
-    report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
+    report.blocked = report
+        .violations
+        .iter()
+        .any(|v| v.level == EnforcementLevel::Block);
     report
 }
 
@@ -499,21 +554,24 @@ pub fn evaluate_security_policy(
     source_id: Option<Uuid>,
 ) -> PolicyEvalReport {
     let mut report = PolicyEvalReport::default();
-    
+
     // SEC-001: Vulnerability Threshold
     if let Ok(scan) = pilot_secure::scan_repo(repo_path) {
         let max_severity_rank = severity_rank(&policy.max_cve_severity);
-        
+
         for finding in scan.findings {
             let finding_rank = severity_rank(&finding.severity);
-            
+
             // Only report if it meets the category or exceeds threshold
             let is_secret = finding.category == "secret";
             let exceeds_threshold = finding_rank >= max_severity_rank && finding_rank > 0;
-            
+
             if exceeds_threshold {
                 if !is_excepted("security.SEC-001", exceptions, current_ago_path) {
-                    let file = finding.file.clone().unwrap_or_else(|| "unknown".to_string());
+                    let file = finding
+                        .file
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
                     add_result(
                         &mut report,
                         "SEC-001",
@@ -525,9 +583,15 @@ pub fn evaluate_security_policy(
                         source_id,
                     );
                 }
-            } else if is_secret && policy.block_naked_secrets.enabled && policy.block_naked_secrets.level != EnforcementLevel::Off {
+            } else if is_secret
+                && policy.block_naked_secrets.enabled
+                && policy.block_naked_secrets.level != EnforcementLevel::Off
+            {
                 if !is_excepted("security.SEC-002", exceptions, current_ago_path) {
-                    let file = finding.file.clone().unwrap_or_else(|| "unknown".to_string());
+                    let file = finding
+                        .file
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
                     add_result(
                         &mut report,
                         "SEC-002",
@@ -542,8 +606,11 @@ pub fn evaluate_security_policy(
             }
         }
     }
-    
-    report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
+
+    report.blocked = report
+        .violations
+        .iter()
+        .any(|v| v.level == EnforcementLevel::Block);
     report
 }
 
@@ -566,7 +633,7 @@ pub fn evaluate_quality_policy(
     source_id: Option<Uuid>,
 ) -> PolicyEvalReport {
     let mut report = PolicyEvalReport::default();
-    
+
     // QUAL-001: Coverage check
     if policy.require_coverage.level != EnforcementLevel::Off && policy.require_coverage.enabled {
         if !is_excepted("quality.QUAL-001", exceptions, current_ago_path) {
@@ -578,26 +645,30 @@ pub fn evaluate_quality_policy(
                     if let Some(pos) = content.find("line-rate=\"") {
                         let start = pos + 11;
                         if let Some(end) = content[start..].find('"') {
-                            let rate_str = &content[start..start+end];
+                            let rate_str = &content[start..start + end];
                             if let Ok(rate) = rate_str.parse::<f32>() {
-                                 if rate < (policy.min_test_coverage / 100.0) {
-                                     add_result(
+                                if rate < (policy.min_test_coverage / 100.0) {
+                                    add_result(
                                         &mut report,
                                         "QUAL-001",
                                         &policy.require_coverage.level,
                                         rate_str,
-                                        &format!("Coverage {}% is below required {}%", rate * 100.0, policy.min_test_coverage),
+                                        &format!(
+                                            "Coverage {}% is below required {}%",
+                                            rate * 100.0,
+                                            policy.min_test_coverage
+                                        ),
                                         "Increase test coverage and regenerate report",
                                         source_name,
                                         source_id,
                                     );
-                                 }
+                                }
                             }
                         }
                     }
                 }
             } else {
-                 add_result(
+                add_result(
                     &mut report,
                     "QUAL-002",
                     &policy.require_coverage.level,
@@ -615,7 +686,7 @@ pub fn evaluate_quality_policy(
     if policy.require_lint_pass.level != EnforcementLevel::Off && policy.require_lint_pass.enabled {
         if !is_excepted("quality.QUAL-002", exceptions, current_ago_path) {
             if !repo_path.join("lint.json").exists() && !repo_path.join("clippy.json").exists() {
-                 add_result(
+                add_result(
                     &mut report,
                     "QUAL-002",
                     &policy.require_lint_pass.level,
@@ -628,8 +699,11 @@ pub fn evaluate_quality_policy(
             }
         }
     }
-    
-    report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
+
+    report.blocked = report
+        .violations
+        .iter()
+        .any(|v| v.level == EnforcementLevel::Block);
     report
 }
 
@@ -644,7 +718,8 @@ pub fn evaluate_runtime_policy(
     let mut report = PolicyEvalReport::default();
 
     let dockerfile = repo_path.join("Dockerfile");
-    if policy.require_dockerfile.level != EnforcementLevel::Off && policy.require_dockerfile.enabled {
+    if policy.require_dockerfile.level != EnforcementLevel::Off && policy.require_dockerfile.enabled
+    {
         if !is_excepted("runtime.require_dockerfile", exceptions, current_ago_path) {
             if !dockerfile.exists() {
                 add_result(
@@ -666,13 +741,23 @@ pub fn evaluate_runtime_policy(
             let lines: Vec<_> = content.lines().collect();
 
             // RUN-001: Allowed Base Images
-            if policy.allowed_base_images.level != EnforcementLevel::Off && !policy.allowed_base_images.items.is_empty() {
+            if policy.allowed_base_images.level != EnforcementLevel::Off
+                && !policy.allowed_base_images.items.is_empty()
+            {
                 if !is_excepted("runtime.RUN-001", exceptions, current_ago_path) {
                     for line in &lines {
                         if line.trim_start().to_uppercase().starts_with("FROM ") {
-                            let base = line.trim_start()[5..].split_whitespace().next().unwrap_or_default();
-                            if !policy.allowed_base_images.items.iter().any(|item| base.to_lowercase().starts_with(&item.to_lowercase())) {
-                                 add_result(
+                            let base = line.trim_start()[5..]
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or_default();
+                            if !policy
+                                .allowed_base_images
+                                .items
+                                .iter()
+                                .any(|item| base.to_lowercase().starts_with(&item.to_lowercase()))
+                            {
+                                add_result(
                                     &mut report,
                                     "RUN-001",
                                     &policy.allowed_base_images.level,
@@ -689,10 +774,12 @@ pub fn evaluate_runtime_policy(
             }
 
             // RUN-002: Healthcheck check
-            if policy.require_healthcheck.level != EnforcementLevel::Off && policy.require_healthcheck.enabled {
+            if policy.require_healthcheck.level != EnforcementLevel::Off
+                && policy.require_healthcheck.enabled
+            {
                 if !is_excepted("runtime.RUN-002", exceptions, current_ago_path) {
                     if !content.contains("HEALTHCHECK") {
-                         add_result(
+                        add_result(
                             &mut report,
                             "RUN-002",
                             &policy.require_healthcheck.level,
@@ -708,7 +795,10 @@ pub fn evaluate_runtime_policy(
         }
     }
 
-    report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
+    report.blocked = report
+        .violations
+        .iter()
+        .any(|v| v.level == EnforcementLevel::Block);
     report
 }
 
@@ -722,7 +812,7 @@ pub async fn fleet_governance_scan(
     agorg_id: Uuid,
 ) -> miette::Result<GovernanceReconcileReport> {
     let mut agos = vec![];
-    
+
     // Using a fast approach by fetching AGO paths under this agorg_id
     if let Ok(list) = agorg_store.get_agos(agorg_id).await {
         agos = list;
@@ -730,102 +820,140 @@ pub async fn fleet_governance_scan(
 
     let mut statuses = Vec::new();
     let mut total_violations = 0;
-    
+
     for ago in &agos {
         let repo_path = PathBuf::from(&ago.repo_path);
-        
-        let branch_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "branch").await?;
-        let branch_pol: BranchPolicy = get_policy_from_trace(store, &branch_trace).await?.unwrap_or_default();
+
+        let branch_trace = store
+            .resolve_with_trace(agorg_id, &ago.repo_path, "branch")
+            .await?;
+        let branch_pol: BranchPolicy = get_policy_from_trace(store, &branch_trace)
+            .await?
+            .unwrap_or_default();
         let branch_ex = store.get_effective_exceptions(agorg_id, "branch").await?;
         let current_branch = get_current_branch(&repo_path).unwrap_or_else(|| "main".to_string());
         let branch_eval = evaluate_branch_policy(
-            &branch_pol, 
-            "sync", 
-            &current_branch, 
-            &branch_ex, 
-            &ago.repo_path, 
-            &branch_trace.resolved_source, 
-            Some(branch_trace.resolved_agorg_id)
+            &branch_pol,
+            "sync",
+            &current_branch,
+            &branch_ex,
+            &ago.repo_path,
+            &branch_trace.resolved_source,
+            Some(branch_trace.resolved_agorg_id),
         );
         total_violations += branch_eval.violations.len();
 
-        let dep_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "dependency").await?;
-        let dep_pol: DependencyPolicy = get_policy_from_trace(store, &dep_trace).await?.unwrap_or_default();
-        let dep_ex = store.get_effective_exceptions(agorg_id, "dependency").await?;
+        let dep_trace = store
+            .resolve_with_trace(agorg_id, &ago.repo_path, "dependency")
+            .await?;
+        let dep_pol: DependencyPolicy = get_policy_from_trace(store, &dep_trace)
+            .await?
+            .unwrap_or_default();
+        let dep_ex = store
+            .get_effective_exceptions(agorg_id, "dependency")
+            .await?;
         let dep_eval = evaluate_dependency_policy(
-            &dep_pol, 
-            &repo_path, 
-            &dep_ex, 
-            &ago.repo_path, 
-            &dep_trace.resolved_source, 
-            Some(dep_trace.resolved_agorg_id)
+            &dep_pol,
+            &repo_path,
+            &dep_ex,
+            &ago.repo_path,
+            &dep_trace.resolved_source,
+            Some(dep_trace.resolved_agorg_id),
         );
         total_violations += dep_eval.violations.len();
 
-        let rel_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "release").await?;
-        let rel_pol: ReleasePolicy = get_policy_from_trace(store, &rel_trace).await?.unwrap_or_default();
+        let rel_trace = store
+            .resolve_with_trace(agorg_id, &ago.repo_path, "release")
+            .await?;
+        let rel_pol: ReleasePolicy = get_policy_from_trace(store, &rel_trace)
+            .await?
+            .unwrap_or_default();
         let rel_ex = store.get_effective_exceptions(agorg_id, "release").await?;
         let rel_eval = evaluate_release_policy(
-            &rel_pol, 
-            &repo_path, 
-            &rel_ex, 
-            &ago.repo_path, 
-            &rel_trace.resolved_source, 
-            Some(rel_trace.resolved_agorg_id)
+            &rel_pol,
+            &repo_path,
+            &rel_ex,
+            &ago.repo_path,
+            &rel_trace.resolved_source,
+            Some(rel_trace.resolved_agorg_id),
         );
         total_violations += rel_eval.violations.len();
 
-        let sec_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "security").await?;
-        let sec_pol: SecurityPolicy = get_policy_from_trace(store, &sec_trace).await?.unwrap_or_default();
+        let sec_trace = store
+            .resolve_with_trace(agorg_id, &ago.repo_path, "security")
+            .await?;
+        let sec_pol: SecurityPolicy = get_policy_from_trace(store, &sec_trace)
+            .await?
+            .unwrap_or_default();
         let sec_ex = store.get_effective_exceptions(agorg_id, "security").await?;
         let sec_eval = evaluate_security_policy(
-            &sec_pol, 
-            &repo_path, 
-            &sec_ex, 
-            &ago.repo_path, 
-            &sec_trace.resolved_source, 
-            Some(sec_trace.resolved_agorg_id)
+            &sec_pol,
+            &repo_path,
+            &sec_ex,
+            &ago.repo_path,
+            &sec_trace.resolved_source,
+            Some(sec_trace.resolved_agorg_id),
         );
         total_violations += sec_eval.violations.len();
 
-        let qual_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "quality").await?;
-        let qual_pol: QualityPolicy = get_policy_from_trace(store, &qual_trace).await?.unwrap_or_default();
+        let qual_trace = store
+            .resolve_with_trace(agorg_id, &ago.repo_path, "quality")
+            .await?;
+        let qual_pol: QualityPolicy = get_policy_from_trace(store, &qual_trace)
+            .await?
+            .unwrap_or_default();
         let qual_ex = store.get_effective_exceptions(agorg_id, "quality").await?;
         let qual_eval = evaluate_quality_policy(
-            &qual_pol, 
-            &repo_path, 
-            &qual_ex, 
-            &ago.repo_path, 
-            &qual_trace.resolved_source, 
-            Some(qual_trace.resolved_agorg_id)
+            &qual_pol,
+            &repo_path,
+            &qual_ex,
+            &ago.repo_path,
+            &qual_trace.resolved_source,
+            Some(qual_trace.resolved_agorg_id),
         );
         total_violations += qual_eval.violations.len();
 
-        let run_trace = store.resolve_with_trace(agorg_id, &ago.repo_path, "runtime").await?;
-        let run_pol: RuntimePolicy = get_policy_from_trace(store, &run_trace).await?.unwrap_or_default();
+        let run_trace = store
+            .resolve_with_trace(agorg_id, &ago.repo_path, "runtime")
+            .await?;
+        let run_pol: RuntimePolicy = get_policy_from_trace(store, &run_trace)
+            .await?
+            .unwrap_or_default();
         let run_ex = store.get_effective_exceptions(agorg_id, "runtime").await?;
         let run_eval = evaluate_runtime_policy(
-            &run_pol, 
-            &repo_path, 
-            &run_ex, 
-            &ago.repo_path, 
-            &run_trace.resolved_source, 
-            Some(run_trace.resolved_agorg_id)
+            &run_pol,
+            &repo_path,
+            &run_ex,
+            &ago.repo_path,
+            &run_trace.resolved_source,
+            Some(run_trace.resolved_agorg_id),
         );
         total_violations += run_eval.violations.len();
 
         // Include trace contexts
         // No conflict_trace field on PolicyEvalReport, we compute is_overridden directly
-        let is_overridden = branch_trace.resolved_source == "ago_override" ||
-                            dep_trace.resolved_source == "ago_override" ||
-                            rel_trace.resolved_source == "ago_override" ||
-                            sec_trace.resolved_source == "ago_override" ||
-                            qual_trace.resolved_source == "ago_override" ||
-                            run_trace.resolved_source == "ago_override";
+        let is_overridden = branch_trace.resolved_source == "ago_override"
+            || dep_trace.resolved_source == "ago_override"
+            || rel_trace.resolved_source == "ago_override"
+            || sec_trace.resolved_source == "ago_override"
+            || qual_trace.resolved_source == "ago_override"
+            || run_trace.resolved_source == "ago_override";
 
-        let overall = if branch_eval.blocked || dep_eval.blocked || rel_eval.blocked || sec_eval.blocked || qual_eval.blocked || run_eval.blocked {
+        let overall = if branch_eval.blocked
+            || dep_eval.blocked
+            || rel_eval.blocked
+            || sec_eval.blocked
+            || qual_eval.blocked
+            || run_eval.blocked
+        {
             "violation"
-        } else if !branch_eval.warnings.is_empty() || !dep_eval.warnings.is_empty() || !rel_eval.warnings.is_empty() || !sec_eval.warnings.is_empty() || !qual_eval.warnings.is_empty() || !run_eval.warnings.is_empty() {
+        } else if !branch_eval.warnings.is_empty()
+            || !dep_eval.warnings.is_empty()
+            || !rel_eval.warnings.is_empty()
+            || !sec_eval.warnings.is_empty()
+            || !qual_eval.warnings.is_empty()
+            || !run_eval.warnings.is_empty()
+        {
             "warning"
         } else {
             "compliant"
@@ -843,17 +971,25 @@ pub async fn fleet_governance_scan(
                 ("security".to_string(), sec_eval),
                 ("quality".to_string(), qual_eval),
                 ("runtime".to_string(), run_eval),
-            ].into_iter().collect(),
+            ]
+            .into_iter()
+            .collect(),
         });
     }
-    
+
     let agorg_name = match agorg_store.get_agorg(agorg_id).await {
         Ok(Some(agorg)) => agorg.name,
         _ => "Unknown".to_string(),
     };
 
-    let compliant_count = statuses.iter().filter(|s| s.overall_status == "compliant").count();
-    let warning_count = statuses.iter().filter(|s| s.overall_status == "warning").count();
+    let compliant_count = statuses
+        .iter()
+        .filter(|s| s.overall_status == "compliant")
+        .count();
+    let warning_count = statuses
+        .iter()
+        .filter(|s| s.overall_status == "warning")
+        .count();
 
     Ok(GovernanceReconcileReport {
         agorg_id,
@@ -871,11 +1007,25 @@ async fn get_policy_from_trace<T: serde::de::DeserializeOwned>(
     store: &GovernanceStore,
     trace: &PolicyConflictTrace,
 ) -> miette::Result<Option<T>> {
-    let rec = store.get_policy_by_version(trace.resolved_agorg_id, Some(&trace.ago_path), &trace.policy_kind, trace.resolved_version).await?;
+    let rec = store
+        .get_policy_by_version(
+            trace.resolved_agorg_id,
+            Some(&trace.ago_path),
+            &trace.policy_kind,
+            trace.resolved_version,
+        )
+        .await?;
     let val = match rec {
         Some(r) => r.policy_json,
         None => {
-            let rec_no_ago = store.get_policy_by_version(trace.resolved_agorg_id, None, &trace.policy_kind, trace.resolved_version).await?;
+            let rec_no_ago = store
+                .get_policy_by_version(
+                    trace.resolved_agorg_id,
+                    None,
+                    &trace.policy_kind,
+                    trace.resolved_version,
+                )
+                .await?;
             if let Some(r2) = rec_no_ago {
                 r2.policy_json
             } else {
@@ -918,10 +1068,26 @@ mod tests {
         let p = BranchPolicy::default();
         let e = vec![];
 
-        let report = evaluate_branch_policy(&p, "create", "feat/wave-13", &e, "/path/to/repo", "Default", None);
+        let report = evaluate_branch_policy(
+            &p,
+            "create",
+            "feat/wave-13",
+            &e,
+            "/path/to/repo",
+            "Default",
+            None,
+        );
         assert!(!report.blocked);
 
-        let report = evaluate_branch_policy(&p, "create", "fix/lock-drift-182", &e, "/path/to/repo", "Default", None);
+        let report = evaluate_branch_policy(
+            &p,
+            "create",
+            "fix/lock-drift-182",
+            &e,
+            "/path/to/repo",
+            "Default",
+            None,
+        );
         assert!(!report.blocked);
     }
 
@@ -930,13 +1096,30 @@ mod tests {
         let p = BranchPolicy::default();
         let e = vec![];
 
-        let report = evaluate_branch_policy(&p, "create", "main", &e, "/path/to/repo", "Default", None);
+        let report =
+            evaluate_branch_policy(&p, "create", "main", &e, "/path/to/repo", "Default", None);
         assert!(report.blocked); // fails both naming and protected
 
-        let report = evaluate_branch_policy(&p, "create", "feature/mixedCase", &e, "/path/to/repo", "Default", None);
+        let report = evaluate_branch_policy(
+            &p,
+            "create",
+            "feature/mixedCase",
+            &e,
+            "/path/to/repo",
+            "Default",
+            None,
+        );
         assert!(report.blocked);
 
-        let report = evaluate_branch_policy(&p, "create", "feat/bad__name", &e, "/path/to/repo", "Default", None);
+        let report = evaluate_branch_policy(
+            &p,
+            "create",
+            "feat/bad__name",
+            &e,
+            "/path/to/repo",
+            "Default",
+            None,
+        );
         assert!(report.blocked);
     }
 
@@ -946,15 +1129,25 @@ mod tests {
         let e = vec![];
 
         // "main"
-        let report = evaluate_branch_policy(&p, "create", "main", &e, "/path/to/repo", "Default", None);
+        let report =
+            evaluate_branch_policy(&p, "create", "main", &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
 
         // "release/v1.0.0"
-        let report = evaluate_branch_policy(&p, "create", "release/v1.0.0", &e, "/path/to/repo", "Default", None);
+        let report = evaluate_branch_policy(
+            &p,
+            "create",
+            "release/v1.0.0",
+            &e,
+            "/path/to/repo",
+            "Default",
+            None,
+        );
         assert!(report.blocked);
 
         // Not protected
-        let report = evaluate_branch_policy(&p, "create", "feat/x", &e, "/path/to/repo", "Default", None);
+        let report =
+            evaluate_branch_policy(&p, "create", "feat/x", &e, "/path/to/repo", "Default", None);
         assert!(!report.blocked);
     }
 
@@ -963,12 +1156,14 @@ mod tests {
         let p = DependencyPolicy::default();
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
-        let report = evaluate_dependency_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+
+        let report =
+            evaluate_dependency_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
-        
+
         std::fs::File::create(temp.path().join("Cargo.lock")).unwrap();
-        let report = evaluate_dependency_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        let report =
+            evaluate_dependency_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(!report.blocked);
     }
 
@@ -977,10 +1172,10 @@ mod tests {
         let p = ReleasePolicy::default();
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         let report = evaluate_release_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
-        
+
         std::fs::File::create(temp.path().join("CHANGELOG.md")).unwrap();
         let report = evaluate_release_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(!report.blocked);
@@ -993,10 +1188,10 @@ mod tests {
         p.require_dockerfile.enabled = true;
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         let report = evaluate_runtime_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
-        
+
         std::fs::File::create(temp.path().join("Dockerfile")).unwrap();
         let report = evaluate_runtime_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(!report.blocked);
@@ -1007,12 +1202,17 @@ mod tests {
         let p = SecurityPolicy::default();
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         // Ensure the directory looks somewhat valid (e.g. minimal scanning environment)
         std::fs::File::create(temp.path().join("main.rs")).unwrap();
-        std::fs::write(temp.path().join("main.rs"), "let key = \"AKIAABCDEFGHIJKLMNOP\";").unwrap();
-        
-        let report = evaluate_security_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        std::fs::write(
+            temp.path().join("main.rs"),
+            "let key = \"AKIAABCDEFGHIJKLMNOP\";",
+        )
+        .unwrap();
+
+        let report =
+            evaluate_security_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
         assert_eq!(report.violations.len(), 1);
         assert_eq!(report.violations[0].rule, "SEC-001");
@@ -1024,12 +1224,13 @@ mod tests {
         p.banned_packages.items = vec!["left-pad".to_string()];
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         // Setup package.json with banned package
         let pkg_content = r#"{"dependencies": {"left-pad": "1.3.0"}}"#;
         std::fs::write(temp.path().join("package.json"), pkg_content).unwrap();
-        
-        let report = evaluate_dependency_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+
+        let report =
+            evaluate_dependency_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
         assert!(report.violations.iter().any(|v| v.rule == "DEP-001"));
     }
@@ -1041,7 +1242,7 @@ mod tests {
         p.allowed_licenses.items = vec!["MIT".to_string()];
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         // Setup Cargo.toml with disallowed license
         let cargo_content = r#"[package]
 name = "test"
@@ -1049,9 +1250,14 @@ version = "0.1.0"
 license = "GPL-3.0"
 "#;
         std::fs::write(temp.path().join("Cargo.toml"), cargo_content).unwrap();
-        
-        let report = evaluate_dependency_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
-        assert!(report.blocked, "Report should be blocked for disallowed license. Violations: {:?}", report.violations);
+
+        let report =
+            evaluate_dependency_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(
+            report.blocked,
+            "Report should be blocked for disallowed license. Violations: {:?}",
+            report.violations
+        );
         assert!(report.violations.iter().any(|v| v.rule == "DEP-002"));
     }
 
@@ -1064,7 +1270,7 @@ license = "GPL-3.0"
         p.forbidden_days.items = vec![today];
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         let report = evaluate_release_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
         assert!(report.violations.iter().any(|v| v.rule == "REL-001"));
@@ -1078,13 +1284,13 @@ license = "GPL-3.0"
         p.min_test_coverage = 80.0;
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         // Setup coverage.xml with low coverage
         let cov_content = r#"<?xml version="1.0" ?>
 <coverage line-rate="0.50" version="1.0">
 </coverage>"#;
         std::fs::write(temp.path().join("coverage.xml"), cov_content).unwrap();
-        
+
         let report = evaluate_quality_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
         assert!(report.violations.iter().any(|v| v.rule == "QUAL-001"));
@@ -1097,11 +1303,11 @@ license = "GPL-3.0"
         p.allowed_base_images.items = vec!["alpine".to_string()];
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         // Setup Dockerfile with untrusted image
         let docker_content = "FROM ubuntu:latest\n";
         std::fs::write(temp.path().join("Dockerfile"), docker_content).unwrap();
-        
+
         let report = evaluate_runtime_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
         assert!(report.violations.iter().any(|v| v.rule == "RUN-001"));
@@ -1114,11 +1320,11 @@ license = "GPL-3.0"
         p.require_healthcheck.enabled = true;
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         // Setup Dockerfile without HEALTHCHECK
         let docker_content = "FROM alpine:latest\n";
         std::fs::write(temp.path().join("Dockerfile"), docker_content).unwrap();
-        
+
         let report = evaluate_runtime_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
         assert!(report.violations.iter().any(|v| v.rule == "RUN-002"));
@@ -1130,14 +1336,27 @@ license = "GPL-3.0"
         p.max_cve_severity = "medium".to_string();
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         // Write a secret that scan_secrets will find with severity "high"
         // High (3) >= Medium (2) -> SEC-001
-        std::fs::write(temp.path().join("main.rs"), "let k = \"AKIAABCDEFGHIJKLMNOP\";").unwrap();
-        
-        let report = evaluate_security_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
-        assert!(report.blocked, "Report should be blocked for high-severity secret. Violations: {:?}", report.violations);
-        assert!(report.violations.iter().any(|v| v.rule == "SEC-001"), "Expected SEC-001 violation, got: {:?}", report.violations);
+        std::fs::write(
+            temp.path().join("main.rs"),
+            "let k = \"AKIAABCDEFGHIJKLMNOP\";",
+        )
+        .unwrap();
+
+        let report =
+            evaluate_security_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(
+            report.blocked,
+            "Report should be blocked for high-severity secret. Violations: {:?}",
+            report.violations
+        );
+        assert!(
+            report.violations.iter().any(|v| v.rule == "SEC-001"),
+            "Expected SEC-001 violation, got: {:?}",
+            report.violations
+        );
     }
 
     #[test]
@@ -1149,7 +1368,7 @@ license = "GPL-3.0"
         p.require_lint_pass.enabled = true;
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         // No files created
         let report = evaluate_quality_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
@@ -1161,10 +1380,10 @@ license = "GPL-3.0"
         let p = RuntimePolicy::default();
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
-        
+
         // Malformed content (not really malformed for my simple parser, but let's test empty)
         std::fs::write(temp.path().join("Dockerfile"), "").unwrap();
-        
+
         let report = evaluate_runtime_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(!report.blocked); // Default is off
     }

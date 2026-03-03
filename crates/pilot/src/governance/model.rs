@@ -227,11 +227,19 @@ impl Default for ReleasePolicy {
             version_strategy: "semver".to_string(),
             allowed_channels: LevelList {
                 level: EnforcementLevel::Block,
-                items: vec!["alpha".to_string(), "beta".to_string(), "stable".to_string()],
+                items: vec![
+                    "alpha".to_string(),
+                    "beta".to_string(),
+                    "stable".to_string(),
+                ],
             },
             forbidden_days: LevelList {
                 level: EnforcementLevel::Warn,
-                items: vec!["Friday".to_string(), "Saturday".to_string(), "Sunday".to_string()],
+                items: vec![
+                    "Friday".to_string(),
+                    "Saturday".to_string(),
+                    "Sunday".to_string(),
+                ],
             },
         }
     }

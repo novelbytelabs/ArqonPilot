@@ -1,6 +1,7 @@
 use crate::agorg::{self, AgorgStore};
 use crate::bus::{send_command_once, BusBridgeConfig};
 use crate::governance::{eval::*, model::*, store::GovernanceStore};
+use crate::service_supervisor::{supervised_start, RetryPolicy};
 use crate::shim_runtime::bus_shim_command;
 use axum::extract::{Query, State};
 use axum::http::{HeaderValue, StatusCode};
@@ -8,13 +9,13 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use miette::{IntoDiagnostic, Result};
 use pilot_branch as branch;
 use pilot_multi as multi;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fs;
@@ -24,7 +25,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
-use crate::service_supervisor::{supervised_start, RetryPolicy};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{broadcast, Mutex};
@@ -477,37 +477,40 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
 
     if state.allow_mutations {
         let store = state.agorg_store.clone();
-        
+
         // 1. Supervised DB Startup (Blocking)
         println!("[Supervisor] Ensuring Managed DB is online...");
         supervised_start(
             "Managed Database",
             || {
                 let store = store.clone();
-                async move {
-                    store.ensure_managed_db().await.map_err(|e| e.to_string())
-                }
+                async move { store.ensure_managed_db().await.map_err(|e| e.to_string()) }
             },
-            policy.clone()
-        ).await?;
+            policy.clone(),
+        )
+        .await?;
 
         // 2. Supervised Bus Startup (Blocking)
         println!("[Supervisor] Ensuring ArqonBus is online...");
         supervised_start(
             "ArqonBus",
             || async {
-                let (code, out, err) = run_local_script(&bus_shim_command("start")).await
+                let (code, out, err) = run_local_script(&bus_shim_command("start"))
+                    .await
                     .map_err(|e| e.to_string())?;
                 if code != 0 {
                     return Err(format!("Shim exited with {}: {}", code, err));
                 }
                 if !bus_shim_running(&out, &err) {
-                    return Err("Bus reported start success but is not actually running".to_string());
+                    return Err(
+                        "Bus reported start success but is not actually running".to_string()
+                    );
                 }
                 Ok(())
             },
-            policy
-        ).await?;
+            policy,
+        )
+        .await?;
     }
 
     // Now safe to spawn telemetry listener
@@ -565,7 +568,10 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/dependencies/logs", get(get_dependency_logs))
         .route("/api/branch/matrix", post(api_branch_matrix))
         .route("/api/branch/run", post(api_branch_run))
-        .route("/api/branch/conflict-radar", post(api_branch_conflict_radar))
+        .route(
+            "/api/branch/conflict-radar",
+            post(api_branch_conflict_radar),
+        )
         .route("/api/branch/undo-journal", get(api_branch_undo_journal))
         .route("/api/branch/undo", post(api_branch_undo))
         .route("/api/orchestrate/timeline", get(api_orchestrate_timeline))
@@ -671,14 +677,17 @@ async fn static_pilot_ui_js() -> impl IntoResponse {
 
 async fn favicon() -> impl IntoResponse {
     let blank_ico: Vec<u8> = vec![];
-    ([(axum::http::header::CONTENT_TYPE, "image/x-icon")], blank_ico)
+    (
+        [(axum::http::header::CONTENT_TYPE, "image/x-icon")],
+        blank_ico,
+    )
 }
 
 async fn api_health(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     let cmd = bus_shim_command("status");
     let bus_future = run_local_script(&cmd);
     let db_future = state.agorg_store.managed_db_status();
-    
+
     let db_start = std::time::Instant::now();
     let (bus_res, db_res) = tokio::join!(bus_future, db_future);
     let latency_ms = db_start.elapsed().as_millis() as u64;
@@ -1084,7 +1093,13 @@ async fn branch_policy_violation(
             &exceptions,
             "",
             "Active Scope",
-            state.agorg_store.get_active_agorg().await.ok().flatten().map(|a| a.id),
+            state
+                .agorg_store
+                .get_active_agorg()
+                .await
+                .ok()
+                .flatten()
+                .map(|a| a.id),
         );
         if report.blocked {
             let msgs = report
@@ -1113,7 +1128,13 @@ async fn branch_policy_violation(
             &exceptions,
             "",
             "Active Scope",
-            state.agorg_store.get_active_agorg().await.ok().flatten().map(|a| a.id),
+            state
+                .agorg_store
+                .get_active_agorg()
+                .await
+                .ok()
+                .flatten()
+                .map(|a| a.id),
         );
         if report.blocked {
             let msgs = report
@@ -1333,8 +1354,8 @@ async fn api_branch_run(
             );
         }
 
-        let registry = multi::MultiRegistry::open(&multi::MultiRegistry::default_db_path())
-            .unwrap(); 
+        let registry =
+            multi::MultiRegistry::open(&multi::MultiRegistry::default_db_path()).unwrap();
         let roots = scope_roots(&scope);
         let repos = match resolve_branch_targets(&registry, &req, &roots) {
             Ok(v) => v,
@@ -1343,7 +1364,11 @@ async fn api_branch_run(
 
         for repo in repos {
             let repo_path = canonicalize_path_lossy(&repo.path);
-            let ago_path = repo_path.strip_prefix(Path::new(&scope.root_path)).unwrap_or(&repo_path).display().to_string();
+            let ago_path = repo_path
+                .strip_prefix(Path::new(&scope.root_path))
+                .unwrap_or(&repo_path)
+                .display()
+                .to_string();
             let report = evaluate_branch_policy(
                 &policy,
                 "create",
@@ -1583,8 +1608,14 @@ async fn api_branch_run(
 
     // P4: Emit timeline event
     let branch_name = req.branch.clone().unwrap_or_default();
-    let success = response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
-    let failures = response.get("failures").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let success = response
+        .get("ok")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let failures = response
+        .get("failures")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
     let timeline_event = pilot_core::AuditEvent {
         id: uuid::Uuid::new_v4().to_string(),
         timestamp: Utc::now().to_rfc3339(),
@@ -1766,7 +1797,10 @@ async fn api_branch_undo(
         }
     };
     if entry.undone {
-        return error_response(StatusCode::CONFLICT, "This operation has already been undone");
+        return error_response(
+            StatusCode::CONFLICT,
+            "This operation has already been undone",
+        );
     }
 
     let outcome = branch::execute_undo(entry, dry_run);
@@ -1791,7 +1825,7 @@ async fn api_branch_undo(
             content_hash: None,
             prev_hash: None,
             details: json!({
-                "undone_action": entry.action, 
+                "undone_action": entry.action,
                 "prior_ref": entry.prior_ref,
                 "undo_entry_ids": vec![entry.id.clone()],
             }),
@@ -1826,8 +1860,12 @@ async fn api_orchestrate_timeline(
     };
     let limit = q.limit.unwrap_or(50).min(500);
     let offset = q.offset.unwrap_or(0);
-    let scope_opt = if scope_id.is_empty() { None } else { Some(scope_id.as_str()) };
-    
+    let scope_opt = if scope_id.is_empty() {
+        None
+    } else {
+        Some(scope_id.as_str())
+    };
+
     let events = pilot_core::query_audit_events(
         scope_opt,
         q.domain.as_deref(),
@@ -2758,10 +2796,7 @@ async fn api_settings_delete_override(
         .replace("%25", "%");
 
     let gov_store = GovernanceStore::new(state.agorg_store.dsn());
-    match gov_store
-        .revoke_override(agorg_id, &ago_path, &kind)
-        .await
-    {
+    match gov_store.revoke_override(agorg_id, &ago_path, &kind).await {
         Ok(_) => Json(json!({"ok": true})).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -2801,7 +2836,9 @@ async fn api_settings_governance_scan(State(state): State<Arc<UiState>>) -> Resp
     };
 
     let gov_store = GovernanceStore::new(state.agorg_store.dsn());
-    match crate::governance::eval::fleet_governance_scan(&gov_store, &state.agorg_store, agorg_id).await {
+    match crate::governance::eval::fleet_governance_scan(&gov_store, &state.agorg_store, agorg_id)
+        .await
+    {
         Ok(report) => Json(json!({"ok": true, "report": report})).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -3181,7 +3218,7 @@ async fn run_dependency_action(
             }
         };
     }
-    
+
     let policy = RetryPolicy::default();
 
     if action == "db-restart" {
@@ -3288,25 +3325,31 @@ async fn run_dependency_action(
     ) {
         let mut bus_running = false;
         let mut db_running = false;
-        // let mut bus_out = String::new(); // REMOVED unused variable
+        let mut bus_out = String::new();
         let mut bus_err = String::new();
         let mut db_stdout = String::new();
 
         let store = state.agorg_store.clone();
-        
+
         let db_result = match action {
-            "services-stop" => store.stop_managed_db().await.map(|_| ()).map_err(|e| e.to_string()),
-            "services-start" => {
-                supervised_start(
-                    "Managed Database",
-                    || {
-                        let s = store.clone();
-                        async move { s.ensure_managed_db().await.map_err(|e| e.to_string()) }
-                    },
-                    policy.clone()
-                ).await.map(|_| ()).map_err(|e| e.to_string())
-            }
-            _ => { // services-restart
+            "services-stop" => store
+                .stop_managed_db()
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            "services-start" => supervised_start(
+                "Managed Database",
+                || {
+                    let s = store.clone();
+                    async move { s.ensure_managed_db().await.map_err(|e| e.to_string()) }
+                },
+                policy.clone(),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+            _ => {
+                // services-restart
                 let _ = store.stop_managed_db().await;
                 supervised_start(
                     "Managed Database (Restart)",
@@ -3314,8 +3357,11 @@ async fn run_dependency_action(
                         let s = store.clone();
                         async move { s.ensure_managed_db().await.map_err(|e| e.to_string()) }
                     },
-                    policy.clone()
-                ).await.map(|_| ()).map_err(|e| e.to_string())
+                    policy.clone(),
+                )
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
             }
         };
 
@@ -3326,7 +3372,8 @@ async fn run_dependency_action(
                     db_stdout = serde_json::to_string_pretty(&st).unwrap_or_default();
                 } else if let Ok(None) = store.managed_db_status().await {
                     db_running = true;
-                    db_stdout = "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set".to_string();
+                    db_stdout =
+                        "Managed DB disabled: PILOT_AGORG_DATABASE_URL override is set".to_string();
                 }
             }
             Err(e) => {
@@ -3341,7 +3388,11 @@ async fn run_dependency_action(
         };
 
         if action == "services-stop" {
-            let (code, out, err) = run_local_script(&bus_cmd).await.unwrap_or((1, "".into(), "Failed to run bus wrapper".into()));
+            let (code, out, err) = run_local_script(&bus_cmd).await.unwrap_or((
+                1,
+                "".into(),
+                "Failed to run bus wrapper".into(),
+            ));
             bus_running = code == 0 && bus_shim_running(&out, &err);
             bus_out = out;
             bus_err = err;
@@ -3349,7 +3400,9 @@ async fn run_dependency_action(
             let bus_res = supervised_start(
                 "ArqonBus",
                 || async {
-                    let (code, out, err) = run_local_script(&bus_cmd).await.map_err(|e| e.to_string())?;
+                    let (code, out, err) = run_local_script(&bus_cmd)
+                        .await
+                        .map_err(|e| e.to_string())?;
                     if code != 0 {
                         return Err(format!("Shim exited {code}: {err}"));
                     }
@@ -3358,9 +3411,10 @@ async fn run_dependency_action(
                     }
                     Ok((code, out, err))
                 },
-                policy.clone()
-            ).await;
-            
+                policy.clone(),
+            )
+            .await;
+
             match bus_res {
                 Ok((code, ref out, ref err)) => {
                     bus_running = code == 0 && bus_shim_running(out, err);
@@ -3372,7 +3426,7 @@ async fn run_dependency_action(
                 }
             }
         }
-        
+
         let ok = match action {
             "services-stop" => !bus_running && !db_running,
             _ => bus_running && db_running,
@@ -3429,7 +3483,13 @@ async fn run_dependency_action(
                     PreflightStepType::Gate,
                 ];
             }
-            let report = run_preflight_graph(Path::new("."), steps, req.branch.as_deref(), req.remote.as_deref()).await;
+            let report = run_preflight_graph(
+                Path::new("."),
+                steps,
+                req.branch.as_deref(),
+                req.remote.as_deref(),
+            )
+            .await;
             match report {
                 Ok(rep) => {
                     let ok = rep.is_pass();
@@ -3445,23 +3505,57 @@ async fn run_dependency_action(
         }
         ("repair", _) => run_local_script("./scripts/repair_lock_182.sh --no-gate").await,
         ("bus-start", _) => {
-            let res = supervised_start("ArqonBus (Start)", || async {
-                let (code, out, err) = run_local_script(&bus_shim_command("start")).await.map_err(|e| e.to_string())?;
-                if code != 0 { return Err(err); }
-                if !bus_shim_running(&out, &err) { return Err("Not running".into()); }
-                Ok((code, out, err))
-            }, policy.clone()).await;
-            match res { Ok(v) => Ok(v), Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) }
+            let res = supervised_start(
+                "ArqonBus (Start)",
+                || async {
+                    let (code, out, err) = run_local_script(&bus_shim_command("start"))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    if code != 0 {
+                        return Err(err);
+                    }
+                    if !bus_shim_running(&out, &err) {
+                        return Err("Not running".into());
+                    }
+                    Ok((code, out, err))
+                },
+                policy.clone(),
+            )
+            .await;
+            match res {
+                Ok(v) => Ok(v),
+                Err(e) => Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                )),
+            }
         }
         ("bus-stop", _) => run_local_script(&bus_shim_command("stop")).await,
         ("bus-restart", _) => {
-            let res = supervised_start("ArqonBus (Restart)", || async {
-                let (code, out, err) = run_local_script(&bus_shim_command("restart")).await.map_err(|e| e.to_string())?;
-                if code != 0 { return Err(err); }
-                if !bus_shim_running(&out, &err) { return Err("Not running".into()); }
-                Ok((code, out, err))
-            }, policy.clone()).await;
-            match res { Ok(v) => Ok(v), Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) }
+            let res = supervised_start(
+                "ArqonBus (Restart)",
+                || async {
+                    let (code, out, err) = run_local_script(&bus_shim_command("restart"))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    if code != 0 {
+                        return Err(err);
+                    }
+                    if !bus_shim_running(&out, &err) {
+                        return Err("Not running".into());
+                    }
+                    Ok((code, out, err))
+                },
+                policy.clone(),
+            )
+            .await;
+            match res {
+                Ok(v) => Ok(v),
+                Err(e) => Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                )),
+            }
         }
         ("bus-status", _) => run_local_script(&bus_shim_command("status")).await,
         ("push", _) => {
@@ -3553,7 +3647,8 @@ async fn export_evidence_bundle(
     for row in &reports {
         if let Some(p) = row.get("path").and_then(|v| v.as_str()) {
             let abs_path = root.join(p);
-            let sha = pilot_core::compute_file_hash(&abs_path).unwrap_or_else(|_| "hash_failed".to_string());
+            let sha = pilot_core::compute_file_hash(&abs_path)
+                .unwrap_or_else(|_| "hash_failed".to_string());
             artifacts_hashmap.push(json!({"path": p, "sha256": sha}));
         }
     }
@@ -7984,7 +8079,13 @@ async fn api_settings_compliance_scan(
     State(state): State<Arc<UiState>>,
     Json(req): Json<ComplianceScanRequest>,
 ) -> Response {
-    if req.kind != "branch" && req.kind != "dependency" && req.kind != "release" && req.kind != "security" && req.kind != "quality" && req.kind != "runtime" {
+    if req.kind != "branch"
+        && req.kind != "dependency"
+        && req.kind != "release"
+        && req.kind != "security"
+        && req.kind != "quality"
+        && req.kind != "runtime"
+    {
         return error_response(
             StatusCode::BAD_REQUEST,
             "Compliance scan supports branch, dependency, release, security, quality, runtime policies",
@@ -8024,7 +8125,10 @@ async fn api_settings_compliance_scan(
     }
     let statuses = branch::branch_status(&repos);
     let gov_store = GovernanceStore::new(state.agorg_store.dsn());
-    let exceptions = match gov_store.get_effective_exceptions(active_scope.id, &req.kind).await {
+    let exceptions = match gov_store
+        .get_effective_exceptions(active_scope.id, &req.kind)
+        .await
+    {
         Ok(v) => v,
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
@@ -8036,8 +8140,9 @@ async fn api_settings_compliance_scan(
         "quality" => serde_json::to_value(QualityPolicy::default()),
         "runtime" => serde_json::to_value(RuntimePolicy::default()),
         _ => serde_json::to_value(BranchPolicy::default()),
-    }.unwrap_or(json!({}));
-    
+    }
+    .unwrap_or(json!({}));
+
     let mut issues = 0usize;
     let mut off_policy = 0usize;
     let mut details: Vec<Value> = Vec::with_capacity(statuses.len());
@@ -8045,57 +8150,109 @@ async fn api_settings_compliance_scan(
         let repo_path_str = canonicalize_path_lossy(Path::new(&st.path))
             .display()
             .to_string();
-        
+
         let (policy_record, source_name) = match gov_store
             .get_effective_policy_record(active_scope.id, repo_path_str.as_str(), &req.kind)
             .await
         {
             Ok(Some((p, name))) => (p, name),
-            _ => (AgorgPolicyRecord {
-                id: Uuid::nil(),
-                agorg_id: Uuid::nil(),
-                ago_path: None,
-                policy_kind: req.kind.clone(),
-                version: 0,
-                policy_json: default_policy_json.clone(),
-                status: "default".to_string(),
-                updated_at: Utc::now(),
-                updated_by: "system".to_string(),
-            }, "Default".to_string()),
+            _ => (
+                AgorgPolicyRecord {
+                    id: Uuid::nil(),
+                    agorg_id: Uuid::nil(),
+                    ago_path: None,
+                    policy_kind: req.kind.clone(),
+                    version: 0,
+                    policy_json: default_policy_json.clone(),
+                    status: "default".to_string(),
+                    updated_at: Utc::now(),
+                    updated_by: "system".to_string(),
+                },
+                "Default".to_string(),
+            ),
         };
 
         let policy_json = policy_record.policy_json.clone();
-        let source_id = if policy_record.version > 0 { Some(policy_record.agorg_id) } else { None };
+        let source_id = if policy_record.version > 0 {
+            Some(policy_record.agorg_id)
+        } else {
+            None
+        };
 
         let path = Path::new(&st.path);
         let eval = match req.kind.as_str() {
             "branch" => {
                 let policy: BranchPolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_branch_policy(&policy, "create", &st.current_branch, &exceptions, &repo_path_str, &source_name, source_id)
+                evaluate_branch_policy(
+                    &policy,
+                    "create",
+                    &st.current_branch,
+                    &exceptions,
+                    &repo_path_str,
+                    &source_name,
+                    source_id,
+                )
             }
             "dependency" => {
-                let policy: DependencyPolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_dependency_policy(&policy, path, &exceptions, &repo_path_str, &source_name, source_id)
+                let policy: DependencyPolicy =
+                    serde_json::from_value(policy_json).unwrap_or_default();
+                evaluate_dependency_policy(
+                    &policy,
+                    path,
+                    &exceptions,
+                    &repo_path_str,
+                    &source_name,
+                    source_id,
+                )
             }
             "release" => {
                 let policy: ReleasePolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_release_policy(&policy, path, &exceptions, &repo_path_str, &source_name, source_id)
+                evaluate_release_policy(
+                    &policy,
+                    path,
+                    &exceptions,
+                    &repo_path_str,
+                    &source_name,
+                    source_id,
+                )
             }
             "security" => {
-                let policy: SecurityPolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_security_policy(&policy, path, &exceptions, &repo_path_str, &source_name, source_id)
+                let policy: SecurityPolicy =
+                    serde_json::from_value(policy_json).unwrap_or_default();
+                evaluate_security_policy(
+                    &policy,
+                    path,
+                    &exceptions,
+                    &repo_path_str,
+                    &source_name,
+                    source_id,
+                )
             }
             "quality" => {
                 let policy: QualityPolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_quality_policy(&policy, path, &exceptions, &repo_path_str, &source_name, source_id)
+                evaluate_quality_policy(
+                    &policy,
+                    path,
+                    &exceptions,
+                    &repo_path_str,
+                    &source_name,
+                    source_id,
+                )
             }
             "runtime" => {
                 let policy: RuntimePolicy = serde_json::from_value(policy_json).unwrap_or_default();
-                evaluate_runtime_policy(&policy, path, &exceptions, &repo_path_str, &source_name, source_id)
+                evaluate_runtime_policy(
+                    &policy,
+                    path,
+                    &exceptions,
+                    &repo_path_str,
+                    &source_name,
+                    source_id,
+                )
             }
-            _ => PolicyEvalReport::default()
+            _ => PolicyEvalReport::default(),
         };
-        
+
         let issue_count = eval.violations.len() + eval.warnings.len();
         issues += issue_count;
         if issue_count > 0 {
@@ -8183,25 +8340,29 @@ async fn api_settings_policy_resolve(
         .await
     {
         Ok(Some((p, name))) => (p, name),
-        _ => (AgorgPolicyRecord {
-            id: Uuid::nil(),
-            agorg_id: Uuid::nil(),
-            ago_path: None,
-            policy_kind: req.kind.clone(),
-            version: 0,
-            policy_json: match req.kind.as_str() {
-                "branch" => serde_json::to_value(BranchPolicy::default()),
-                "dependency" => serde_json::to_value(DependencyPolicy::default()),
-                "release" => serde_json::to_value(ReleasePolicy::default()),
-                "security" => serde_json::to_value(SecurityPolicy::default()),
-                "quality" => serde_json::to_value(QualityPolicy::default()),
-                "runtime" => serde_json::to_value(RuntimePolicy::default()),
-                _ => serde_json::to_value(BranchPolicy::default()),
-            }.unwrap_or(json!({})),
-            status: "default".to_string(),
-            updated_at: Utc::now(),
-            updated_by: "system".to_string(),
-        }, "Default".to_string()),
+        _ => (
+            AgorgPolicyRecord {
+                id: Uuid::nil(),
+                agorg_id: Uuid::nil(),
+                ago_path: None,
+                policy_kind: req.kind.clone(),
+                version: 0,
+                policy_json: match req.kind.as_str() {
+                    "branch" => serde_json::to_value(BranchPolicy::default()),
+                    "dependency" => serde_json::to_value(DependencyPolicy::default()),
+                    "release" => serde_json::to_value(ReleasePolicy::default()),
+                    "security" => serde_json::to_value(SecurityPolicy::default()),
+                    "quality" => serde_json::to_value(QualityPolicy::default()),
+                    "runtime" => serde_json::to_value(RuntimePolicy::default()),
+                    _ => serde_json::to_value(BranchPolicy::default()),
+                }
+                .unwrap_or(json!({})),
+                status: "default".to_string(),
+                updated_at: Utc::now(),
+                updated_by: "system".to_string(),
+            },
+            "Default".to_string(),
+        ),
     };
 
     Json(json!({
@@ -8244,6 +8405,9 @@ async fn api_orchestrate_run(
                 error_response(StatusCode::BAD_REQUEST, "Invalid command payload format")
             }
         }
-        other => error_response(StatusCode::BAD_REQUEST, &format!("Unknown orchestrator domain: {other}")),
+        other => error_response(
+            StatusCode::BAD_REQUEST,
+            &format!("Unknown orchestrator domain: {other}"),
+        ),
     }
 }

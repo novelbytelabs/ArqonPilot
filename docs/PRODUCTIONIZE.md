@@ -260,6 +260,16 @@ Hard-close evidence:
 1. Targeted tests for each family pass (`cargo test -p pilot --locked` includes new policy suites).
 2. UI settings/governance panel can execute each family flow end-to-end without placeholders.
 
+Status (2026-03-03):
+
+1. `governance::eval` lane is passing with expanded family coverage:
+   - `cargo test -p pilot --locked governance::eval` -> 19 passed.
+2. P1 integration/e2e/adversarial suites are passing:
+   - `cargo test -p pilot --locked --test policy_parity_integration_test --test policy_workflow_e2e_test --test policy_adversarial_test`
+3. `scripts/verify_policy_parity.sh` now performs a DB preflight and is deterministic:
+   - passes normally when managed Postgres can start.
+   - emits explicit `[SKIP]` and exits `0` only for known runtime-denied Postgres socket/shared-memory signatures (`Operation not permitted` / shared-memory `Permission denied`), preventing false-negative parity failures in constrained sandboxes.
+
 ### P2: Deterministic Preflight Graph
 
 Objective:

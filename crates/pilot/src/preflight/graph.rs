@@ -178,34 +178,42 @@ mod tests {
     async fn test_preflight_graph_fail_fast_on_policy() {
         // If we inject a fake step that immediately fails, the subsequent should be Skipped.
         let mut report = PreflightReport::new();
-        report.add(PreflightStepType::Policy, PreflightResult {
-            status: PreflightStatus::Fail,
-            failure_code: Some("BAD".into()),
-            hint: None,
-            messages: vec![]
-        });
-        
+        report.add(
+            PreflightStepType::Policy,
+            PreflightResult {
+                status: PreflightStatus::Fail,
+                failure_code: Some("BAD".into()),
+                hint: None,
+                messages: vec![],
+            },
+        );
+
         // Next step added simulates the engine parsing the graph skipping
         if !report.is_pass() {
-            report.add(PreflightStepType::Hook, PreflightResult {
-                status: PreflightStatus::Skip,
-                failure_code: None,
-                hint: None,
-                messages: vec!["Skipped due to previous failure".to_string()]
-            });
+            report.add(
+                PreflightStepType::Hook,
+                PreflightResult {
+                    status: PreflightStatus::Skip,
+                    failure_code: None,
+                    hint: None,
+                    messages: vec!["Skipped due to previous failure".to_string()],
+                },
+            );
         }
-        
+
         // Check manual continuation constraint.
         assert!(!report.is_pass());
         assert_eq!(report.steps.len(), 2);
         assert_eq!(report.steps[1].result.status, PreflightStatus::Skip);
     }
-    
+
     #[tokio::test]
     async fn test_preflight_graph_pass() {
         // Evaluate the fundamental orchestrator loop with an empty request
         let path = PathBuf::from(".");
-        let report = run_preflight_graph(&path, vec![], None, None).await.unwrap();
+        let report = run_preflight_graph(&path, vec![], None, None)
+            .await
+            .unwrap();
         assert!(report.is_pass());
         assert_eq!(report.steps.len(), 0);
     }

@@ -339,11 +339,23 @@ async fn run_checked(mut cmd: Command, context: &str) -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let tail_stderr = truncate_tail(stderr.trim(), 800);
     let tail_stdout = truncate_tail(stdout.trim(), 800);
+
+    // Try to find if there's a log file we can dump
+    let mut log_dump = String::new();
+    if let Some(arg_idx) = cmd.as_std().get_args().position(|a| a == "-l") {
+        if let Some(log_path) = cmd.as_std().get_args().nth(arg_idx + 1) {
+            if let Ok(content) = std::fs::read_to_string(log_path) {
+                log_dump = format!("\n--- PG LOG TAIL ---\n{}", truncate_tail(&content, 2000));
+            }
+        }
+    }
+
     Err(miette!(
-        "{}\nstdout: {}\nstderr: {}",
+        "{}\nstdout: {}\nstderr: {}{}",
         context,
         tail_stdout,
-        tail_stderr
+        tail_stderr,
+        log_dump
     ))
 }
 

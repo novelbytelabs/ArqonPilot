@@ -48,10 +48,7 @@ impl PreflightReport {
         if result.status == PreflightStatus::Fail {
             self.final_status = PreflightStatus::Fail;
         }
-        self.steps.push(PreflightStepItem {
-            step,
-            result,
-        });
+        self.steps.push(PreflightStepItem { step, result });
     }
 
     pub fn is_pass(&self) -> bool {

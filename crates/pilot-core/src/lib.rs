@@ -1,7 +1,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use sha2::{Sha256, Digest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoContext {
@@ -91,7 +91,7 @@ pub fn write_repo_outcomes_artifact(
     let path = dir.join(format!("{}_{}.json", safe, stamp));
     let body =
         serde_json::to_string_pretty(outcomes).map_err(|e| std::io::Error::other(e.to_string()))?;
-    
+
     // Write the main artifact
     std::fs::write(&path, &body)?;
 
@@ -325,23 +325,32 @@ mod tests {
             .lines()
             .map(|s| s.to_string())
             .collect();
-        
+
         let mut tampered_event: AuditEvent = serde_json::from_str(&lines[1]).unwrap();
         tampered_event.success = false; // The malicious mutation
         lines[1] = serde_json::to_string(&tampered_event).unwrap();
-        
+
         // Write the corrupted chain back
         fs::write(&audit_path, lines.join("\n") + "\n").unwrap();
 
         // 3. Verify the tampered chain fails
         let tampered_res = verify_audit_chain();
-        assert!(!tampered_res.is_valid, "Chain should be invalid after tampering!");
         assert!(
-            tampered_res.errors.iter().any(|e| e.contains("Content hash mismatch")),
+            !tampered_res.is_valid,
+            "Chain should be invalid after tampering!"
+        );
+        assert!(
+            tampered_res
+                .errors
+                .iter()
+                .any(|e| e.contains("Content hash mismatch")),
             "Expected hash mismatch error for the tampered event"
         );
         assert!(
-            tampered_res.errors.iter().any(|e| e.contains("Chain broken")),
+            tampered_res
+                .errors
+                .iter()
+                .any(|e| e.contains("Chain broken")),
             "Expected chain broken error for the subsequent event"
         );
     }

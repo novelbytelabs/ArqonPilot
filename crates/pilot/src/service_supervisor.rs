@@ -1,4 +1,4 @@
-use miette::Result;
+use miette::{IntoDiagnostic, Result};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -35,10 +35,16 @@ where
     let mut attempt = 1;
 
     loop {
-        println!("[Supervisor] Initiating {} (Attempt {}/{})", name, attempt, policy.max_attempts);
+        println!(
+            "[Supervisor] Initiating {} (Attempt {}/{})",
+            name, attempt, policy.max_attempts
+        );
         match action_fn().await {
             Ok(val) => {
-                println!("[Supervisor] {} started successfully on attempt {}", name, attempt);
+                println!(
+                    "[Supervisor] {} started successfully on attempt {}",
+                    name, attempt
+                );
                 return Ok(val);
             }
             Err(e) => {
@@ -57,12 +63,12 @@ where
                 );
 
                 sleep(Duration::from_millis(delay)).await;
-                
+
                 delay = (delay as f64 * policy.backoff_factor) as u64;
                 if delay > policy.max_delay_ms {
                     delay = policy.max_delay_ms;
                 }
-                
+
                 attempt += 1;
             }
         }

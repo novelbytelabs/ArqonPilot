@@ -15,6 +15,22 @@ Keep this file current whenever a new failure class appears.
   2. For Uuid structs like `eval::Scope`, explicitly call `.id.to_string()` when packing into `Option<String>`.
   3. Ensure SQL `as_deref()` comparisons account for this string projection.
 
+## G-041: False P1 parity failures in restricted runtimes (managed Postgres denied)
+
+- Signature:
+  - `verify_policy_parity.sh` or policy integration/e2e tests fail with:
+    - `could not create any Unix-domain sockets`
+    - `could not open shared memory segment ... Permission denied`
+    - `Operation not permitted`
+- Cause:
+  - Runtime/sandbox denies Postgres unix-socket or shared-memory primitives; this is infra-level denial, not policy logic failure.
+- Recovery:
+  1. Treat as environment constraint if and only if signature matches above.
+  2. Use deterministic skip path:
+     - `scripts/verify_policy_parity.sh` now preflights DB start and returns `[SKIP]` with exit `0` only for these known-denied signatures.
+  3. Re-run parity on normal workstation/runtime for full evidence:
+     - `bash scripts/verify_policy_parity.sh`
+
 ## G-018: Widespread compilation failure after `evaluate_*_policy` signature changes
 
 - Signature:

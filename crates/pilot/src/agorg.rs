@@ -78,8 +78,8 @@ pub struct AgorgReconcileIssue {
 pub struct GovernanceReconcileIssue {
     pub ago_path: String,
     pub policy_kind: String,
-    pub issue_type: String,     // "expired_override", "orphan_override", "conflict", "shadow"
-    pub severity: String,       // "error", "warning", "info"
+    pub issue_type: String, // "expired_override", "orphan_override", "conflict", "shadow"
+    pub severity: String,   // "error", "warning", "info"
     pub message: String,
     pub remediation: String,
 }
@@ -859,7 +859,14 @@ impl AgorgStore {
         let gov_store = crate::governance::store::GovernanceStore::new(self.dsn());
         let mut governance_issues = Vec::new();
         let mut conflict_traces = Vec::new();
-        let families = ["branch", "dependency", "release", "security", "quality", "runtime"];
+        let families = [
+            "branch",
+            "dependency",
+            "release",
+            "security",
+            "quality",
+            "runtime",
+        ];
         for fam in families {
             if let Ok(overrides) = gov_store.list_overrides(agorg.id, fam).await {
                 for ov in overrides {
@@ -876,7 +883,10 @@ impl AgorgStore {
                             policy_kind: fam.to_string(),
                             issue_type: "orphan_override".to_string(),
                             severity: "warning".to_string(),
-                            message: format!("Override for {} exists but AGO is missing or pruned", fam),
+                            message: format!(
+                                "Override for {} exists but AGO is missing or pruned",
+                                fam
+                            ),
                             remediation: "Revoke the override or restore the AGO".to_string(),
                         });
                     }
@@ -893,9 +903,12 @@ impl AgorgStore {
                         }
                     }
                     if found {
-                         if let Ok(trace) = gov_store.resolve_with_trace(agorg.id, &ov.ago_path, fam).await {
-                             conflict_traces.push(trace);
-                         }
+                        if let Ok(trace) = gov_store
+                            .resolve_with_trace(agorg.id, &ov.ago_path, fam)
+                            .await
+                        {
+                            conflict_traces.push(trace);
+                        }
                     }
                 }
             }
