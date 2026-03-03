@@ -3288,7 +3288,7 @@ async fn run_dependency_action(
     ) {
         let mut bus_running = false;
         let mut db_running = false;
-        let mut bus_out = String::new();
+        // let mut bus_out = String::new(); // REMOVED unused variable
         let mut bus_err = String::new();
         let mut db_stdout = String::new();
 

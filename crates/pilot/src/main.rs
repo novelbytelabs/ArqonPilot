@@ -9,7 +9,6 @@ mod serve_ui;
 mod shim_runtime;
 pub mod preflight;
 use agorg::AgorgStore;
-use db_runtime::PilotDbManager;
 use pilot_branch as branch;
 use pilot_core::{
     append_audit_event, write_repo_outcomes_artifact, AuditEvent, CommandReport, RepoContext,
@@ -29,11 +28,6 @@ use config::Config;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use shim_runtime::bus_shim_command;
 use std::collections::HashSet;
-use uuid::Uuid;
-use chrono::Utc;
-use sha2::{Digest, Sha256};
-use std::env;
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 

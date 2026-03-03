@@ -1,4 +1,4 @@
-use miette::{IntoDiagnostic, Result};
+use miette::Result;
 use std::time::Duration;
 use tokio::time::sleep;
 

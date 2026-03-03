@@ -171,6 +171,7 @@ pub struct DependencyPolicy {
     pub version: i32,
     pub allowed_registries: LevelList,
     pub banned_packages: LevelList,
+    pub allowed_licenses: LevelList,
     pub require_lockfile: LevelEnabled,
 }
 
@@ -187,6 +188,10 @@ impl Default for DependencyPolicy {
                 level: EnforcementLevel::Block,
                 items: vec![],
             },
+            allowed_licenses: LevelList {
+                level: EnforcementLevel::Off,
+                items: vec![],
+            },
             require_lockfile: LevelEnabled {
                 level: EnforcementLevel::Block,
                 enabled: true,
@@ -200,8 +205,10 @@ pub struct ReleasePolicy {
     pub kind: String,
     pub version: i32,
     pub require_changelog: LevelEnabled,
+    pub require_semver: LevelEnabled,
     pub version_strategy: String,
     pub allowed_channels: LevelList,
+    pub forbidden_days: LevelList,
 }
 
 impl Default for ReleasePolicy {
@@ -213,10 +220,18 @@ impl Default for ReleasePolicy {
                 level: EnforcementLevel::Block,
                 enabled: true,
             },
+            require_semver: LevelEnabled {
+                level: EnforcementLevel::Block,
+                enabled: true,
+            },
             version_strategy: "semver".to_string(),
             allowed_channels: LevelList {
                 level: EnforcementLevel::Block,
                 items: vec!["alpha".to_string(), "beta".to_string(), "stable".to_string()],
+            },
+            forbidden_days: LevelList {
+                level: EnforcementLevel::Warn,
+                items: vec!["Friday".to_string(), "Saturday".to_string(), "Sunday".to_string()],
             },
         }
     }
@@ -250,7 +265,8 @@ pub struct QualityPolicy {
     pub version: i32,
     pub require_lint_pass: LevelEnabled,
     pub require_format_pass: LevelEnabled,
-    pub min_test_coverage: u32,
+    pub require_coverage: LevelEnabled,
+    pub min_test_coverage: f32,
 }
 
 impl Default for QualityPolicy {
@@ -266,7 +282,11 @@ impl Default for QualityPolicy {
                 level: EnforcementLevel::Warn,
                 enabled: true,
             },
-            min_test_coverage: 0,
+            require_coverage: LevelEnabled {
+                level: EnforcementLevel::Off,
+                enabled: false,
+            },
+            min_test_coverage: 0.0,
         }
     }
 }
@@ -276,6 +296,7 @@ pub struct RuntimePolicy {
     pub kind: String,
     pub version: i32,
     pub require_dockerfile: LevelEnabled,
+    pub require_healthcheck: LevelEnabled,
     pub allowed_base_images: LevelList,
 }
 
@@ -285,6 +306,10 @@ impl Default for RuntimePolicy {
             kind: "runtime".to_string(),
             version: 1,
             require_dockerfile: LevelEnabled {
+                level: EnforcementLevel::Off,
+                enabled: false,
+            },
+            require_healthcheck: LevelEnabled {
                 level: EnforcementLevel::Off,
                 enabled: false,
             },

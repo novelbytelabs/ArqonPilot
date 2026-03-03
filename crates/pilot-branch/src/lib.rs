@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use pilot_multi::RepoEntry;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use uuid::Uuid;

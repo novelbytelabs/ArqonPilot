@@ -1,9 +1,10 @@
 use super::model::*;
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use crate::agorg::AgorgStore;
 use crate::governance::store::GovernanceStore;
+use serde_json::Value;
 
 pub fn evaluate_branch_policy(
     policy: &BranchPolicy,
@@ -278,7 +279,7 @@ pub fn evaluate_dependency_policy(
     let mut report = PolicyEvalReport::default();
 
     if policy.require_lockfile.level != EnforcementLevel::Off {
-        if !is_excepted("require_lockfile", exceptions, current_ago_path) {
+        if !is_excepted("dependency.require_lockfile", exceptions, current_ago_path) {
             let has_cargo_lock = repo_path.join("Cargo.lock").exists();
             let has_package_lock = repo_path.join("package-lock.json").exists();
             let has_poetry_lock = repo_path.join("poetry.lock").exists();
@@ -299,6 +300,113 @@ pub fn evaluate_dependency_policy(
         }
     }
 
+    // DEP-001: Banned Packages & DEP-002: Allowed Licenses
+    if (policy.banned_packages.level != EnforcementLevel::Off && !policy.banned_packages.items.is_empty()) || 
+       (policy.allowed_licenses.level != EnforcementLevel::Off && !policy.allowed_licenses.items.is_empty()) {
+        
+        // Scan Cargo.toml
+        let cargo_toml = repo_path.join("Cargo.toml");
+        if cargo_toml.exists() {
+            if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
+                match toml::from_str::<toml::Value>(&content) {
+                    Ok(doc) => {
+                        // Check License
+                        if policy.allowed_licenses.level != EnforcementLevel::Off && !is_excepted("dependency.DEP-002", exceptions, current_ago_path) {
+                            let license = doc.get("package").and_then(|p| p.get("license")).and_then(|l| l.as_str());
+                            if let Some(l) = license {
+                                if !policy.allowed_licenses.items.iter().any(|item| item == l) {
+                                    add_result(
+                                        &mut report,
+                                        "DEP-002",
+                                        &policy.allowed_licenses.level,
+                                        l,
+                                        &format!("Disallowed license '{}'", l),
+                                        "Use an approved license (MIT, Apache-2.0, etc.)",
+                                        source_name,
+                                        source_id,
+                                    );
+                                }
+                            }
+                        }
+                        // Check Dependencies
+                        if policy.banned_packages.level != EnforcementLevel::Off && !is_excepted("dependency.DEP-001", exceptions, current_ago_path) {
+                            let deps = ["dependencies", "dev-dependencies", "build-dependencies"];
+                            for group in deps {
+                                if let Some(d) = doc.get(group).and_then(|v| v.as_table()) {
+                                    for (name, _) in d {
+                                        if policy.banned_packages.items.iter().any(|b| name.contains(b)) {
+                                            add_result(
+                                                &mut report,
+                                                "DEP-001",
+                                                &policy.banned_packages.level,
+                                                name,
+                                                &format!("Banned package '{}' detected in {}", name, group),
+                                                "Remove the banned dependency",
+                                                source_name,
+                                                source_id,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // Silent fail for malformed TOML in production, but we could log to tracing
+                    }
+                }
+            }
+        }
+
+        // Scan package.json
+        let pkg_json = repo_path.join("package.json");
+        if pkg_json.exists() {
+            if let Ok(content) = std::fs::read_to_string(&pkg_json) {
+                if let Ok(json) = serde_json::from_str::<Value>(&content) {
+                    // Check License
+                    if policy.allowed_licenses.level != EnforcementLevel::Off && !is_excepted("dependency.DEP-002", exceptions, current_ago_path) {
+                        if let Some(l) = json.get("license").and_then(|v| v.as_str()) {
+                             if !policy.allowed_licenses.items.iter().any(|item| item == l) {
+                                add_result(
+                                    &mut report,
+                                    "DEP-002",
+                                    &policy.allowed_licenses.level,
+                                    l,
+                                    &format!("Disallowed license '{}' in package.json", l),
+                                    "Update to an approved license",
+                                    source_name,
+                                    source_id,
+                                );
+                            }
+                        }
+                    }
+                    // Check Dependencies
+                    if policy.banned_packages.level != EnforcementLevel::Off && !is_excepted("dependency.DEP-001", exceptions, current_ago_path) {
+                        let groups = ["dependencies", "devDependencies", "peerDependencies"];
+                        for group in groups {
+                            if let Some(d) = json.get(group).and_then(|v| v.as_object()) {
+                                for (name, _) in d {
+                                    if policy.banned_packages.items.iter().any(|b| name.contains(b)) {
+                                        add_result(
+                                            &mut report,
+                                            "DEP-001",
+                                            &policy.banned_packages.level,
+                                            name,
+                                            &format!("Banned package '{}' detected in {}", name, group),
+                                            "Remove or replace the banned dependency",
+                                            source_name,
+                                            source_id,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
     report
 }
@@ -314,7 +422,7 @@ pub fn evaluate_release_policy(
     let mut report = PolicyEvalReport::default();
 
     if policy.require_changelog.level != EnforcementLevel::Off {
-        if !is_excepted("require_changelog", exceptions, current_ago_path) {
+        if !is_excepted("release.require_changelog", exceptions, current_ago_path) {
             if !repo_path.join("CHANGELOG.md").exists() {
                 add_result(
                     &mut report,
@@ -326,6 +434,54 @@ pub fn evaluate_release_policy(
                     source_name,
                     source_id,
                 );
+            }
+        }
+    }
+
+    // REL-001: Forbidden Days (UTC)
+    if policy.forbidden_days.level != EnforcementLevel::Off && !policy.forbidden_days.items.is_empty() {
+        if !is_excepted("release.REL-001", exceptions, current_ago_path) {
+            let today = Utc::now().weekday().to_string(); // e.g. "Friday"
+            if policy.forbidden_days.items.iter().any(|d| d.eq_ignore_ascii_case(&today)) {
+                 add_result(
+                    &mut report,
+                    "REL-001",
+                    &policy.forbidden_days.level,
+                    &today,
+                    &format!("Deployment forbidden on {}", today),
+                    "Wait for a permitted deployment window",
+                    source_name,
+                    source_id,
+                );
+            }
+        }
+    }
+
+    // REL-002: SemVer requirement
+    if policy.require_semver.level != EnforcementLevel::Off && policy.require_semver.enabled {
+        if !is_excepted("release.REL-002", exceptions, current_ago_path) {
+            let cargo_toml = repo_path.join("Cargo.toml");
+            if cargo_toml.exists() {
+                if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
+                    if let Ok(doc) = content.parse::<toml::Value>() {
+                        let version = doc.get("package").and_then(|p| p.get("version")).and_then(|v| v.as_str());
+                        if let Some(v) = version {
+                            // Simple semver regex check
+                            if !v.starts_with(|c: char| c.is_ascii_digit()) || v.split('.').count() < 2 {
+                                 add_result(
+                                    &mut report,
+                                    "REL-002",
+                                    &policy.require_semver.level,
+                                    v,
+                                    &format!("Version '{}' does not follow SemVer", v),
+                                    "Use x.y.z versioning format",
+                                    source_name,
+                                    source_id,
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -344,22 +500,41 @@ pub fn evaluate_security_policy(
 ) -> PolicyEvalReport {
     let mut report = PolicyEvalReport::default();
     
-    if policy.block_naked_secrets.level != EnforcementLevel::Off {
-        if !is_excepted("block_naked_secrets", exceptions, current_ago_path) {
-            if let Ok(scan) = pilot_secure::scan_repo(repo_path) {
-                let secrets: Vec<_> = scan.findings.into_iter()
-                    .filter(|f| f.category == "secret")
-                    .collect();
-                    
-                for secret in secrets {
-                    let file = secret.file.unwrap_or_else(|| "unknown".to_string());
+    // SEC-001: Vulnerability Threshold
+    if let Ok(scan) = pilot_secure::scan_repo(repo_path) {
+        let max_severity_rank = severity_rank(&policy.max_cve_severity);
+        
+        for finding in scan.findings {
+            let finding_rank = severity_rank(&finding.severity);
+            
+            // Only report if it meets the category or exceeds threshold
+            let is_secret = finding.category == "secret";
+            let exceeds_threshold = finding_rank >= max_severity_rank && finding_rank > 0;
+            
+            if exceeds_threshold {
+                if !is_excepted("security.SEC-001", exceptions, current_ago_path) {
+                    let file = finding.file.clone().unwrap_or_else(|| "unknown".to_string());
                     add_result(
                         &mut report,
-                        "block_naked_secrets",
+                        "SEC-001",
+                        &EnforcementLevel::Block, // Vulnerability threshold violations are fixed at Block
+                        &file,
+                        &finding.message,
+                        &finding.recommendation,
+                        source_name,
+                        source_id,
+                    );
+                }
+            } else if is_secret && policy.block_naked_secrets.enabled && policy.block_naked_secrets.level != EnforcementLevel::Off {
+                if !is_excepted("security.SEC-002", exceptions, current_ago_path) {
+                    let file = finding.file.clone().unwrap_or_else(|| "unknown".to_string());
+                    add_result(
+                        &mut report,
+                        "SEC-002",
                         &policy.block_naked_secrets.level,
                         &file,
-                        &secret.message,
-                        &secret.recommendation,
+                        &finding.message,
+                        &finding.recommendation,
                         source_name,
                         source_id,
                     );
@@ -372,17 +547,87 @@ pub fn evaluate_security_policy(
     report
 }
 
+fn severity_rank(s: &str) -> i32 {
+    match s.to_lowercase().as_str() {
+        "critical" => 4,
+        "high" => 3,
+        "medium" => 2,
+        "low" => 1,
+        _ => 0,
+    }
+}
+
 pub fn evaluate_quality_policy(
-    _policy: &QualityPolicy,
-    _repo_path: &Path,
-    _exceptions: &[PolicyException],
-    _current_ago_path: &str,
-    _source_name: &str,
-    _source_id: Option<Uuid>,
+    policy: &QualityPolicy,
+    repo_path: &Path,
+    exceptions: &[PolicyException],
+    current_ago_path: &str,
+    source_name: &str,
+    source_id: Option<Uuid>,
 ) -> PolicyEvalReport {
     let mut report = PolicyEvalReport::default();
     
-    // Stub for now
+    // QUAL-001: Coverage check
+    if policy.require_coverage.level != EnforcementLevel::Off && policy.require_coverage.enabled {
+        if !is_excepted("quality.QUAL-001", exceptions, current_ago_path) {
+            let coverage_file = repo_path.join("coverage.xml");
+            if coverage_file.exists() {
+                if let Ok(content) = std::fs::read_to_string(&coverage_file) {
+                    // Crude regex-like search for line-rate="0.X"
+                    // e.g. <coverage line-rate="0.85" ...>
+                    if let Some(pos) = content.find("line-rate=\"") {
+                        let start = pos + 11;
+                        if let Some(end) = content[start..].find('"') {
+                            let rate_str = &content[start..start+end];
+                            if let Ok(rate) = rate_str.parse::<f32>() {
+                                 if rate < (policy.min_test_coverage / 100.0) {
+                                     add_result(
+                                        &mut report,
+                                        "QUAL-001",
+                                        &policy.require_coverage.level,
+                                        rate_str,
+                                        &format!("Coverage {}% is below required {}%", rate * 100.0, policy.min_test_coverage),
+                                        "Increase test coverage and regenerate report",
+                                        source_name,
+                                        source_id,
+                                    );
+                                 }
+                            }
+                        }
+                    }
+                }
+            } else {
+                 add_result(
+                    &mut report,
+                    "QUAL-002",
+                    &policy.require_coverage.level,
+                    "coverage.xml",
+                    "Missing coverage report (coverage.xml)",
+                    "Run tests with coverage and output Cobertura XML",
+                    source_name,
+                    source_id,
+                );
+            }
+        }
+    }
+
+    // Lint check contract
+    if policy.require_lint_pass.level != EnforcementLevel::Off && policy.require_lint_pass.enabled {
+        if !is_excepted("quality.QUAL-002", exceptions, current_ago_path) {
+            if !repo_path.join("lint.json").exists() && !repo_path.join("clippy.json").exists() {
+                 add_result(
+                    &mut report,
+                    "QUAL-002",
+                    &policy.require_lint_pass.level,
+                    "lint.json",
+                    "Missing lint report (lint.json or clippy.json)",
+                    "Run linter and export results to JSON",
+                    source_name,
+                    source_id,
+                );
+            }
+        }
+    }
     
     report.blocked = report.violations.iter().any(|v| v.level == EnforcementLevel::Block);
     report
@@ -398,9 +643,10 @@ pub fn evaluate_runtime_policy(
 ) -> PolicyEvalReport {
     let mut report = PolicyEvalReport::default();
 
-    if policy.require_dockerfile.level != EnforcementLevel::Off {
-        if !is_excepted("require_dockerfile", exceptions, current_ago_path) {
-            if !repo_path.join("Dockerfile").exists() {
+    let dockerfile = repo_path.join("Dockerfile");
+    if policy.require_dockerfile.level != EnforcementLevel::Off && policy.require_dockerfile.enabled {
+        if !is_excepted("runtime.require_dockerfile", exceptions, current_ago_path) {
+            if !dockerfile.exists() {
                 add_result(
                     &mut report,
                     "require_dockerfile",
@@ -411,6 +657,53 @@ pub fn evaluate_runtime_policy(
                     source_name,
                     source_id,
                 );
+            }
+        }
+    }
+
+    if dockerfile.exists() {
+        if let Ok(content) = std::fs::read_to_string(&dockerfile) {
+            let lines: Vec<_> = content.lines().collect();
+
+            // RUN-001: Allowed Base Images
+            if policy.allowed_base_images.level != EnforcementLevel::Off && !policy.allowed_base_images.items.is_empty() {
+                if !is_excepted("runtime.RUN-001", exceptions, current_ago_path) {
+                    for line in &lines {
+                        if line.trim_start().to_uppercase().starts_with("FROM ") {
+                            let base = line.trim_start()[5..].split_whitespace().next().unwrap_or_default();
+                            if !policy.allowed_base_images.items.iter().any(|item| base.to_lowercase().starts_with(&item.to_lowercase())) {
+                                 add_result(
+                                    &mut report,
+                                    "RUN-001",
+                                    &policy.allowed_base_images.level,
+                                    base,
+                                    &format!("Untrusted base image '{}'", base),
+                                    "Use an approved base image (e.g. alpine, node:22-bookworm)",
+                                    source_name,
+                                    source_id,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // RUN-002: Healthcheck check
+            if policy.require_healthcheck.level != EnforcementLevel::Off && policy.require_healthcheck.enabled {
+                if !is_excepted("runtime.RUN-002", exceptions, current_ago_path) {
+                    if !content.contains("HEALTHCHECK") {
+                         add_result(
+                            &mut report,
+                            "RUN-002",
+                            &policy.require_healthcheck.level,
+                            "Dockerfile",
+                            "Missing HEALTHCHECK instruction",
+                            "Add HEALTHCHECK to the Dockerfile",
+                            source_name,
+                            source_id,
+                        );
+                    }
+                }
             }
         }
     }
@@ -697,6 +990,7 @@ mod tests {
     fn test_runtime_policy_no_dockerfile() {
         let mut p = RuntimePolicy::default();
         p.require_dockerfile.level = EnforcementLevel::Block;
+        p.require_dockerfile.enabled = true;
         let e = vec![];
         let temp = tempfile::tempdir().unwrap();
         
@@ -721,7 +1015,158 @@ mod tests {
         let report = evaluate_security_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(report.blocked);
         assert_eq!(report.violations.len(), 1);
-        assert_eq!(report.violations[0].rule, "block_naked_secrets");
+        assert_eq!(report.violations[0].rule, "SEC-001");
+    }
+
+    #[test]
+    fn test_dependency_policy_banned_package() {
+        let mut p = DependencyPolicy::default();
+        p.banned_packages.items = vec!["left-pad".to_string()];
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        // Setup package.json with banned package
+        let pkg_content = r#"{"dependencies": {"left-pad": "1.3.0"}}"#;
+        std::fs::write(temp.path().join("package.json"), pkg_content).unwrap();
+        
+        let report = evaluate_dependency_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(report.blocked);
+        assert!(report.violations.iter().any(|v| v.rule == "DEP-001"));
+    }
+
+    #[test]
+    fn test_dependency_policy_disallowed_license() {
+        let mut p = DependencyPolicy::default();
+        p.allowed_licenses.level = EnforcementLevel::Block;
+        p.allowed_licenses.items = vec!["MIT".to_string()];
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        // Setup Cargo.toml with disallowed license
+        let cargo_content = r#"[package]
+name = "test"
+version = "0.1.0"
+license = "GPL-3.0"
+"#;
+        std::fs::write(temp.path().join("Cargo.toml"), cargo_content).unwrap();
+        
+        let report = evaluate_dependency_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(report.blocked, "Report should be blocked for disallowed license. Violations: {:?}", report.violations);
+        assert!(report.violations.iter().any(|v| v.rule == "DEP-002"));
+    }
+
+    #[test]
+    fn test_release_policy_forbidden_day() {
+        let mut p = ReleasePolicy::default();
+        p.forbidden_days.level = EnforcementLevel::Block;
+        // Ensure today is in the forbidden list to test failure
+        let today = Utc::now().weekday().to_string();
+        p.forbidden_days.items = vec![today];
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        let report = evaluate_release_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(report.blocked);
+        assert!(report.violations.iter().any(|v| v.rule == "REL-001"));
+    }
+
+    #[test]
+    fn test_quality_policy_low_coverage() {
+        let mut p = QualityPolicy::default();
+        p.require_coverage.level = EnforcementLevel::Block;
+        p.require_coverage.enabled = true;
+        p.min_test_coverage = 80.0;
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        // Setup coverage.xml with low coverage
+        let cov_content = r#"<?xml version="1.0" ?>
+<coverage line-rate="0.50" version="1.0">
+</coverage>"#;
+        std::fs::write(temp.path().join("coverage.xml"), cov_content).unwrap();
+        
+        let report = evaluate_quality_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(report.blocked);
+        assert!(report.violations.iter().any(|v| v.rule == "QUAL-001"));
+    }
+
+    #[test]
+    fn test_runtime_policy_untrusted_image() {
+        let mut p = RuntimePolicy::default();
+        p.allowed_base_images.level = EnforcementLevel::Block;
+        p.allowed_base_images.items = vec!["alpine".to_string()];
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        // Setup Dockerfile with untrusted image
+        let docker_content = "FROM ubuntu:latest\n";
+        std::fs::write(temp.path().join("Dockerfile"), docker_content).unwrap();
+        
+        let report = evaluate_runtime_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(report.blocked);
+        assert!(report.violations.iter().any(|v| v.rule == "RUN-001"));
+    }
+
+    #[test]
+    fn test_runtime_policy_missing_healthcheck() {
+        let mut p = RuntimePolicy::default();
+        p.require_healthcheck.level = EnforcementLevel::Block;
+        p.require_healthcheck.enabled = true;
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        // Setup Dockerfile without HEALTHCHECK
+        let docker_content = "FROM alpine:latest\n";
+        std::fs::write(temp.path().join("Dockerfile"), docker_content).unwrap();
+        
+        let report = evaluate_runtime_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(report.blocked);
+        assert!(report.violations.iter().any(|v| v.rule == "RUN-002"));
+    }
+
+    #[test]
+    fn test_security_policy_violation() {
+        let mut p = SecurityPolicy::default();
+        p.max_cve_severity = "medium".to_string();
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        // Write a secret that scan_secrets will find with severity "high"
+        // High (3) >= Medium (2) -> SEC-001
+        std::fs::write(temp.path().join("main.rs"), "let k = \"AKIAABCDEFGHIJKLMNOP\";").unwrap();
+        
+        let report = evaluate_security_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(report.blocked, "Report should be blocked for high-severity secret. Violations: {:?}", report.violations);
+        assert!(report.violations.iter().any(|v| v.rule == "SEC-001"), "Expected SEC-001 violation, got: {:?}", report.violations);
+    }
+
+    #[test]
+    fn test_quality_policy_missing_reports() {
+        let mut p = QualityPolicy::default();
+        p.require_coverage.level = EnforcementLevel::Block;
+        p.require_coverage.enabled = true;
+        p.require_lint_pass.level = EnforcementLevel::Block;
+        p.require_lint_pass.enabled = true;
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        // No files created
+        let report = evaluate_quality_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(report.blocked);
+        assert!(report.violations.iter().any(|v| v.rule == "QUAL-002"));
+    }
+
+    #[test]
+    fn test_runtime_policy_malformed_dockerfile() {
+        let p = RuntimePolicy::default();
+        let e = vec![];
+        let temp = tempfile::tempdir().unwrap();
+        
+        // Malformed content (not really malformed for my simple parser, but let's test empty)
+        std::fs::write(temp.path().join("Dockerfile"), "").unwrap();
+        
+        let report = evaluate_runtime_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
+        assert!(!report.blocked); // Default is off
     }
 
     #[test]
