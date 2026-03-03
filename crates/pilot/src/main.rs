@@ -2207,15 +2207,21 @@ fn persist_mutation_audit(command: &str, dry_run: bool, summary: &str, outcomes:
         .map(|p| p.display().to_string())
         .ok();
 
+    let repos: Vec<String> = outcomes.iter().map(|o| o.repo.clone()).collect();
     let event = AuditEvent {
+        id: uuid::Uuid::new_v4().to_string(),
         timestamp: String::new(),
-        command: command.to_string(),
+        scope_id: None, // Scope is implicit or not available here
+        domain: "command".to_string(),
+        action: command.to_string(),
         dry_run,
         success: failures == 0,
         summary: summary.to_string(),
         repo_count,
         failures,
         artifact_path: artifact_path.clone(),
+        repos,
+        details: serde_json::json!({}),
     };
 
     if let Ok(audit_path) = append_audit_event(event) {

@@ -63,6 +63,12 @@ struct UiCommandRequest {
     payload: Value,
 }
 
+#[derive(Debug, Deserialize)]
+struct OrchestratorRequest {
+    domain: String, // "branch", "dependency", "command"
+    payload: Value,
+}
+
 #[derive(Debug, Serialize)]
 struct UiCommandResponse {
     ok: bool,
@@ -523,7 +529,8 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/branch/conflict-radar", post(api_branch_conflict_radar))
         .route("/api/branch/undo-journal", get(api_branch_undo_journal))
         .route("/api/branch/undo", post(api_branch_undo))
-        .route("/api/branch/timeline", get(api_branch_timeline))
+        .route("/api/orchestrate/timeline", get(api_orchestrate_timeline))
+        .route("/api/orchestrate/run", post(api_orchestrate_run))
         .route(
             "/api/system/temporary_components",
             get(get_temporary_components),
@@ -1482,26 +1489,28 @@ async fn api_branch_run(
     let branch_name = req.branch.clone().unwrap_or_default();
     let success = response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     let failures = response.get("failures").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let timeline_event = branch::BranchTimelineEvent {
+    let timeline_event = pilot_core::AuditEvent {
         id: uuid::Uuid::new_v4().to_string(),
         timestamp: Utc::now().to_rfc3339(),
         scope_id: Some(scope.id.to_string()),
+        domain: "branch".to_string(),
         action: action.clone(),
-        branch: branch_name.clone(),
-        base_branch: base_branch.clone(),
-        repos: repos.iter().map(|r| r.name.clone()).collect(),
         dry_run,
         success,
+        summary: format!("Branch action {} completed", action),
         repo_count: repos.len(),
         failures,
-        conflict_count: 0,
-        undo_entry_ids: vec![],
+        artifact_path: None,
+        repos: repos.iter().map(|r| r.name.clone()).collect(),
         details: json!({"response_summary": {
             "ok": success,
             "failures": failures,
+            "branch": branch_name,
+            "base_branch": base_branch,
+            "conflict_count": 0,
         }}),
     };
-    let _ = branch::emit_branch_event(&timeline_event);
+    let _ = pilot_core::append_audit_event(timeline_event);
 
     // P4: Include confirmation metadata in preview responses
     let mut response = response;
@@ -1668,23 +1677,26 @@ async fn api_branch_undo(
         let _ = branch::mark_undone(&entry.id);
 
         // Emit timeline event for the undo
-        let timeline_event = branch::BranchTimelineEvent {
+        let timeline_event = pilot_core::AuditEvent {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: Utc::now().to_rfc3339(),
             scope_id: Some(scope.id.to_string()),
+            domain: "branch".to_string(),
             action: "undo".to_string(),
-            branch: entry.branch_name.clone(),
-            base_branch: String::new(),
-            repos: vec![entry.repo.clone()],
             dry_run: false,
             success: outcome.success,
+            summary: format!("Branch undo completed for {}", entry.branch_name),
             repo_count: 1,
             failures: if outcome.success { 0 } else { 1 },
-            conflict_count: 0,
-            undo_entry_ids: vec![entry.id.clone()],
-            details: json!({"undone_action": entry.action, "prior_ref": entry.prior_ref}),
+            artifact_path: None,
+            repos: vec![entry.repo.clone()],
+            details: json!({
+                "undone_action": entry.action, 
+                "prior_ref": entry.prior_ref,
+                "undo_entry_ids": vec![entry.id.clone()],
+            }),
         };
-        let _ = branch::emit_branch_event(&timeline_event);
+        let _ = pilot_core::append_audit_event(timeline_event);
     }
 
     Json(json!({
@@ -1700,21 +1712,25 @@ async fn api_branch_undo(
 struct TimelineQuery {
     limit: Option<usize>,
     offset: Option<usize>,
+    domain: Option<String>,
     action: Option<String>,
 }
 
-async fn api_branch_timeline(
+async fn api_orchestrate_timeline(
     State(state): State<Arc<UiState>>,
     Query(q): Query<TimelineQuery>,
 ) -> Response {
-    let scope = match require_active_scope(&state).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
+    let scope_id = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(active)) => active.id.to_string(),
+        _ => "".to_string(),
     };
     let limit = q.limit.unwrap_or(50).min(500);
     let offset = q.offset.unwrap_or(0);
-    let events = branch::query_branch_timeline(
-        Some(scope.id.to_string()),
+    let scope_opt = if scope_id.is_empty() { None } else { Some(scope_id.as_str()) };
+    
+    let events = pilot_core::query_audit_events(
+        scope_opt,
+        q.domain.as_deref(),
         q.action.as_deref(),
         limit,
         offset,
@@ -1722,7 +1738,7 @@ async fn api_branch_timeline(
 
     Json(json!({
         "ok": true,
-        "scope_id": scope.id,
+        "scope_id": scope_id,
         "count": events.len(),
         "limit": limit,
         "offset": offset,
@@ -5894,6 +5910,26 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <button type="button" class="seq-step seq-step-btn" onclick="dashWorkflowHint('push')" title="Guided path only: no commands are executed">Push Safe -> Timeline Verify</button>
     </div>
     <div class="grid">
+      <div class="card" style="grid-column: 1 / -1;">
+        <h3>Unified Operations Timeline</h3>
+        <div class="helper">Stitched chronological log across all domains (Branch, Dependencies, Commands).</div>
+        <div class="row">
+          <select id="dash-timeline-domain" onchange="unifiedTimelineLoad()">
+            <option value="">All Domains</option>
+            <option value="branch">Branch</option>
+            <option value="dependency">Dependency</option>
+            <option value="heal">Heal</option>
+            <option value="command">Command</option>
+          </select>
+          <button class="btn secondary" onclick="unifiedTimelineLoad()">Refresh Timeline</button>
+        </div>
+        <div class="pre-wrap">
+          <div class="pre-actions">
+            <button class="action-btn" onclick="clearElement('dash-timeline-out')">CLEAR</button>
+          </div>
+          <pre id="dash-timeline-out">Loading timeline...</pre>
+        </div>
+      </div>
       <div class="card">
         <h3>System Status</h3>
         <div class="chip-row">
@@ -7712,4 +7748,34 @@ async fn api_settings_policy_resolve(
         "resolved_policy": policy_record.policy_json
     }))
     .into_response()
+}
+
+async fn api_orchestrate_run(
+    State(state): State<Arc<UiState>>,
+    Json(req): Json<OrchestratorRequest>,
+) -> Response {
+    match req.domain.as_str() {
+        "branch" => {
+            if let Ok(branch_req) = serde_json::from_value::<BranchRunRequest>(req.payload) {
+                api_branch_run(State(state), Json(branch_req)).await
+            } else {
+                error_response(StatusCode::BAD_REQUEST, "Invalid branch payload format")
+            }
+        }
+        "dependency" => {
+            if let Ok(dep_req) = serde_json::from_value::<DependencyActionRequest>(req.payload) {
+                run_dependency_action(State(state), Json(dep_req)).await
+            } else {
+                error_response(StatusCode::BAD_REQUEST, "Invalid dependency payload format")
+            }
+        }
+        "command" => {
+            if let Ok(cmd_req) = serde_json::from_value::<UiCommandRequest>(req.payload) {
+                run_command(State(state), Json(cmd_req)).await
+            } else {
+                error_response(StatusCode::BAD_REQUEST, "Invalid command payload format")
+            }
+        }
+        other => error_response(StatusCode::BAD_REQUEST, &format!("Unknown orchestrator domain: {other}")),
+    }
 }

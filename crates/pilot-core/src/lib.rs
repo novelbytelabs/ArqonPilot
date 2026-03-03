@@ -48,14 +48,19 @@ pub struct RepoOutcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
+    pub id: String,
     pub timestamp: String,
-    pub command: String,
+    pub scope_id: Option<String>,
+    pub domain: String,
+    pub action: String,
     pub dry_run: bool,
     pub success: bool,
     pub summary: String,
     pub repo_count: usize,
     pub failures: usize,
     pub artifact_path: Option<String>,
+    pub repos: Vec<String>,
+    pub details: serde_json::Value,
 }
 
 pub fn write_repo_outcomes_artifact(
@@ -97,4 +102,32 @@ fn default_reports_dir() -> PathBuf {
 fn default_pilot_home() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".pilot")
+}
+
+pub fn query_audit_events(
+    scope_id: Option<&str>,
+    domain_filter: Option<&str>,
+    action_filter: Option<&str>,
+    limit: usize,
+    offset: usize,
+) -> Vec<AuditEvent> {
+    let path = default_pilot_home().join("audit.jsonl");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    let mut events: Vec<AuditEvent> = content
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter(|e: &AuditEvent| {
+            let scope_ok = scope_id.map_or(true, |sid| e.scope_id.as_deref() == Some(sid));
+            let domain_ok = domain_filter.map_or(true, |d| e.domain == d);
+            let action_ok = action_filter.map_or(true, |a| e.action == a);
+            scope_ok && domain_ok && action_ok
+        })
+        .collect();
+
+    events.reverse(); // Most recent first
+    events.into_iter().skip(offset).take(limit).collect()
 }

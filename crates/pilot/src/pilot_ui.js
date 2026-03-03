@@ -276,6 +276,9 @@ function activatePanel(tabName, opts = {}) {
   if (tabName === 'branch') {
     branchLoadMatrix();
   }
+  if (tabName === 'dashboard') {
+    unifiedTimelineLoad();
+  }
   if (tabName === 'settings') {
     settingsLoadPolicy();
     settingsLoadExceptions();
@@ -597,10 +600,10 @@ async function run(command, payload, opts = {}) {
   try {
     const ctl = new AbortController();
     const timeoutId = setTimeout(() => ctl.abort(), 25000);
-    const res = await fetch('/api/command', {
+    const res = await fetch('/api/orchestrate/run', {
       method: 'POST',
       headers: {'content-type':'application/json'},
-      body: JSON.stringify({ command, payload }),
+      body: JSON.stringify({ domain: 'command', payload: { command, payload } }),
       signal: ctl.signal
     });
     clearTimeout(timeoutId);
@@ -1447,10 +1450,10 @@ async function runBranchAction(payload, opts = {}) {
     payload: { status: 'running', endpoint: '/api/branch/run', payload }
   });
   try {
-    const res = await fetch('/api/branch/run', {
+    const res = await fetch('/api/orchestrate/run', {
       method: 'POST',
       headers: {'content-type':'application/json'},
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ domain: 'branch', payload })
     });
     const data = await res.json();
     const ok = !!data.ok;
@@ -1877,10 +1880,10 @@ async function depRun(action) {
     req.branch = document.getElementById('dash-push-branch').value || 'main';
     req.remote = document.getElementById('dash-push-remote').value || 'origin';
   }
-  const res = await fetch('/api/dependencies/run', {
+  const res = await fetch('/api/orchestrate/run', {
     method: 'POST',
     headers: {'content-type':'application/json'},
-    body: JSON.stringify(req)
+    body: JSON.stringify({ domain: 'dependency', payload: req })
   });
   const data = await res.json();
   
@@ -4280,6 +4283,28 @@ async function branchUndoExecute(id, dryRun) {
   } catch (err) {
     setChipState(chip, 'Undo', 'failed', 'error');
     alert(`Undo failed: ${err.message}`);
+  }
+}
+
+async function unifiedTimelineLoad() {
+  const domainNode = document.getElementById('dash-timeline-domain');
+  if(!domainNode) return;
+  const domain = domainNode.value;
+  let q = '?limit=50';
+  if (domain) q += '&domain=' + encodeURIComponent(domain);
+  try {
+    const res = await fetch('/api/orchestrate/timeline' + q);
+    const data = await res.json();
+    const out = document.getElementById('dash-timeline-out');
+    if (data.events && data.events.length > 0) {
+      const lines = data.events.map(e => `[${new Date(e.timestamp).toLocaleTimeString()}] ${e.domain.toUpperCase()}: ${e.action} (dry_run=${e.dry_run}) -> success=${e.success} (${e.summary})`);
+      out.textContent = lines.join('\n');
+    } else {
+      out.textContent = 'No events found in timeline.';
+    }
+  } catch(e) {
+    const out = document.getElementById('dash-timeline-out');
+    if(out) out.textContent = 'Error loading timeline: ' + e;
   }
 }
 
