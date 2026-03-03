@@ -3325,8 +3325,6 @@ async fn run_dependency_action(
     ) {
         let mut bus_running = false;
         let mut db_running = false;
-        let mut bus_out = String::new();
-        let mut bus_err = String::new();
         let mut db_stdout = String::new();
 
         let store = state.agorg_store.clone();
@@ -3387,15 +3385,14 @@ async fn run_dependency_action(
             _ => bus_shim_command("restart"),
         };
 
-        if action == "services-stop" {
+        let (bus_out, bus_err) = if action == "services-stop" {
             let (code, out, err) = run_local_script(&bus_cmd).await.unwrap_or((
                 1,
                 "".into(),
                 "Failed to run bus wrapper".into(),
             ));
             bus_running = code == 0 && bus_shim_running(&out, &err);
-            bus_out = out;
-            bus_err = err;
+            (out, err)
         } else {
             let bus_res = supervised_start(
                 "ArqonBus",
@@ -3418,14 +3415,13 @@ async fn run_dependency_action(
             match bus_res {
                 Ok((code, ref out, ref err)) => {
                     bus_running = code == 0 && bus_shim_running(out, err);
-                    bus_out = out.to_string();
-                    bus_err = err.to_string();
+                    (out.to_string(), err.to_string())
                 }
                 Err(e) => {
-                    bus_out = format!("Bus Error: {}", e);
+                    (format!("Bus Error: {}", e), String::new())
                 }
             }
-        }
+        };
 
         let ok = match action {
             "services-stop" => !bus_running && !db_running,

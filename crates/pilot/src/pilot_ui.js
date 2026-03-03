@@ -4406,10 +4406,22 @@ function startHealthHeartbeat() {
   setInterval(async () => {
     try {
       const res = await fetchJsonSafe('/api/health');
-      if (res && res.ok) {
-        setBusStatus(res.bus_running, res.uptime_secs ? `Uptime: ${res.uptime_secs}s` : 'OK');
+      if (res) {
+        // Support both legacy flat shape and current nested shape.
+        const busRunning =
+          typeof res.bus_running === 'boolean'
+            ? res.bus_running
+            : !!(res.bus && res.bus.running);
+        const dbRunning =
+          typeof res.db_running === 'boolean'
+            ? res.db_running
+            : !!(res.db && res.db.running);
+        const latency = res.bus && typeof res.bus.latency_ms === 'number' ? `${res.bus.latency_ms}ms` : '';
+        const meta = res.uptime_secs ? `Uptime: ${res.uptime_secs}s` : '';
+        const note = [meta, latency].filter(Boolean).join(' | ') || 'OK';
+        setBusStatus(busRunning, note);
         if (dashDbChip) {
-           setChipState(dashDbChip, 'DB: ' + (res.db_running ? 'RUNNING' : 'STOPPED'), res.db_running ? 'success' : 'failed');
+           setChipState(dashDbChip, 'DB: ' + (dbRunning ? 'RUNNING' : 'STOPPED'), dbRunning ? 'success' : 'failed');
         }
       } else {
         setBusStatus(false, 'Heartbeat Failed');

@@ -33,6 +33,7 @@ Audit sources used for this consolidation:
 2. Branch Control BC-1..BC-6 are complete; BC-7/BC-8 parity and hardening are carried in the final completion plan.
 3. Governance control-plane parity (G1..G6) is implemented; multi-policy expansion remains open.
 4. AGOrg governance loop (report -> dry-run -> apply -> verify) is live in UI/API/CLI, with scale-level inheritance/override still open.
+5. Runtime supervision remains an active stabilization lane; intermittent Bus/DB status drift and disconnect behavior is still open and tracked under P7.
 
 ## Frozen Policy (Non-Negotiable)
 
@@ -76,6 +77,14 @@ ArqonPilot is a local control plane for AGOrg-scale software operations:
 5. Known critical hardening tracks still open:
      - unified completion waves `P1..P9` (this document)
      - final release-train hardening and evidence discipline
+
+## Session Status (2026-03-03)
+
+1. Build warning cleanup completed for Pilot serve path (`main.rs` import cleanup and `serve_ui.rs` bus output assignment cleanup).
+2. Core issue still active: service supervision/health reporting can flip Bus/DB to `STOPPED` after startup while operator expects persistent `RUNNING`.
+3. High-priority execution focus remains:
+     - `P1` policy family hardening completion evidence.
+     - `P7` runtime reliability hard-close (deterministic startup, health checks, restart semantics, no false stopped state).
 
 ## Branch Control Consolidated (Merged)
 
