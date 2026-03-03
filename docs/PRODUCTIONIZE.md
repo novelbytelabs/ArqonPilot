@@ -9,7 +9,8 @@ This is the consolidated productionization plan, merged from prior roadmap and A
 1. Failure signatures and recoveries: `docs/gotcha-registry.md`
 2. Operator procedures: `docs/operator-runbook.md`
 3. Release execution: `docs/release-playbook.md`
-4. Archived detailed plans:
+4. Federated CI/CD execution plan: `docs/federated-ci-program-plan.md`
+5. Archived detailed plans:
       - `archives/docs/plans/roadmap-and-execution-plan.md`
       - `archives/docs/plans/agorg-control-plane-plan.md`
       - `archives/docs/plans/branch-control-master-plan.md`

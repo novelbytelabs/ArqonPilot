@@ -1,6 +1,6 @@
 # Federated CI Program Value to Arqon Pilot
 
-This page summarizes what the federated CI/CD program (`Arqon/docs/polity/project_plan_pilot_federated_ci_program.md`) adds to Arqon Pilot.
+This page summarizes what the federated CI/CD program (`docs/federated-ci-program-plan.md`) adds to Arqon Pilot.
 
 ## Executive Summary
 
@@ -85,7 +85,7 @@ In short:
 
 ## Risks and Caveats
 
-1. Plan source currently lives outside ArqonPilot docs tree (`Arqon/docs/polity`), which can cause discoverability drift.
+1. Legacy copy exists in `Arqon/docs/polity/` for historical reference; canonical plan is `docs/federated-ci-program-plan.md`.
 2. Contract duplication risk exists if implementations diverge between Pilot scripts and CI job steps.
 3. Federation scope may outpace current runtime reliability if P7 regression monitoring is not maintained.
 

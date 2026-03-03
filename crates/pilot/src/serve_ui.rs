@@ -3539,7 +3539,7 @@ async fn run_dependency_action(
     let result = match (action, req.json) {
 
         ("preflight", _) | ("policy", _) | ("hook-policy", _) | ("drift", _) | ("gate", _) => {
-            use crate::preflight::{graph::run_preflight_graph, model::PreflightStepType};
+            use crate::preflight::graph::run_preflight_graph;
             let steps = preflight_steps_from_action(action, req.preflight_steps.clone());
             let report = run_preflight_graph(
                 Path::new("."),
