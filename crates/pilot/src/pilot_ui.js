@@ -13,6 +13,17 @@ async function fetchJsonSafe(url, options = {}) {
   }
 }
 
+// Global handler to make elements with role="button" actionable via Enter/Space
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' || e.key === ' ') {
+    const el = e.target;
+    if (el && el.getAttribute('role') === 'button') {
+      e.preventDefault();
+      el.click();
+    }
+  }
+});
+
 function copyToClipboard(id, btn) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -4476,7 +4487,8 @@ async function dashVerifyEvidence() {
   const path = pathNode ? pathNode.value.trim() : '';
   
   if (!path) {
-    out.innerHTML = '<span class="term-err">ERROR: Path cannot be empty</span>';
+    out.setAttribute('role', 'alert');
+    out.innerHTML = '<span class="term-err">ERROR: Path cannot be empty</span><br><span class="term-dim">Mitigation: Please provide a valid file path to an evidence bundle.</span>';
     return;
   }
 
@@ -4513,6 +4525,7 @@ async function dashVerifyEvidence() {
       hint = 'Mitigation: Unknown error occurred.';
     }
 
+    out.setAttribute('role', 'alert');
     out.innerHTML = `<span class="term-err">✗ VERIFICATION FAILED</span>
 <span class="term-sys">Reason Code:</span> <span class="term-err">${data.reason_code}</span>
 <span class="term-sys">Details:</span>     ${data.details}` + 
@@ -4520,9 +4533,22 @@ async function dashVerifyEvidence() {
 `\n\n<span class="term-dim">${hint}</span>`;
 
   } catch (err) {
-    out.innerHTML = `<span class="term-err">✗ Verification request failed: ${err}</span>`;
+    out.setAttribute('role', 'alert');
+    out.innerHTML = `<span class="term-err">✗ Verification request failed: ${err}</span><br><span class="term-dim">Mitigation: Verify the Pilot backend is running and accessible.</span>`;
   }
 }
+
+// Global keydown handler for spans acting as buttons
+document.addEventListener('keydown', function(event) {
+  // Check if the focused element is a span with role="button"
+  if (document.activeElement && document.activeElement.tagName === 'SPAN' && document.activeElement.getAttribute('role') === 'button') {
+    // If Enter or Space is pressed, trigger the click event
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault(); // Prevent default scroll behavior for Space
+      document.activeElement.click();
+    }
+  }
+});
 
 function startHealthHeartbeat() {
   setInterval(async () => {

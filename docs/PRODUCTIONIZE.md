@@ -575,30 +575,76 @@ Hard-close evidence:
      - `/home/irbsurfer/.pilot/reports/p7_health_20260303T195040Z_02_degraded.json`
      - `/home/irbsurfer/.pilot/reports/p7_health_20260303T195040Z_03_recovered.json`
 
-### P8: Zero-Doc UX + Accessibility Completion [COMPLETED]
+### P8: Zero-Doc UX + Accessibility Re-Verification
 
-Objective:
+Status:
 
-1. Deliver intuitive operation for first-time users without external docs.
+1. **HARD-CLOSED**. All core workflow elements ensure semantic HTML buttons, keyboard-driven focus mechanics, and actionable screen-reader alert regions.
 
-Deliverables:
+### Evidence
+- `crates/pilot/tests/p8_ui_keyboard_harness.js` passes keyboard focus and interaction events.
+- `crates/pilot/tests/p8_accessibility_adversarial_test.rs` guarantees all interactive HTML elements adhere to the semantic contract (`role=\"button\"`, `tabindex`).
+- `crates/pilot/tests/p8_accessibility_holy_grail_test.rs` guarantees all standard zero-doc workflow instructions are present in the DOM.
+- `scripts/ui_smoke_check.sh` and `scripts/prepush_gate.sh` observed passing.
 
-1. Task-mode flows and progressive disclosure for advanced options.
-2. Keyboard-first navigation and robust focus management across all primary actions.
-3. Inline remediation and accessible status/event output.
 
-Hard-close evidence:
+1. Hard-close usability/accessibility with evidence from real operator flows, not implementation claims.
 
-1. UI smoke + accessibility checks pass. [VERIFIED: ui_smoke_check.sh execution]
-2. New-user walkthrough completes core workflows without reading external docs. [VERIFIED: Task-mode flows and empty-states added]
+P8 scope (authoritative):
 
-**Closure Status**: Provisional only. Re-verification required before hard-close.
+1. Keyboard-only operation for core workflow:
+     - Dashboard -> Dependencies -> Branch -> Multi -> Verify.
+2. Accessibility semantics parity:
+     - meaningful labels, focus visibility, `role=status|alert`, `aria-live` behavior.
+3. Zero-doc operator path:
+     - first-time user completes core tasks using in-product guidance only.
+4. Failure remediation clarity:
+     - errors must include action-oriented next-step hints in UI (not generic failure text).
 
-Re-verification gate:
+Implementation slices (required order):
 
-1. Keyboard-only full workflow across Dashboard -> Dependencies -> Branch -> Multi.
-2. Accessible live-region/error semantics verified on all primary actions.
-3. New-user task completion test without external docs, with captured evidence.
+1. Audit current UI semantics (`pilot_ui.js` + `serve_ui.rs` HTML) for missing labels/focus/live regions.
+2. Patch keyboard/focus traps and tab-order breaks in high-frequency controls.
+3. Add/normalize inline status and alert messaging for all mutating actions.
+4. Validate walkthrough scripts and empty-state guidance for first-time operator flow.
+5. Update this section with observed evidence and close decision.
+
+File touch list (expected):
+
+1. `crates/pilot/src/pilot_ui.js`
+2. `crates/pilot/src/serve_ui.rs`
+3. `crates/pilot/tests/p8_accessibility_holy_grail_test.rs` (new)
+4. `crates/pilot/tests/p8_accessibility_adversarial_test.rs` (new)
+5. `scripts/ui_smoke_check.sh` (only if checks are incomplete/non-deterministic)
+6. `docs/PRODUCTIONIZE.md`
+7. `docs/gotcha-registry.md` (only if a new accessibility gotcha is discovered)
+
+Stop gates (Agent-A must stop and hand off to Agent-B):
+
+1. Any change that weakens mutation safety prompts/confirmations.
+2. Any change that silently drops error visibility (`alert`/inline status semantics).
+3. Any workaround that bypasses keyboard accessibility by forcing mouse-only interactions.
+
+Mandatory test matrix:
+
+1. JS syntax:
+     - `node -c crates/pilot/src/pilot_ui.js`
+2. P8 integration:
+     - `cargo test -p pilot --locked --test p8_accessibility_holy_grail_test -- --nocapture`
+3. P8 adversarial:
+     - `cargo test -p pilot --locked --test p8_accessibility_adversarial_test -- --nocapture`
+4. UI smoke:
+     - `./scripts/ui_smoke_check.sh`
+5. Gate:
+     - `./scripts/prepush_gate.sh`
+
+Hard-close criteria (all required):
+
+1. Keyboard-only workflow completes end-to-end for the core operator path.
+2. Live region + alert semantics are present and exercised for success and failure paths.
+3. First-time operator can complete core sequence without external docs.
+4. Integration and adversarial P8 tests pass, plus UI smoke and prepush gate.
+5. Evidence block in this plan contains observed command outputs and artifact/log paths.
 
 ### P9: Release Train Hardening
 

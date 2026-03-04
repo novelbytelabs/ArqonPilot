@@ -39,24 +39,57 @@ theme:
 
 nav:
   - Home: "index.md"
-  - Roadmap & Plan: "PRODUCTIONIZE.md"
-  - Federated CI Program Plan: "federated-ci-program-plan.md"
-  - PRODUCTIONIZE Value: "productionize-value.md"
-  - Federated CI Program Value: "federated-ci-program-value.md"
-  - Technical Debt: "tech-debt.md"
-  - Release Playbook: "release-playbook.md"
-  - Release Log: "release-log.md"
-  - Developer Guide: "developer-guide.md"
-  - Arqon Bus Integration: "bus-integration-guide.md"
-  - Troubleshooting: "troubleshooting.md"
-  - Testing Strategy: "testing-strategy.md"
-  - Operator Runbook: "operator-runbook.md"
-  - Governance & Policy Guide: "governance-guide.md"
-  - Branch Management Guide: "branch-management-guide.md"
-  - Releases:
-      - 0.2.0-alpha.1: "releases/0.2.0-alpha.1.md"
+  - Roadmap & Plan:
+      - PRODUCTIONIZE: "PRODUCTIONIZE.md"
+      - Productionize Value: "productionize-value.md"
+  - Federated CI Program:
+      - Plan: "federated-ci-program-plan.md"
+      - Value: "federated-ci-program-value.md"
+  - Governance & Policy:
+      - Governance Guide: "governance-guide.md"
+      - Branch Management Guide: "branch-management-guide.md"
+      - Settings & Governance Plan: "settings-tab-and-governance-plan.md"
+  - Operations & Support:
+      - Operator Runbook: "operator-runbook.md"
+      - Troubleshooting: "troubleshooting.md"
+      - Testing Strategy: "testing-strategy.md"
+      - Tech Debt: "tech-debt.md"
+  - Release Management:
+      - Release Playbook: "release-playbook.md"
+      - Release Log: "release-log.md"
+      - Releases:
+          - 0.2.0-alpha.1: "releases/0.2.0-alpha.1.md"
+  - Integration & Architecture:
+      - Arqon Bus Integration: "bus-integration-guide.md"
+      - Pilot Oracle Reflex Analysis: "pilot-oracle-reflex-analysis.md"
+  - Policies & Standards:
+      - Channel Policy: "channel-policy.md"
+      - Compatibility Matrix: "compatibility-matrix.md"
+      - SLO Policy: "slo-policy.md"
+  - Incident Management:
+      - Incident Runbook: "incident-runbook.md"
+      - Gotcha Registry: "gotcha-registry.md"
+  - Migration & Deployment:
+      - Migration Playbook: "migration-playbook.md"
+  - Development:
+      - Developer Guide: "developer-guide.md"
   - Tutorials:
       - AGOrg Interface: "tutorial/agorg-interface.md"
+  - FC Artifacts:
+      - Context Verification: "fc1_artifacts/context_verification.md"
+      - FC2 Hardclose: "fc1_artifacts/fc2_hardclose.md"
+      - FC3 Hardclose: "fc1_artifacts/fc3_hardclose.md"
+      - FC4 Hardclose: "fc1_artifacts/fc4_hardclose.md"
+      - FC5 Hardclose: "fc1_artifacts/fc5_hardclose.md"
+      - FC6 Hardclose: "fc1_artifacts/fc6_hardclose.md"
+      - FC8 Hardclose: "fc1_artifacts/fc8_hardclose.md"
+      - FC9 Hardclose: "fc1_artifacts/fc9_hardclose.md"
+      - FC9 Post-Audit Remediation: "fc1_artifacts/fc9_post_audit_remediation_2026-03-03.md"
+      - Federated CI Parity Matrix: "fc1_artifacts/federated_ci_parity_matrix.md"
+      - Federated Gate Contract Schema: "fc1_artifacts/federated_gate_contract_schema.md"
+      - Repo Gate Entry Inventory: "fc1_artifacts/repo_gate_entry_inventory.md"
+  - Releases:
+      - P7 Evidence Bundle: "releases/p7_evidence_bundle.md"
 
 markdown_extensions:
   - attr_list
@@ -137,3 +170,13 @@ extra:
             <a href="https://github.com/novelbytelabs/arqonbus/issues/new/?title=[Feedback]+{title}+-+{url}" target="_blank" rel="noopener">telling us what you found helpful or what could be improved</a>.
 
 copyright: "Copyright &copy; 2026 NovelByte Labs - All rights reserved."
+
+plugins:
+  - search:
+  - git-revision-date-localized:
+      enabled: true
+      type: date
+      locale: en
+      fallback_to_build_date: true
+  - minify:
+      minify_html: true

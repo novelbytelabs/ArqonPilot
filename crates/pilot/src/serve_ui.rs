@@ -6391,12 +6391,25 @@ const INDEX_HTML: &str = r#"<!doctype html>
       min-height: 110px;
     }
     input::placeholder, textarea::placeholder { color: var(--dim); }
-    input:focus, select:focus, textarea:focus {
-      outline: 2px solid rgba(0, 245, 255, 0.8);
+    input:focus, select:focus, textarea:focus, button:focus-visible, .action-chip:focus-visible {
+      outline: 2px solid var(--accent);
       outline-offset: 2px;
-      border-color: rgba(0, 245, 255, 0.4);
-      box-shadow: 0 0 0 3px rgba(0, 245, 255, 0.06), 0 0 12px rgba(0, 245, 255, 0.08);
-      background: rgba(0, 0, 0, 0.4);
+      border-color: var(--accent);
+    }
+    
+    .action-chip {
+        cursor: pointer;
+        font-family: monospace;
+        padding: 4px 8px;
+        margin-right: 4px;
+        border-radius: 4px;
+        color: var(--text);
+        background: rgba(255,255,255,0.05);
+        border: 1px solid var(--border);
+    }
+    .action-chip:hover {
+        background: rgba(255,255,255,0.1);
+        border-color: var(--text-muted);
     }
     select option {
       background: #0d1117; 
@@ -6941,15 +6954,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <h3>Command Graph Orchestration (P5)</h3>
       <div class="helper">Unified cross-tab sequence. Preview operations never mutate. Execution emits lineage.</div>
       <div class="chip-row" id="p5-rail-strip">
-        <span id="p5-chip-status" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('dependency', 'status', true)" title="Preview Database and Dependency Status">Status</span>
-        <span id="p5-chip-bus" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('dependency', 'bus-status', true)" title="Preview Bus Health">Bus Health</span>
-        <span id="p5-chip-heal-plan" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('command', 'heal.plan', true)" title="Preview Heal Plan">Heal Plan</span>
-        <span id="p5-chip-heal-run" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('command', 'heal.run', false)" title="Execute Heal Run (Mutates)">Heal Run</span>
-        <span id="p5-chip-push" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('dependency', 'push', false)" title="Execute Push Safe (Mutates)">Push Safe</span>
-        <span id="p5-chip-branch" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('branch', 'status', true)" title="Preview Branch Status">Branch Preview</span>
-        <span id="p5-chip-multi" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('command', 'multi.status', true)" title="Preview Multi Repo Status">Multi</span>
-        <span id="p5-chip-dag" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('command', 'dag.evaluate', true)" title="Preview DAG Evaluation">DAG</span>
-        <span id="p5-chip-apply" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('command', 'multi.apply', false)" title="Execute Staged Apply (Mutates)">Staged Apply</span>
+        <button id="p5-chip-status" class="chip neutral action-chip" onclick="p5OrchestrateStep('dependency', 'status', true)" aria-label="Preview Database and Dependency Status" title="Preview Database and Dependency Status">Status</button>
+        <button id="p5-chip-bus" class="chip neutral action-chip" onclick="p5OrchestrateStep('dependency', 'bus-status', true)" aria-label="Preview Bus Health" title="Preview Bus Health">Bus Health</button>
+        <button id="p5-chip-heal-plan" class="chip neutral action-chip" onclick="p5OrchestrateStep('command', 'heal.plan', true)" aria-label="Preview Heal Plan" title="Preview Heal Plan">Heal Plan</button>
+        <button id="p5-chip-heal-run" class="chip neutral action-chip" onclick="p5OrchestrateStep('command', 'heal.run', false)" aria-label="Execute Heal Run" title="Execute Heal Run (Mutates)">Heal Run</button>
+        <button id="p5-chip-push" class="chip neutral action-chip" onclick="p5OrchestrateStep('dependency', 'push', false)" aria-label="Execute Push Safe" title="Execute Push Safe (Mutates)">Push Safe</button>
+        <button id="p5-chip-branch" class="chip neutral action-chip" onclick="p5OrchestrateStep('branch', 'status', true)" aria-label="Preview Branch Status" title="Preview Branch Status">Branch Preview</button>
+        <button id="p5-chip-multi" class="chip neutral action-chip" onclick="p5OrchestrateStep('command', 'multi.status', true)" aria-label="Preview Multi Repo Status" title="Preview Multi Repo Status">Multi</button>
+        <button id="p5-chip-dag" class="chip neutral action-chip" onclick="p5OrchestrateStep('command', 'dag.evaluate', true)" aria-label="Preview DAG Evaluation" title="Preview DAG Evaluation">DAG</button>
+        <button id="p5-chip-apply" class="chip neutral action-chip" onclick="p5OrchestrateStep('command', 'multi.apply', false)" aria-label="Execute Staged Apply" title="Execute Staged Apply (Mutates)">Staged Apply</button>
       </div>
     </div>
     <div class="grid">

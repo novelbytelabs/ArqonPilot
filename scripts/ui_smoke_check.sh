@@ -115,7 +115,11 @@ else
 fi
 
 say "checking dashboard HTML..."
-curl -sS "http://127.0.0.1:${UI_PORT}/" | grep -q "Pilot Control Panel"
+dashboard_html="$(curl -sS --max-time "$CURL_TIMEOUT_SEC" "http://127.0.0.1:${UI_PORT}/")"
+if ! grep -q "Pilot Control Panel" <<<"$dashboard_html"; then
+  say "ERROR: dashboard HTML missing expected title marker"
+  exit 1
+fi
 
 say "checking read endpoints..."
 curl -sS --max-time "$CURL_TIMEOUT_SEC" "http://127.0.0.1:${UI_PORT}/api/history" >/dev/null
@@ -145,5 +149,12 @@ if [[ "$INCLUDE_COMMANDS" == "1" ]]; then
 else
   say "skipping command-lane checks (set PILOT_UI_SMOKE_INCLUDE_COMMANDS=1 to enable)"
 fi
+
+say "running DOM keyboard accessibility harness..."
+node crates/pilot/tests/p8_ui_keyboard_harness.js >>"$LOG_FILE" 2>&1 || {
+  say "ERROR: DOM keyboard accessibility harness failed."
+  tail -n 20 "$LOG_FILE" || true
+  exit 1
+}
 
 say "UI smoke check passed."
