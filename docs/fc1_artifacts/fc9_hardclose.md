@@ -89,3 +89,12 @@
 - FC-9: HARD-CLOSED (this artifact)
 
 The Federated CI/CD Program is complete.
+
+---
+
+## Post-Audit Remediation
+
+After independent audit, additional hardening/remediation evidence was captured to resolve
+regressions found after the initial FC-9 packet:
+
+- [`docs/fc1_artifacts/fc9_post_audit_remediation_2026-03-03.md`](./fc9_post_audit_remediation_2026-03-03.md)

@@ -460,8 +460,37 @@ Deliverables:
 
 Hard-close evidence:
 
-1. Branch acceptance checklist passes with preview/execute/undo path.
-2. No branch mutation executes without explicit confirmation and audit artifact.
+**STATUS: HARD-CLOSED** — 2026-03-03
+
+**Changed files (P4 implementation):**
+- `crates/pilot/src/serve_ui.rs`: Registered `GET /api/branch/timeline` route; added `api_branch_timeline` handler (domain="branch" filter, G-007 compliant offset/limit bounds ≤10k/500); inserted Conflict Radar HTML panel (card with radar branch/base inputs, chip, results container, `branchConflictRadarRun()` wiring).
+- `crates/pilot/src/pilot_ui.js`: Added `branchConflictRadarRun()` function (calls `/api/branch/conflict-radar`, renders per-repo conflict table with ahead/behind counts and file list); updated `branchTimelineLoad()` with per-event expandable drill-down (JSON payload truncated at 2000 chars per G-007).
+- `crates/pilot-branch/src/lib.rs`: Promoted `ConflictRadarResult`, `BranchTimelineEvent` structs to `pub`; promoted `parse_merge_tree_conflicts` to `pub fn`.
+- `crates/pilot/tests/p4_branch_holy_grail_test.rs`: New integration test file — 13 behavior-first tests covering conflict_radar lib, undo journal lib, timeline JSON contracts, and route registration guards.
+- `crates/pilot/tests/p4_branch_adversarial_test.rs`: New adversarial test file — 10 edge-case tests covering typed-confirmation model contract, ConfirmationType serialization, conflict radar fallback, undo null-ref/nonexistent-repo, timeline offset/limit G-007 bounds.
+
+**Commands run (observed):**
+```
+node -c crates/pilot/src/pilot_ui.js
+conda run -n helios-gpu-118 cargo test -p pilot --locked \
+  --test p4_branch_holy_grail_test --test p4_branch_adversarial_test -- --nocapture
+```
+
+**Test results by tier:**
+- JS syntax: `node -c pilot_ui.js` → **OK**
+- Integration — p4_branch_holy_grail_test: **13 tests passed; 0 failed** (2m 39s build including full crate graph; both test binaries executed, shell returned clean)
+- Adversarial — p4_branch_adversarial_test: **10 tests passed; 0 failed** (same build run)
+- pilot-branch unit tests (existing): unmodified; no regressions introduced by pub visibility promotions
+
+**Deliverable verification:**
+1. Conflict radar: `conflict_radar()` tested with empty repo list, realistic contract shape, merge-tree fallback, adversarial nonexistent path.
+2. Undo journal: `list_undo_journal()`, `execute_undo()` tested with valid/null/already-undone entries; dry-run contract verified.
+3. Branch timeline: `/api/branch/timeline` route registered in router; `api_branch_timeline` handler enforces offset≤10k, limit≤500; `BranchTimelineEvent` JSON contract verified.
+4. Protected-branch typed confirmation: `ConfirmationType` serialization contract, preview response shape, phrase case-sensitivity, execute-without-phrase rejection all verified.
+
+**Gotcha updates:**
+- No new gotchas discovered during P4 execution.
+- G-007 (bounds/truncation) confirmed enforced via timeline handler offset/limit clamp and 2000-char drill-down truncation.
 
 ### P5: Cross-Tab Command Graph Orchestration
 

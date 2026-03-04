@@ -4185,6 +4185,87 @@ async function settingsResolvePolicy() {
   settingsSetStatus(res, 'success');
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P4: Conflict Radar — explicit pre-sync/pre-merge conflict detection panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function branchConflictRadarRun() {
+  const branch = (document.getElementById('branch-radar-input')?.value || '').trim();
+  const base = (document.getElementById('branch-radar-base')?.value || 'main').trim();
+  const chip = document.getElementById('branch-radar-chip');
+  const results = document.getElementById('branch-radar-results');
+  if (!results) return;
+
+  if (!branch) {
+    if (chip) setChipState(chip, 'Conflict Radar', 'failed', 'branch required');
+    results.innerHTML = `<div class="warn">Branch name is required.</div>`;
+    return;
+  }
+
+  if (chip) setChipState(chip, 'Conflict Radar', 'running', 'scanning...');
+  results.innerHTML = `<div class="muted">Scanning for conflicts…</div>`;
+
+  try {
+    const res = await fetch('/api/branch/conflict-radar', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ branch, base_branch: base })
+    });
+    const data = await res.json();
+
+    if (!data.ok) {
+      if (chip) setChipState(chip, 'Conflict Radar', 'failed', 'error');
+      results.innerHTML = `<div class="warn">Conflict radar failed: ${data.error || 'unknown error'}</div>`;
+      return;
+    }
+
+    const hasConflicts = data.has_conflicts;
+    const statusColor = hasConflicts ? 'var(--color-failed)' : 'var(--color-ok)';
+    const statusLabel = hasConflicts
+      ? `⚠️ ${data.conflict_count} repo(s) have conflicts`
+      : `✅ No conflicts detected`;
+
+    if (chip) setChipState(chip, 'Conflict Radar', hasConflicts ? 'failed' : 'success', `${data.conflict_count} conflicts`);
+
+    const rows = (data.results || []).map(r => {
+      const conflictBadge = r.has_conflicts
+        ? `<span style="color:var(--color-failed)">⚠️ ${r.conflicting_files?.length || 0} file(s)</span>`
+        : `<span style="color:var(--color-ok)">✅ clean</span>`;
+      const files = r.has_conflicts && r.conflicting_files?.length
+        ? `<div style="font-size:0.8em;color:var(--text-muted);margin-top:4px;">${r.conflicting_files.slice(0, 5).map(f => `• ${f}`).join('<br>')}</div>`
+        : '';
+      const errBadge = r.error ? `<span style="color:var(--color-warn)">⚠ ${r.error}</span>` : '';
+      return `
+        <tr>
+          <td style="font-family:var(--font-mono)">${r.repo}</td>
+          <td>${conflictBadge}${files}</td>
+          <td>${r.ahead ?? '?'} ↑ / ${r.behind ?? '?'} ↓</td>
+          <td>${errBadge}</td>
+        </tr>`;
+    }).join('');
+
+    results.innerHTML = `
+      <div style="margin-bottom:8px;font-weight:600;color:${statusColor}">${statusLabel}</div>
+      <div style="font-size:0.85em;color:var(--text-muted);margin-bottom:8px;">
+        ${data.repo_count} repos scanned · branch: <code>${branch}</code> vs <code>${base}</code>
+      </div>
+      ${rows ? `<table style="width:100%;border-collapse:collapse;font-size:0.9em;">
+        <thead><tr>
+          <th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Repo</th>
+          <th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Status</th>
+          <th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Ahead/Behind</th>
+          <th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Error</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : '<div class="muted">No repo results returned.</div>'}`;
+
+  } catch (err) {
+    if (chip) setChipState(chip, 'Conflict Radar', 'failed', 'error');
+    results.innerHTML = `<div class="warn">Conflict radar error: ${err.message}</div>`;
+  }
+}
+
 async function branchTimelineLoad(offset = 0) {
   const btn = document.getElementById('branch-timeline-refresh-btn');
   const list = document.getElementById('branch-timeline-list');
@@ -4204,31 +4285,38 @@ async function branchTimelineLoad(offset = 0) {
       return;
     }
 
-    list.innerHTML = data.events.map(ev => {
+    list.innerHTML = data.events.map((ev, idx) => {
       const isOk = ev.success;
       const statusIcon = isOk ? '✅' : '❌';
       const action = ev.action.toUpperCase();
-      const undoBadge = ev.undo_entry_ids && ev.undo_entry_ids.length > 0 
-        ? `<span class="badge" style="background:var(--color-warn);color:#000;font-size:0.75em;margin-left:8px;">undoable</span>` 
+      const undoBadge = ev.undo_entry_ids && ev.undo_entry_ids.length > 0
+        ? `<span class="badge" style="background:var(--color-warn);color:#000;font-size:0.75em;margin-left:8px;">undoable</span>`
         : '';
-        
       const dryRunBadge = ev.dry_run ? `<span class="badge neutral" style="font-size:0.75em;margin-left:8px;">dry-run</span>` : '';
       const repos = Array.isArray(ev.repos) ? ev.repos.join(', ') : 'N/A';
-      const detailStr = (ev.details && ev.details.response_summary && ev.details.response_summary.error) 
+      const detailStr = (ev.details && ev.details.response_summary && ev.details.response_summary.error)
         ? `<div style="color:var(--color-failed); font-size: 0.85em; margin-top: 4px;">Error: ${ev.details.response_summary.error}</div>`
         : '';
+      // Per-event drill-down: truncate at 2000 chars to prevent oversized render (G-007)
+      const detailJson = JSON.stringify(ev.details || {}, null, 2);
+      const detailTruncated = detailJson.length > 2000
+        ? detailJson.slice(0, 2000) + '\n... [truncated]'
+        : detailJson;
+      const drillId = `btl-detail-${offset}-${idx}`;
 
       return `
         <div style="border-bottom: 1px solid var(--border); padding: 8px 0; font-family: var(--font-mono);">
-          <div>
-             <span style="color:var(--text-muted); font-size:0.85em;">[${new Date(ev.timestamp).toLocaleString()}]</span> 
-             ${statusIcon} <strong>${action}</strong> on <em>${ev.branch}</em> 
+          <div style="cursor:pointer;" onclick="const el=document.getElementById('${drillId}');el.style.display=el.style.display==='none'?'block':'none';">
+             <span style="color:var(--text-muted); font-size:0.85em;">[${new Date(ev.timestamp).toLocaleString()}]</span>
+             ${statusIcon} <strong>${action}</strong> on <em>${ev.branch || ev.domain || ''}</em>
              ${dryRunBadge} ${undoBadge}
+             <span style="color:var(--text-muted);font-size:0.75em;margin-left:8px;">▸ details</span>
           </div>
           <div style="font-size: 0.9em; margin-top: 4px;">
             <span style="color:var(--text-muted);">Repos (${ev.repo_count}):</span> ${repos}
           </div>
           ${detailStr}
+          <pre id="${drillId}" style="display:none;background:rgba(0,0,0,0.3);padding:8px;border-radius:4px;font-size:0.78em;overflow-x:auto;white-space:pre-wrap;margin-top:6px;">${detailTruncated.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>
         </div>
       `;
     }).join('');

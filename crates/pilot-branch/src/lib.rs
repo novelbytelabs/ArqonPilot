@@ -403,7 +403,7 @@ fn ahead_behind_count(repo_path: &Path, branch: &str, base_branch: &str) -> (usi
     }
 }
 
-fn parse_merge_tree_conflicts(output: &str) -> Vec<String> {
+pub fn parse_merge_tree_conflicts(output: &str) -> Vec<String> {
     // git merge-tree --write-tree outputs conflicting file paths after the tree hash.
     // Lines starting with a mode entry indicate conflicts.
     let mut files = Vec::new();
@@ -439,6 +439,24 @@ pub struct BranchUndoEntry {
     pub new_ref: String,
     pub scope_id: Option<String>,
     pub undone: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchTimelineEvent {
+    pub id: String,
+    pub timestamp: String,
+    pub scope_id: Option<String>,
+    pub action: String,
+    pub branch: String,
+    pub base_branch: String,
+    pub repos: Vec<String>,
+    pub dry_run: bool,
+    pub success: bool,
+    pub repo_count: u32,
+    pub failures: u32,
+    pub conflict_count: u32,
+    pub undo_entry_ids: Vec<String>,
+    pub details: serde_json::Value,
 }
 
 fn undo_journal_path() -> PathBuf {

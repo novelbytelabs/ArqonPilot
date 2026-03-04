@@ -31,6 +31,8 @@ Keep this file current whenever a new failure class appears.
      - `scripts/verify_policy_parity.sh` now preflights DB start and returns `[SKIP]` with exit `0` only for these known-denied signatures.
   3. Re-run parity on normal workstation/runtime for full evidence:
      - `bash scripts/verify_policy_parity.sh`
+  4. If release-readiness fails in sandbox with Postgres shared-memory denial:
+     - run `./scripts/release_readiness_check.sh` on host permissions (outside sandbox) and archive the result in FC artifacts.
 
 ## G-042: `services restart` intermittently fails DB start while Bus status flaps
 

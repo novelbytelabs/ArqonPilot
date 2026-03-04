@@ -4635,6 +4635,18 @@ mod tests {
 
     #[test]
     fn test_persist_agorg_reconcile_writes_governance_sidecar_when_fleet_report_present() {
+        let temp_root = std::env::temp_dir()
+            .join("pilot_test_reports")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&temp_root).expect("create temp report root");
+        let prior_pilot_home = std::env::var("PILOT_HOME").ok();
+        std::env::set_var("PILOT_HOME", &temp_root);
+        let reports_root = super::reports_root();
+        fs::create_dir_all(&reports_root).expect("create reports root");
+        let probe = reports_root.join("probe_write.json");
+        fs::write(&probe, b"{}").expect("probe write failed");
+        let _ = fs::remove_file(&probe);
+
         let payload = json!({
             "ok": true,
             "dry_run": true,
@@ -4676,6 +4688,11 @@ mod tests {
 
         let _ = fs::remove_file(main_pb);
         let _ = fs::remove_file(sidecar);
+        match prior_pilot_home {
+            Some(v) => std::env::set_var("PILOT_HOME", v),
+            None => std::env::remove_var("PILOT_HOME"),
+        }
+        let _ = fs::remove_dir_all(&temp_root);
     }
 
     #[test]
@@ -5215,13 +5232,39 @@ fn read_recent_audit_events(limit: usize) -> std::io::Result<Vec<Value>> {
 }
 
 fn audit_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".pilot").join("audit.jsonl")
+    pilot_data_root().join("audit.jsonl")
 }
 
 fn reports_root() -> PathBuf {
+    let preferred = pilot_data_root().join("reports");
+    if fs::create_dir_all(&preferred).is_ok() {
+        return preferred;
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let fallback = cwd.join(".pilot").join("reports");
+    let _ = fs::create_dir_all(&fallback);
+    fallback
+}
+
+fn pilot_data_root() -> PathBuf {
+    if let Ok(root) = std::env::var("PILOT_HOME") {
+        let pb = PathBuf::from(root);
+        let _ = fs::create_dir_all(&pb);
+        return pb;
+    }
+
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".pilot").join("reports")
+    let preferred = PathBuf::from(home).join(".pilot");
+    if fs::create_dir_all(&preferred).is_ok() {
+        return preferred;
+    }
+
+    // Fallback for constrained/sandboxed contexts where HOME is not writable.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let fallback = cwd.join(".pilot");
+    let _ = fs::create_dir_all(&fallback);
+    fallback
 }
 
 fn agorg_policy_report_path(ts: &str) -> PathBuf {
@@ -7278,6 +7321,28 @@ Recommended flow:
               </tbody>
             </table>
           </div>
+        </div>
+      <div class="card">
+        <h3>Conflict Radar</h3>
+        <div class="helper">Identify potential merge conflicts across all repositories before executing sync or merge.</div>
+        <div class="chip-row">
+          <span id="branch-radar-chip" class="chip neutral" tabindex="0" role="status">Radar: idle</span>
+        </div>
+        <div class="row">
+          <div style="flex:1;min-width:180px;">
+            <div class="helper">Radar branch</div>
+            <input id="branch-radar-input" placeholder="feat/pilot-wave13" value="feat/pilot-wave13" />
+          </div>
+          <div style="flex:1;min-width:140px;">
+            <div class="helper">Radar base</div>
+            <input id="branch-radar-base" placeholder="dev" value="dev" />
+          </div>
+        </div>
+        <div class="row">
+          <button id="branch-radar-btn" class="btn secondary" onclick="branchConflictRadarRun()">Run Conflict Radar</button>
+        </div>
+        <div id="branch-radar-results" style="margin-top: 10px; max-height: 300px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px;">
+          <div class="muted">Enter branch and run radar to detect conflicts.</div>
         </div>
       </div>
 
