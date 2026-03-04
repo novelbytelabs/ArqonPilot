@@ -35,7 +35,7 @@ use uuid::Uuid;
 const FAVICON_ICO: &[u8] = include_bytes!("../assets/favicon.ico");
 const PILOT_UI_JS: &str = include_str!("pilot_ui.js");
 
-use sha2::{Digest, Sha256};
+// use sha2::{Digest, Sha256}; // Removed to avoid warnings if unused here (it's used in pilot-core/lib.rs)
 
 #[derive(Clone)]
 pub struct UiConfig {
@@ -765,6 +765,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
             post(export_temporary_components_inventory),
         )
         .route("/api/evidence/export", post(export_evidence_bundle))
+        .route("/api/evidence/verify", post(api_evidence_verify))
         .route("/api/settings/policy/:kind", get(api_settings_get_policy))
         .route(
             "/api/settings/policy/:kind/draft",
@@ -3927,29 +3928,36 @@ async fn export_evidence_bundle(
     let file_path = root.join(&file_name);
 
     let chain_info = pilot_core::verify_audit_chain();
-    let mut artifacts_hashmap = Vec::new();
+    let mut artifacts = Vec::new();
     for row in &reports {
         if let Some(p) = row.get("path").and_then(|v| v.as_str()) {
             let abs_path = root.join(p);
             let sha = pilot_core::compute_file_hash(&abs_path)
                 .unwrap_or_else(|_| "hash_failed".to_string());
-            artifacts_hashmap.push(json!({"path": p, "sha256": sha}));
+            let size_bytes = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
+            artifacts.push(pilot_core::EvidenceArtifact {
+                path: p.to_string(),
+                sha256: sha,
+                size_bytes,
+            });
         }
     }
+    artifacts.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let manifest = json!({
-        "timestamp": now,
-        "chain_integrity": {
+    let manifest = pilot_core::EvidenceBundleManifest {
+        bundle_id: stamp.clone(),
+        created_at: Utc::now().to_rfc3339(),
+        scope_id: state.agorg_store.get_active_agorg().await.ok().flatten().map(|a| a.id.to_string()),
+        operator: std::env::var("USER").ok(),
+        artifacts,
+        chain_integrity: json!({
             "is_valid": chain_info.is_valid,
             "audited_events": chain_info.audited_events,
             "errors": chain_info.errors
-        },
-        "artifacts": artifacts_hashmap,
-    });
+        }),
+    };
 
-    let mut hasher = Sha256::new();
-    hasher.update(serde_json::to_string(&manifest).unwrap().as_bytes());
-    let bundle_hash = format!("{:x}", hasher.finalize());
+    let bundle_hash = manifest.compute_hash();
 
     let bundle = json!({
         "exported_at_unix": now,
@@ -3999,6 +4007,34 @@ async fn export_evidence_bundle(
         "gate_logs": bundle["counts"]["gate_logs"]
     }))
     .into_response()
+}
+
+#[derive(Deserialize)]
+struct EvidenceVerifyRequest {
+    path: String,
+}
+
+async fn api_evidence_verify(Json(req): Json<EvidenceVerifyRequest>) -> Response {
+    let path = std::path::PathBuf::from(&req.path);
+    if !path.exists() {
+        return Json(json!({
+            "ok": false,
+            "error": "Bundle file not found",
+            "is_valid": false,
+            "reason_code": "missing_file",
+            "details": format!("Bundle file not found: {}", req.path),
+            "offending_path": req.path
+        })).into_response();
+    }
+
+    let result = pilot_core::verify_evidence_bundle(&path);
+    Json(json!({
+        "ok": result.is_valid,
+        "is_valid": result.is_valid,
+        "reason_code": result.reason_code,
+        "details": result.details,
+        "offending_path": result.offending_path
+    })).into_response()
 }
 
 async fn run_codex_action(

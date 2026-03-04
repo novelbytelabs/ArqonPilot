@@ -27,7 +27,6 @@ use clap::{Args, Parser, Subcommand};
 use config::Config;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::de::DeserializeOwned;
-use sha2::Digest;
 use shim_runtime::bus_shim_command;
 use std::collections::HashSet;
 use std::fs;
@@ -2203,50 +2202,21 @@ async fn run_verify(args: &VerifyArgs) -> Result<CommandReport> {
             }
         }
         VerifyCommands::Bundle { path } => {
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| miette::miette!("Failed to read bundle: {}", e))?;
-            let bundle: serde_json::Value = serde_json::from_str(&content)
-                .map_err(|e| miette::miette!("Failed to parse JSON: {}", e))?;
+            let p = PathBuf::from(&path);
+            let result = pilot_core::verify_evidence_bundle(&p);
 
-            let manifest = bundle
-                .get("manifest")
-                .ok_or_else(|| miette::miette!("No manifest found in bundle"))?;
-            let stated_hash = bundle
-                .get("bundle_hash")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| miette::miette!("No bundle_hash found in bundle"))?;
-
-            let mut hasher = sha2::Sha256::new();
-            sha2::Digest::update(
-                &mut hasher,
-                serde_json::to_string(manifest).unwrap().as_bytes(),
-            );
-            let computed = format!("{:x}", hasher.finalize());
-            if computed != stated_hash {
-                return Err(miette::miette!(
-                    "Bundle hash mismatch! Computed: {}, Stated: {}",
-                    computed,
-                    stated_hash
-                ));
-            }
-
-            println!("Bundle signature OK.");
-            if let Some(chain) = manifest.get("chain_integrity") {
-                let valid = chain
-                    .get("is_valid")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                let events = chain
-                    .get("audited_events")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                println!(
-                    "Chain Integrity inside bundle: {} ({} events)",
-                    if valid { "VALID" } else { "INVALID" },
-                    events
+            if result.is_valid {
+                println!("Bundle signature OK.");
+                Ok(CommandReport::ok("verify.bundle", "valid"))
+            } else {
+                let off = result.offending_path.unwrap_or_else(|| "N/A".to_string());
+                let err_msg = format!(
+                    "Bundle verification failed. Reason: {} | Path: {} | Details: {}",
+                    result.reason_code, off, result.details
                 );
+                eprintln!("ERROR: {}", err_msg);
+                Err(miette::miette!("{}", err_msg))
             }
-            Ok(CommandReport::ok("verify.bundle", "valid"))
         }
         VerifyCommands::Artifact { path } => {
             let p = PathBuf::from(&path);

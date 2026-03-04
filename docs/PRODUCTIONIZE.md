@@ -515,22 +515,43 @@ Status: **HARD-CLOSED**
 - **Artifacts**: New P5 integration/adversarial test files plus orchestration unit coverage in `serve_ui.rs`.
 - **Gotchas**: No new gotchas discovered.
 
-### P6: Tamper-Evident Evidence Chain
+### P6: Tamper-Evident Evidence Chain [HARD-CLOSED]
+
+Status:
+
+1. **HARD-CLOSED** (re-verified 2026-03-04).
 
 Objective:
 
 1. Upgrade evidence from "logs exist" to release-grade integrity guarantees.
 
-Deliverables:
+Implemented:
 
-1. Signed/hashed artifact chain (operation -> artifact -> summary manifest).
-2. Exportable audit bundle for release gates.
-3. Verification utility to validate bundle integrity.
+1. Canonical manifest model in `pilot-core`:
+     - `EvidenceBundleManifest` + `EvidenceArtifact`.
+2. Single-source verifier:
+     - `pilot_core::verify_evidence_bundle` used by CLI (`run_verify`), API (`/api/evidence/verify`), and UI.
+3. Deterministic manifest integrity:
+     - artifact ordering normalized by `path` at export and in hash computation.
+4. Strict reason taxonomy:
+     - `hash_mismatch`, `missing_file`, `parse_error`, `schema_error`, `chain_mismatch`.
+5. UI verify output upgraded with reason-aware remediation hints and offending path display.
 
-Hard-close evidence:
+Observed verification evidence:
 
-1. Corruption/tamper simulation test fails verification as expected.
-2. Release bundle includes integrity manifest and verification result.
+1. `node -c crates/pilot/src/pilot_ui.js` -> pass.
+2. `cargo test -p pilot --locked --test p6_evidence_chain_holy_grail_test -- --nocapture` -> `1 passed; 0 failed`.
+3. `cargo test -p pilot --locked --test p6_evidence_chain_adversarial_test -- --nocapture` -> `6 passed; 0 failed`.
+4. `cargo test -p pilot --locked verify_ -- --nocapture` -> pass (P6 tests executed under verify filter).
+5. `./scripts/prepush_gate.sh` -> pass.
+
+Hard-close criteria satisfied:
+
+1. Exported bundle manifest is canonical and deterministically hashed.
+2. CLI/API/UI verification share one verifier and one reason taxonomy.
+3. Single-byte tamper yields `hash_mismatch` with offending path.
+4. Missing-artifact and malformed/invalid manifest cases fail cleanly (no panic, no false pass).
+5. No placeholder/stub/fake-success behavior found in touched P6 files.
 
 ### P7: Runtime Reliability Supervision [COMPLETED]
 

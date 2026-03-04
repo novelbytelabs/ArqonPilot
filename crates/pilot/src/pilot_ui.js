@@ -4475,10 +4475,14 @@ async function dashVerifyEvidence() {
   const out = document.getElementById('dash-verify-out');
   const path = pathNode ? pathNode.value.trim() : '';
   
-  const req = {};
-  if (path) req.path = path;
+  if (!path) {
+    out.innerHTML = '<span class="term-err">ERROR: Path cannot be empty</span>';
+    return;
+  }
+
+  const req = { path };
+  out.innerHTML = '<span class="term-sys">Verifying...</span>';
   
-  out.textContent = 'Verifying...';
   try {
     const res = await fetch('/api/evidence/verify', {
       method: 'POST',
@@ -4486,9 +4490,37 @@ async function dashVerifyEvidence() {
       body: JSON.stringify(req)
     });
     const data = await res.json();
-    out.textContent = JSON.stringify(data, null, 2);
+    
+    if (data.is_valid) {
+      out.innerHTML = `<span class="term-ok">✓ BUNDLE SIGNATURE OK</span>
+<span class="term-sys">Path:</span> ${path}`;
+      return;
+    }
+
+    // Map strict taxonomy to actionable UI
+    let hint = '';
+    if (data.reason_code === 'missing_file') {
+      hint = 'Mitigation: Ensure the bundle and all referenced artifacts exist at the correct paths.';
+    } else if (data.reason_code === 'hash_mismatch') {
+      hint = 'Mitigation: A file was changed after export. Review the offending path for tampering.';
+    } else if (data.reason_code === 'schema_error') {
+      hint = 'Mitigation: The manifest JSON is structurally invalid or missing required keys.';
+    } else if (data.reason_code === 'parse_error') {
+      hint = 'Mitigation: The bundle file is corrupt and cannot be parsed as JSON.';
+    } else if (data.reason_code === 'chain_mismatch') {
+      hint = 'Mitigation: The internal chain integrity state was recorded as invalid at export time.';
+    } else {
+      hint = 'Mitigation: Unknown error occurred.';
+    }
+
+    out.innerHTML = `<span class="term-err">✗ VERIFICATION FAILED</span>
+<span class="term-sys">Reason Code:</span> <span class="term-err">${data.reason_code}</span>
+<span class="term-sys">Details:</span>     ${data.details}` + 
+(data.offending_path ? `\n<span class="term-sys">Offending:</span>   <span class="term-warn">${data.offending_path}</span>` : '') +
+`\n\n<span class="term-dim">${hint}</span>`;
+
   } catch (err) {
-    out.textContent = 'Verification request failed: ' + err;
+    out.innerHTML = `<span class="term-err">✗ Verification request failed: ${err}</span>`;
   }
 }
 
