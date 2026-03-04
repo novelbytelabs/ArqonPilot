@@ -283,6 +283,7 @@ function activatePanel(tabName, opts = {}) {
     agorgShowActive();
     agorgList();
     agorgTree();
+    agorgLoadPolicyReports();
   }
   if (tabName === 'branch') {
     branchLoadMatrix();
@@ -297,8 +298,9 @@ function activatePanel(tabName, opts = {}) {
   if (['oracle', 'heal', 'dependencies', 'multi'].includes(tabName)) {
     fetchJsonSafe('/api/agorg/active').then(res => {
       const container = document.getElementById(tabName + '-empty-state');
+      const hasActiveScope = !!(res && res.ok && res.active && res.active.id);
       if (container) {
-        if (!res || !res.id) {
+        if (!hasActiveScope) {
           container.innerHTML = `
             <div style="background:rgba(255, 215, 0, 0.1); border:1px solid rgba(255, 215, 0, 0.4); padding:12px; border-radius:8px; margin-bottom:16px;">
               <strong>No active AGOrg detected.</strong><br>
@@ -342,6 +344,17 @@ function readInputValue(id) {
 function readInputChecked(id) {
   const el = document.getElementById(id);
   return !!(el && el.checked);
+}
+
+function setVal(id, val) {
+  const el = document.getElementById(id);
+  if (el) {
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+      el.value = val;
+    } else {
+      el.textContent = val;
+    }
+  }
 }
 
 function collectUiSessionState() {

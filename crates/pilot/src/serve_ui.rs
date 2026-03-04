@@ -7836,7 +7836,8 @@ Recommended flow:
 
     <!-- Row 2: Import / Create New (full width) -->
     <div class="card" style="margin-top:24px;">
-      <div class="sub-tabs">
+      <h3>AGOrg Management</h3>
+      <div class="sub-tabs" style="margin-top:10px;">
         <button class="sub-tab active" onclick="activateSubPanel('agorg-import-panel', this)">IMPORT EXISTING</button>
         <button class="sub-tab" onclick="activateSubPanel('agorg-create-panel', this)">CREATE NEW</button>
       </div>
@@ -7878,27 +7879,6 @@ Recommended flow:
           </div>
         </div>
 
-        <!-- Section 3: Governance & Policy -->
-        <div class="section-box" style="margin-top:16px;">
-          <h4>3) GOVERNANCE & POLICY</h4>
-          <div class="row">
-            <select id="agorg-reconcile-class">
-              <option value="">all classes</option>
-              <option value="topology">topology (auto-fix)</option>
-              <option value="policy_dependency">policy_dependency (manual)</option>
-              <option value="policy_branch">policy_branch (manual)</option>
-              <option value="metadata">metadata (manual)</option>
-            </select>
-            <button class="btn secondary" onclick="agorgReconcile()">Policy Report</button>
-            <button class="btn secondary" onclick="agorgReconcileApply()">Reconcile Apply</button>
-          </div>
-          <div class="row">
-            <button class="btn secondary" onclick="agorgLoadPolicyReports()">Refresh Policy Artifacts</button>
-            <select id="agorg-policy-report-select"></select>
-            <button class="btn secondary" onclick="agorgOpenPolicyReport()">Open</button>
-          </div>
-        </div>
-
 
       </div>
 
@@ -7937,6 +7917,30 @@ Recommended flow:
     </div>
 
 
+
+    <!-- Row 3: Governance & Policy -->
+    <div class="card" style="margin-top:24px;">
+      <h3>Governance & Policy</h3>
+      <div class="helper">Audit and reconcile policy drift across the collective. Use `Policy Report` to scan and `Reconcile Apply` to resolve auto-fixable issues.</div>
+      <div class="section-box" style="margin-top:16px;">
+        <div class="row">
+          <select id="agorg-reconcile-class">
+            <option value="">all classes</option>
+            <option value="topology">topology (auto-fix)</option>
+            <option value="policy_dependency">policy_dependency (manual)</option>
+            <option value="policy_branch">policy_branch (manual)</option>
+            <option value="metadata">metadata (manual)</option>
+          </select>
+          <button class="btn secondary" onclick="agorgReconcile()">Policy Report</button>
+          <button class="btn secondary" onclick="agorgReconcileApply()">Reconcile Apply</button>
+        </div>
+        <div class="row">
+          <button class="btn secondary" onclick="agorgLoadPolicyReports()">Refresh Policy Artifacts</button>
+          <select id="agorg-policy-report-select"></select>
+          <button class="btn secondary" onclick="agorgOpenPolicyReport()">Open</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Row 4: Activity Log -->
     <div class="card" style="margin-top:24px;">
