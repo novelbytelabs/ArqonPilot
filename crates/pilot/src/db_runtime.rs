@@ -267,7 +267,8 @@ impl PilotDbManager {
     }
 
     async fn is_running(&self) -> Result<bool> {
-        let pg_ctl = resolve_postgres_bin("pg_ctl").map_err(|e| miette!("DB check failed: {}", e))?;
+        let pg_ctl =
+            resolve_postgres_bin("pg_ctl").map_err(|e| miette!("DB check failed: {}", e))?;
         let mut cmd = Command::new(pg_ctl);
         cmd.arg("-D").arg(&self.data_dir).arg("status");
         let output = cmd.output().await.into_diagnostic()?;

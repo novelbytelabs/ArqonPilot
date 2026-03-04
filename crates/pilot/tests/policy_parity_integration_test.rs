@@ -60,7 +60,9 @@ fn setup_agorg(
             || stderr.contains("could not open shared memory segment")
             || stderr.contains("Operation not permitted")
         {
-            eprintln!("Skipping test: managed Postgres shared-memory denied by runtime environment.");
+            eprintln!(
+                "Skipping test: managed Postgres shared-memory denied by runtime environment."
+            );
             return Ok(true);
         }
         let full = format!(

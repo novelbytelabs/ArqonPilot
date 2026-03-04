@@ -1093,7 +1093,10 @@ pub fn required_confirmation(
     if action == "delete" || action == "force-push" {
         if policy.mutation_control.protected_branch_confirmation {
             return (
-                policy.mutation_control.destructive_confirmation_type.clone(),
+                policy
+                    .mutation_control
+                    .destructive_confirmation_type
+                    .clone(),
                 Some("CONFIRM".to_string()),
             );
         }
@@ -1138,11 +1141,12 @@ pub fn check_command_allowlist(
 
     // Determine category - use command prefix matching to avoid false positives
     let command_lower = command.to_lowercase();
-    let category = if command_lower.starts_with("list") 
-        || command_lower.starts_with("status") 
+    let category = if command_lower.starts_with("list")
+        || command_lower.starts_with("status")
         || command_lower.starts_with("query")
-        || command_lower.starts_with("show") 
-        || command_lower.starts_with("get") {
+        || command_lower.starts_with("show")
+        || command_lower.starts_with("get")
+    {
         Some("read".to_string())
     } else if command_lower.starts_with("create") {
         Some("branch_create".to_string())
@@ -1162,9 +1166,11 @@ pub fn check_command_allowlist(
 
     // Check if category is enabled
     if let Some(ref cat) = category {
-        let enabled = policy.command_allowlist.enabled_categories.iter().any(|c| {
-            c.as_str() == cat
-        });
+        let enabled = policy
+            .command_allowlist
+            .enabled_categories
+            .iter()
+            .any(|c| c.as_str() == cat);
 
         if !enabled {
             return AllowlistCheckResult {
@@ -1185,10 +1191,7 @@ pub fn check_command_allowlist(
 }
 
 /// Redact secrets from a string using the policy's redaction patterns
-pub fn redact_secrets(
-    policy: &MutationControlPolicy,
-    input: &str,
-) -> String {
+pub fn redact_secrets(policy: &MutationControlPolicy, input: &str) -> String {
     if !policy.secrets_safe_logging {
         return input.to_string();
     }
@@ -1566,5 +1569,3 @@ license = "GPL-3.0"
         assert!(phrase.is_none());
     }
 }
-
-

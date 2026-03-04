@@ -929,9 +929,7 @@ impl AgorgStore {
         // Errors from the fleet scan are non-fatal: reconcile still completes with
         // structural results, and fleet_report is None.
         let fleet_report = match crate::governance::eval::fleet_governance_scan(
-            &gov_store,
-            self,
-            agorg.id,
+            &gov_store, self, agorg.id,
         )
         .await
         {
@@ -1007,7 +1005,11 @@ impl AgorgStore {
             agorg_name: agorg.name,
             root_path: agorg.root_path,
             total_agos: agos.len(),
-            issue_count: issues.len() + governance_issues.iter().filter(|g| g.severity == "error").count(),
+            issue_count: issues.len()
+                + governance_issues
+                    .iter()
+                    .filter(|g| g.severity == "error")
+                    .count(),
             off_policy_count: prune_candidate_paths.len(),
             class_counts,
             prune_candidate_paths,

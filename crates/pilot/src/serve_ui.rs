@@ -683,7 +683,9 @@ async fn favicon() -> impl IntoResponse {
     )
 }
 
-fn classify_bus_health(bus_res: std::result::Result<(i32, String, String), String>) -> (bool, &'static str, String) {
+fn classify_bus_health(
+    bus_res: std::result::Result<(i32, String, String), String>,
+) -> (bool, &'static str, String) {
     match bus_res {
         Ok((code, out, err)) => {
             if code == 0 && bus_shim_running(&out, &err) {
@@ -733,7 +735,10 @@ fn classify_db_health(
     }
 }
 
-fn preflight_steps_from_action(action: &str, req_steps: Option<Vec<String>>) -> Vec<crate::preflight::model::PreflightStepType> {
+fn preflight_steps_from_action(
+    action: &str,
+    req_steps: Option<Vec<String>>,
+) -> Vec<crate::preflight::model::PreflightStepType> {
     use crate::preflight::model::PreflightStepType;
     match action {
         "policy" => vec![PreflightStepType::Policy],
@@ -785,7 +790,8 @@ async fn api_health(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     let (bus_res, db_res) = tokio::join!(bus_future, db_future);
     let latency_ms = db_start.elapsed().as_millis() as u64;
 
-    let (bus_running, bus_state, bus_note) = classify_bus_health(bus_res.map_err(|e| e.to_string()));
+    let (bus_running, bus_state, bus_note) =
+        classify_bus_health(bus_res.map_err(|e| e.to_string()));
     let (db_running, db_state, db_note) = classify_db_health(db_res.map_err(|e| e.to_string()));
 
     let ok = bus_running && db_running;
@@ -3512,9 +3518,7 @@ async fn run_dependency_action(
                     bus_running = code == 0 && bus_shim_running(out, err);
                     (out.to_string(), err.to_string())
                 }
-                Err(e) => {
-                    (format!("Bus Error: {}", e), String::new())
-                }
+                Err(e) => (format!("Bus Error: {}", e), String::new()),
             }
         };
 
@@ -3543,7 +3547,6 @@ async fn run_dependency_action(
     }
 
     let result = match (action, req.json) {
-
         ("preflight", _) | ("policy", _) | ("hook-policy", _) | ("drift", _) | ("gate", _) => {
             use crate::preflight::graph::run_preflight_graph;
             let steps = preflight_steps_from_action(action, req.preflight_steps.clone());
@@ -4272,16 +4275,14 @@ mod tests {
     use super::{
         agorg_conformance_score, agorg_policy_report_response,
         agorg_reconcile_apply_dry_run_response, agorg_reconcile_apply_success_response,
-        append_codex_contract_record, canonical_branch_payload, command_requires_cwd_scope,
-        command_requires_multi_selector, command_requires_mutation, command_scope_required,
-        classify_bus_health, classify_db_health,
-        dependency_action_requires_cwd_scope, dependency_action_scope_required,
-        filter_prune_paths_by_class, is_safe_cli_token, load_persisted_codex_contracts,
-        parse_json_from_mixed_output, payload_has_multi_selector, prune_expired_branch_previews,
-        preflight_steps_from_action,
-        resolve_branch_targets, scope_filter_rows, sorted_unique_ids, sorted_unique_tags,
-        with_event_agorg_scope, BranchMatrixRow, BranchPreviewRecord, BranchRunRequest,
-        CodexContractRecord,
+        append_codex_contract_record, canonical_branch_payload, classify_bus_health,
+        classify_db_health, command_requires_cwd_scope, command_requires_multi_selector,
+        command_requires_mutation, command_scope_required, dependency_action_requires_cwd_scope,
+        dependency_action_scope_required, filter_prune_paths_by_class, is_safe_cli_token,
+        load_persisted_codex_contracts, parse_json_from_mixed_output, payload_has_multi_selector,
+        preflight_steps_from_action, prune_expired_branch_previews, resolve_branch_targets,
+        scope_filter_rows, sorted_unique_ids, sorted_unique_tags, with_event_agorg_scope,
+        BranchMatrixRow, BranchPreviewRecord, BranchRunRequest, CodexContractRecord,
     };
     use crate::agorg::{AgorgReconcileIssue, AgorgReconcileReport};
     use crate::db_runtime::DbStatus;
@@ -4392,11 +4393,8 @@ mod tests {
 
     #[test]
     fn test_classify_bus_health_probe_failed() {
-        let (running, state, note) = classify_bus_health(Ok((
-            1,
-            "".to_string(),
-            "ss: command not found".to_string(),
-        )));
+        let (running, state, note) =
+            classify_bus_health(Ok((1, "".to_string(), "ss: command not found".to_string())));
         assert!(!running);
         assert_eq!(state, "PROBE_FAILED");
         assert!(note.contains("iproute2") || note.contains("SS_BIN"));
@@ -4404,8 +4402,7 @@ mod tests {
 
     #[test]
     fn test_classify_bus_health_unavailable() {
-        let (running, state, note) =
-            classify_bus_health(Err("spawn failed: denied".to_string()));
+        let (running, state, note) = classify_bus_health(Err("spawn failed: denied".to_string()));
         assert!(!running);
         assert_eq!(state, "UNAVAILABLE");
         assert!(note.contains("spawn failed"));
@@ -4591,6 +4588,51 @@ mod tests {
         assert_eq!(out["pruned"], 1);
         assert_eq!(out["before"]["off_policy_count"], 1);
         assert_eq!(out["after"]["off_policy_count"], 0);
+    }
+
+    #[test]
+    fn test_persist_agorg_reconcile_writes_governance_sidecar_when_fleet_report_present() {
+        let payload = json!({
+            "ok": true,
+            "dry_run": true,
+            "governance_issues": [{
+                "ago_path": "/tmp/repo-a",
+                "policy_kind": "security",
+                "issue_type": "policy_violation",
+                "severity": "error",
+                "message": "test",
+                "remediation": "fix"
+            }],
+            "conflict_traces": [],
+            "fleet_report": {
+                "agorg_id": Uuid::nil().to_string(),
+                "agorg_name": "Arqon",
+                "scan_time": "2026-01-01T00:00:00Z",
+                "ago_statuses": []
+            }
+        });
+        let main_path = super::persist_agorg_reconcile_action_report("dry_run", &payload)
+            .expect("persist failed");
+        let main_pb = PathBuf::from(&main_path);
+        assert!(main_pb.exists(), "main reconcile artifact should exist");
+
+        let file_name = main_pb
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("main artifact file name missing");
+        let ts = file_name
+            .strip_prefix("agorg_reconcile_dry_run_")
+            .and_then(|n| n.strip_suffix(".json"))
+            .expect("timestamp parse failed");
+        let sidecar =
+            super::reports_root().join(format!("governance_reconcile_dry_run_{}.json", ts));
+        assert!(
+            sidecar.exists(),
+            "governance sidecar should exist when fleet_report is present"
+        );
+
+        let _ = fs::remove_file(main_pb);
+        let _ = fs::remove_file(sidecar);
     }
 
     #[test]
@@ -5218,7 +5260,10 @@ fn persist_agorg_reconcile_action_report(mode: &str, payload: &Value) -> std::io
                 }
             }
             Err(e) => {
-                eprintln!("Warning [G-043]: governance artifact serialization failed: {}", e);
+                eprintln!(
+                    "Warning [G-043]: governance artifact serialization failed: {}",
+                    e
+                );
             }
         }
     }

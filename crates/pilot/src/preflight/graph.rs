@@ -1,8 +1,8 @@
 use crate::preflight::model::*;
 use miette::Result;
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::process::Command;
 
 pub async fn run_preflight_graph(
     repo_path: &Path,
@@ -70,7 +70,8 @@ pub async fn run_preflight_graph(
         if let Err(e) = std::fs::write(&report_path, &json) {
             eprintln!(
                 "Warning: Failed to write preflight evidence to {}: {}",
-                report_path.display(), e
+                report_path.display(),
+                e
             );
         }
     }

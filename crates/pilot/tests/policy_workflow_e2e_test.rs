@@ -118,7 +118,9 @@ fn test_policy_workflow_draft_preview_scan() -> Result<(), Box<dyn std::error::E
             || stderr.contains("could not open shared memory segment")
             || stderr.contains("Operation not permitted")
         {
-            eprintln!("Skipping test: managed Postgres shared-memory denied by runtime environment.");
+            eprintln!(
+                "Skipping test: managed Postgres shared-memory denied by runtime environment."
+            );
             return Ok(());
         }
         let full = format!(
