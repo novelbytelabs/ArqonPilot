@@ -2,7 +2,7 @@ use assert_cmd::Command;
 use chrono::{Duration, Utc};
 use serde_json::Value;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
@@ -239,7 +239,9 @@ fn test_reconcile_surfaces_security_policy_violations_in_fleet_report(
         .tempdir_in(temp_root)?;
 
     let home = temp.path().join("home");
-    let pilot_home_dir = tempfile::Builder::new().prefix("pdb9351_").tempdir_in("/tmp")?;
+    let pilot_home_dir = tempfile::Builder::new()
+        .prefix("pdb9351_")
+        .tempdir_in("/tmp")?;
     let pilot_home = pilot_home_dir.path().to_path_buf();
     let master_root = temp.path().join("master");
     let repo_root = master_root.join("RepoA");
@@ -311,7 +313,9 @@ fn test_reconcile_reports_orphan_and_expired_overrides() -> Result<(), Box<dyn s
         .tempdir_in(temp_root)?;
 
     let home = temp.path().join("home");
-    let pilot_home_dir = tempfile::Builder::new().prefix("pdb9352_").tempdir_in("/tmp")?;
+    let pilot_home_dir = tempfile::Builder::new()
+        .prefix("pdb9352_")
+        .tempdir_in("/tmp")?;
     let pilot_home = pilot_home_dir.path().to_path_buf();
     let master_root = temp.path().join("master");
     let repo_root = master_root.join("RepoB");

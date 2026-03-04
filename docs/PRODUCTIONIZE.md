@@ -415,29 +415,34 @@ Hard-close evidence:
 
 **STATUS: HARD-CLOSED** — 2026-03-03
 
-**Changed files:**
-- `crates/pilot/src/agorg.rs`: Added `fleet_report: Option<GovernanceReconcileReport>` to `AgorgReconcileReport`; wired `fleet_governance_scan` into `reconcile_agorg` (override sweep + fleet scan merged; non-fatal on scan failure per G-043).
-- `crates/pilot/src/serve_ui.rs`: Added `governance_issues`, `conflict_traces`, `fleet_report` fields to both `agorg_reconcile_apply_dry_run_response` and `agorg_reconcile_apply_success_response`; added `governance_reconcile_artifact_path` helper; extended `persist_agorg_reconcile_action_report` to emit sidecar `governance_reconcile_<mode>_<ts>.json` artifact (G-043 compliant: write failures are non-fatal).
-- `crates/pilot/tests/agorg_governance_reconcile_test.rs`: NEW — P3 integration tier (4 tests).
-- `crates/pilot/tests/agorg_governance_adversarial_test.rs`: NEW — P3 adversarial tier (4 tests).
+**Changed files (P3 implementation + hard-close remediation):**
+- `crates/pilot/src/agorg.rs`: `fleet_report` + merged fleet governance scan output into reconcile report; governance issue/trace wiring.
+- `crates/pilot/src/serve_ui.rs`: reconcile API response includes `governance_issues`/`conflict_traces`/`fleet_report`; governance sidecar artifact writer; added sidecar persistence unit test.
+- `crates/pilot/tests/agorg_governance_reconcile_test.rs`: DB-backed integration tests for reconcile output semantics.
+- `crates/pilot/tests/agorg_governance_adversarial_test.rs`: DB-backed adversarial tests (scope errors + inherited policy enforcement).
 
-**Commands run:**
+**Commands run (observed):**
 ```
-cargo check -p pilot --locked                     # EXIT:0 (clean compile)
-cargo test -p pilot --locked > /tmp/p3_full.log   # EXIT:0
-grep -rn 'todo!()...' [P3 files]                  # 0 results (no placeholders)
-node -c crates/pilot/src/pilot_ui.js              # EXIT:0 (G-015 clean)
+cargo fmt
+cargo check -p pilot --locked
+cargo test -p pilot --locked --test agorg_governance_reconcile_test -- --nocapture
+cargo test -p pilot --locked --test agorg_governance_adversarial_test -- --nocapture
+cargo test -p pilot --locked test_persist_agorg_reconcile_writes_governance_sidecar_when_fleet_report_present -- --nocapture
+cargo test -p pilot --locked
+node -c crates/pilot/src/pilot_ui.js
 ```
 
 **Test results by tier:**
-- Unit (74 tests): `ok. 74 passed; 0 failed`
-- Integration — agorg_governance_reconcile_test: `ok. 4 passed; 0 failed`
+- Unit (main binary): `ok. 75 passed; 0 failed`
+- Integration — agorg_governance_reconcile_test: `ok. 2 passed; 0 failed`
 - Adversarial — agorg_governance_adversarial_test: `ok. 4 passed; 0 failed`
 - E2E — policy_workflow_e2e_test: `ok. 1 passed; 0 failed`
 - Regression — policy_parity_integration_test: `ok. 1 passed; 0 failed`
 - All other existing suites: unchanged and passing
 
-**Gotcha updates:** None new. G-043 mitigation applied in governance artifact write path.
+**Gotcha updates:**
+- `G-041` signature expanded in tests to include Unix socket path-length failure (`could not create any Unix-domain sockets` / `Unix-domain socket path ... is too long`) as environment skip condition in restricted paths.
+- `G-043` mitigation remains enforced for non-fatal governance sidecar write failures.
 
 
 ### P4: Branch Control Holy-Grail Completion
@@ -720,10 +725,12 @@ The executing AI must read `docs/gotcha-registry.md` before coding. At minimum, 
 7. `G-015`: fatal UI JS parse failures; Rust compile success is not enough.
 8. `G-017`: "feature complete" claim with stubbed behavior.
 9. `G-043`: preflight evidence writes can fail with `Permission denied` while graph tests still pass.
+10. `G-044`: cross-repo drift — ArqonPilot work accidentally written under `Arqon/`.
 
 Session startup requirement:
 1. Include in session notes which gotchas are relevant to current wave.
 2. If any matching signature appears, use the exact recovery path before adding code.
+3. Run `./scripts/repo_boundary_guard.sh` before editing or executing wave scripts.
 
 ## Standard Build Posture (Decision Discipline)
 

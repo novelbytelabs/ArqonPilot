@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use serde_json::Value;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn pilot_cmd() -> Result<Command, Box<dyn std::error::Error>> {
     Ok(Command::cargo_bin("pilot")?)
@@ -35,6 +35,8 @@ fn skip_if_db_env_denied(
     if stderr.contains("Operation not permitted")
         || (stderr.contains("Permission denied") && stderr.contains("shared memory"))
         || stderr.contains("could not open shared memory segment")
+        || stderr.contains("could not create any Unix-domain sockets")
+        || stderr.contains("Unix-domain socket path")
     {
         eprintln!("Skipping test: managed Postgres shared-memory denied by runtime environment.");
         return Ok(true);
@@ -155,7 +157,10 @@ fn test_reconcile_requires_active_or_explicit_agorg() -> Result<(), Box<dyn std:
         .prefix("agorg_p3_adv_no_scope_")
         .tempdir_in(temp_root)?;
     let home = temp.path().join("home");
-    let pilot_home = temp.path().join("pilot_home");
+    let pilot_home_dir = tempfile::Builder::new()
+        .prefix("pdb9353_")
+        .tempdir_in("/tmp")?;
+    let pilot_home = pilot_home_dir.path().to_path_buf();
     fs::create_dir_all(&home)?;
 
     if skip_if_db_env_denied(&home, &pilot_home, "9353")? {
@@ -201,7 +206,10 @@ fn test_reconcile_enforces_inherited_parent_policy() -> Result<(), Box<dyn std::
         .tempdir_in(temp_root)?;
 
     let home = temp.path().join("home");
-    let pilot_home = temp.path().join("pilot_home");
+    let pilot_home_dir = tempfile::Builder::new()
+        .prefix("pdb9354_")
+        .tempdir_in("/tmp")?;
+    let pilot_home = pilot_home_dir.path().to_path_buf();
     let parent_root = temp.path().join("parent_root");
     let child_root = temp.path().join("child_root");
     let child_repo = child_root.join("RepoChild");

@@ -20,6 +20,7 @@ Keep this file current whenever a new failure class appears.
 - Signature:
   - `verify_policy_parity.sh` or policy integration/e2e tests fail with:
     - `could not create any Unix-domain sockets`
+    - `Unix-domain socket path ... is too long (maximum 107 bytes)`
     - `could not open shared memory segment ... Permission denied`
     - `Operation not permitted`
 - Cause:
@@ -68,6 +69,21 @@ Keep this file current whenever a new failure class appears.
      - `ls -lt ~/.pilot/reports/preflight_*.json | head`
 - Prevention:
   - Include a writable-report-dir check in preflight hard-close packet evidence whenever artifact emission is claimed.
+
+## G-044: Cross-repo drift (ArqonPilot work written into `Arqon/`)
+
+- Signature:
+  - ArqonPilot plan/artifact files appear under `Arqon/` paths (for example `Arqon/ArqonPilot/...` or `Arqon/docs/polity/...` unexpectedly updated during Pilot waves).
+- Cause:
+  - Session started in wrong repo root, or automation executed with `cwd` outside `/home/irbsurfer/Projects/arqon/ArqonPilot`.
+- Recovery:
+  1. Run boundary check before any edits:
+     - `./scripts/repo_boundary_guard.sh`
+  2. Audit misplaced files:
+     - `cd /home/irbsurfer/Projects/arqon && find Arqon -type f | rg -n "ArqonPilot|PRODUCTIONIZE|federated-ci-program-plan"`
+  3. Move/delete misplaced files only after operator confirmation.
+- Prevention:
+  - Make `./scripts/repo_boundary_guard.sh` the first command in every new AI session.
 
 ## G-018: Widespread compilation failure after `evaluate_*_policy` signature changes
 

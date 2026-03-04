@@ -574,6 +574,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         )
         .route("/api/branch/undo-journal", get(api_branch_undo_journal))
         .route("/api/branch/undo", post(api_branch_undo))
+        .route("/api/branch/timeline", get(api_branch_timeline))
         .route("/api/orchestrate/timeline", get(api_orchestrate_timeline))
         .route("/api/orchestrate/run", post(api_orchestrate_run))
         .route(
@@ -1943,6 +1944,48 @@ struct TimelineQuery {
     offset: Option<usize>,
     domain: Option<String>,
     action: Option<String>,
+}
+
+/// P4: Branch-scoped timeline — returns audit events for domain="branch" in the
+/// active AGOrg scope. Bounded offset and limit prevent unbounded reads (G-007).
+/// The `details` field is included in full for drill-down; UI must truncate display.
+async fn api_branch_timeline(
+    State(state): State<Arc<UiState>>,
+    Query(q): Query<TimelineQuery>,
+) -> Response {
+    let scope_id = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(active)) => active.id.to_string(),
+        _ => String::new(),
+    };
+    // Bounds: offset must not be negative (query-param is usize, so inherently >= 0);
+    // cap limit at 500 to prevent oversized payloads (G-007 guard).
+    let limit = q.limit.unwrap_or(50).min(500);
+    let offset = q.offset.unwrap_or(0).min(10_000);
+    let scope_opt: Option<&str> = if scope_id.is_empty() {
+        None
+    } else {
+        Some(&scope_id)
+    };
+
+    // Always filter to domain="branch"; action filter is optional.
+    let events = pilot_core::query_audit_events(
+        scope_opt,
+        Some("branch"),
+        q.action.as_deref(),
+        limit,
+        offset,
+    );
+
+    Json(json!({
+        "ok": true,
+        "scope_id": scope_id,
+        "domain": "branch",
+        "count": events.len(),
+        "limit": limit,
+        "offset": offset,
+        "events": events
+    }))
+    .into_response()
 }
 
 async fn api_orchestrate_timeline(
