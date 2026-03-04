@@ -7766,7 +7766,8 @@ Recommended flow:
         </div>
         <label class="field-label" for="agorg-use-id">Manual Switch (UUID or Name)</label>
         <div class="row">
-          <input id="agorg-use-id" placeholder="UUID or name" />
+          <input id="agorg-use-id" placeholder="UUID or name" list="agorg-datalist" />
+          <datalist id="agorg-datalist"></datalist>
           <button class="btn secondary" onclick="agorgUse()">Switch</button>
         </div>
         <div class="row" style="margin-top:8px;">

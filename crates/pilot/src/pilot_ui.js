@@ -537,6 +537,9 @@ async function switchAgorgScope(id) {
   const data = await res.json();
   await hydrateScopeSnapshot(true);
   refreshAgorgHeader();
+  if (data && data.ok) {
+    await refreshPolicyHookDriftChips();
+  }
   if (currentTab === 'agorg') {
     agorgTree();
     agorgShowActive();
@@ -547,6 +550,12 @@ async function switchAgorgScope(id) {
   queueUiSessionSave();
   p5ResetRailState(); // P5: clear orchestration rail state on scope switch
   document.getElementById('agorg-hero-dropdown').classList.remove('active');
+}
+
+async function refreshPolicyHookDriftChips() {
+  await depRun('policy');
+  await depRun('hook-policy');
+  await depRun('drift');
 }
 
 // Global click to close dropdown
@@ -1947,9 +1956,10 @@ async function depRun(action) {
     body: JSON.stringify({ domain: 'dependency', payload: req })
   });
   const data = await res.json();
+  const inner = (data && data.inner && typeof data.inner === 'object') ? data.inner : data;
   
-  if (data.action === 'preflight' && data.report && Array.isArray(data.report.steps)) {
-    for (const s of data.report.steps) {
+  if (inner.action === 'preflight' && inner.report && Array.isArray(inner.report.steps)) {
+    for (const s of inner.report.steps) {
       const stepName = s.step;
       const passed = s.result.status === 'Pass';
       const suffix = passed ? 'PASS' : 'FAIL';
@@ -1984,15 +1994,30 @@ async function depRun(action) {
       }
     }
   }
+  if (isPreflight && (!inner || !inner.ok || !(inner.report && Array.isArray(inner.report.steps)))) {
+    const err = (inner && inner.error) ? String(inner.error) : ((data && data.error) ? String(data.error) : 'preflight failed');
+    if (action === 'policy') {
+      setDepStatus(depPolicyStatus, { ok: false, failed_checks: [err] });
+      setChip(dashPolicyChip, 'Policy: FAIL', 'fail');
+    }
+    if (action === 'hook-policy') {
+      setDepStatus(depHookStatus, { ok: false, failed_checks: [err] });
+      setChip(dashHookChip, 'Hook: FAIL', 'fail');
+    }
+    if (action === 'drift') {
+      setDepDriftStatus('FAIL');
+      setChip(dashDriftChip, 'Drift: FAIL', 'fail');
+    }
+  }
 
   if (action.startsWith('bus-')) {
-    const text = String(data.stdout || '') + '\n' + String(data.stderr || '');
+    const text = String(inner.stdout || '') + '\n' + String(inner.stderr || '');
     if (text.includes('RUNNING')) setBusStatus(true, 'bus shim reported RUNNING');
     if (text.includes('STOPPED')) setBusStatus(false, 'bus shim reported STOPPED');
   }
   if (action === 'services-status' || action === 'services-start' || action === 'services-stop' || action === 'services-restart') {
-    if (typeof data.bus_running === 'boolean') {
-      setBusStatus(data.bus_running, data.bus_running ? 'service manager reported RUNNING' : 'service manager reported STOPPED');
+    if (typeof inner.bus_running === 'boolean') {
+      setBusStatus(inner.bus_running, inner.bus_running ? 'service manager reported RUNNING' : 'service manager reported STOPPED');
     }
   }
   depActionOut.textContent = JSON.stringify(data, null, 2);
@@ -2000,7 +2025,7 @@ async function depRun(action) {
     depActionOutGlobal.textContent = JSON.stringify(data, null, 2);
   }
   if (!isPreflight) {
-      updateDashChip(action, !!data.ok, data);
+      updateDashChip(action, !!inner.ok, inner);
   }
   depLoadLogs();
 }
@@ -2186,29 +2211,67 @@ async function agorgUpgradeAgo(path, name) {
 }
 
 async function agorgUpdate() {
-  const req = {
-    id: null, // Need to track selected ID
-    name: document.getElementById('agorg-name').value.trim(),
-    root: document.getElementById('agorg-root').value.trim(),
-    master: document.getElementById('agorg-master').value.trim()
-  };
-  // Finding the ID from some state or active
-  const activeRes = await fetch('/api/agorg/active');
-  const activeData = await activeRes.json();
-  if (!activeRes.ok || !activeData.active) {
+  const activeRes = await fetchJsonSafe('/api/agorg/active');
+  if (!activeRes.ok || !activeRes.active) {
      agorgOut.textContent = "Error: No active AGOrg selected for update";
      return;
   }
-  req.id = activeData.active.id;
+  const active = activeRes.active;
+
+  const newName = prompt("New Name:", active.name);
+  if (newName === null) return;
+  const newRoot = prompt("New Root Path:", active.root_path);
+  if (newRoot === null) return;
+  const newMaster = prompt("New Master Path (optional):", active.master_path || "");
+  if (newMaster === null) return;
+
+  const req = {
+    id: active.id,
+    name: newName.trim() || active.name,
+    root: newRoot.trim() || active.root_path,
+    master: newMaster.trim() || null
+  };
   
-  const res = await fetch('/api/agorg/update', {
+  const res = await fetchJsonSafe('/api/agorg/update', {
     method: 'POST',
     headers: {'content-type':'application/json'},
     body: JSON.stringify(req)
   });
-  const data = await res.json();
-  agorgOut.textContent = JSON.stringify(data, null, 2);
-  refreshAgorgHeader();
+  agorgOut.textContent = JSON.stringify(res, null, 2);
+  if (res.ok) {
+    await hydrateScopeSnapshot(true);
+    refreshAgorgHeader();
+    agorgShowActive();
+    agorgList();
+  }
+}
+
+async function agorgDelete() {
+  const activeRes = await fetchJsonSafe('/api/agorg/active');
+  if (!activeRes.ok || !activeRes.active) {
+     agorgOut.textContent = "Error: No active AGOrg selected for deletion";
+     return;
+  }
+  const active = activeRes.active;
+
+  if (!confirm(`Are you sure you want to delete AGOrg \"${active.name}\" (${active.id})? This will unregister it from Pilot but will NOT delete files on disk.`)) {
+    return;
+  }
+
+  const res = await fetchJsonSafe('/api/agorg/delete', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ id: active.id })
+  });
+  
+  agorgOut.textContent = JSON.stringify(res, null, 2);
+  if (res.ok) {
+    await hydrateScopeSnapshot(true);
+    refreshAgorgHeader();
+    agorgShowActive();
+    agorgList();
+    agorgTree();
+  }
 }
 
 async function browseAgorgMaster() {
@@ -2270,6 +2333,18 @@ function renderAgorgRegistry(agorgs) {
         agorgRegistryList.appendChild(el);
      });
   }
+
+  // Populate datalist for manual switch
+  const datalist = document.getElementById('agorg-datalist');
+  if (datalist) {
+     datalist.innerHTML = '';
+     agorgs.forEach(ag => {
+        const opt = document.createElement('option');
+        opt.value = ag.id;
+        opt.textContent = ag.name;
+        datalist.appendChild(opt);
+     });
+  }
 }
 
 async function agorgList() {
@@ -2312,6 +2387,15 @@ async function agorgList() {
           <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#6a7dff;">AGO</span>
         `;
         if (agorgRegistryList) agorgRegistryList.appendChild(el);
+
+        // Also add to datalist
+        const datalist = document.getElementById('agorg-datalist');
+        if (datalist) {
+          const opt = document.createElement('option');
+          opt.value = ago.id;
+          opt.textContent = ago.name;
+          datalist.appendChild(opt);
+        }
       });
     }
   } catch (err) {
@@ -2365,6 +2449,7 @@ async function agorgUse() {
   await hydrateScopeSnapshot(true);
   refreshAgorgHeader();
   if (data.ok) {
+    await refreshPolicyHookDriftChips();
     agorgList();
     agorgShowActive();
     agorgTree();
@@ -3778,9 +3863,7 @@ async function bootUi() {
   await loadHistory();
   await oracleLoadReports();
   await depLoadLogs();
-  await depRun('policy');
-  await depRun('hook-policy');
-  await depRun('drift');
+  await refreshPolicyHookDriftChips();
   await depRun('services-status');
   await refreshAgorgHeader();
   await dashRefreshTemporaryComponents();
