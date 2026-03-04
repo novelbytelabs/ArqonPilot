@@ -2433,7 +2433,79 @@ async function agorgShowActive() {
     }
   }
   refreshAgorgHeader();
-  await agorgLoadPreferences();
+}
+
+async function agorgRefreshActive() {
+  await hydrateScopeSnapshot(true);
+  await agorgShowActive();
+  await agorgList();
+  await agorgTree();
+}
+
+async function agorgOpenEditModal() {
+  const snapshot = await hydrateScopeSnapshot();
+  if (!snapshot || !snapshot.active) {
+    agorgOut.textContent = "Error: No active scope to edit.";
+    return;
+  }
+  const active = snapshot.active;
+
+  document.getElementById('agorg-edit-id').textContent = active.id;
+  document.getElementById('agorg-edit-name').value = active.name || "";
+  document.getElementById('agorg-edit-root').value = active.root_path || "";
+  document.getElementById('agorg-edit-master').value = active.master_path || "";
+
+  document.getElementById('agorg-edit-modal').classList.add('active');
+}
+
+function agorgCloseEditModal() {
+  document.getElementById('agorg-edit-modal').classList.remove('active');
+}
+
+async function agorgSaveEditModal() {
+  const id = document.getElementById('agorg-edit-id').textContent;
+  const req = {
+    id: id,
+    name: document.getElementById('agorg-edit-name').value.trim(),
+    root: document.getElementById('agorg-edit-root').value.trim(),
+    master: document.getElementById('agorg-edit-master').value.trim()
+  };
+
+  const res = await fetchJsonSafe('/api/agorg/update', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify(req)
+  });
+
+  agorgOut.textContent = JSON.stringify(res, null, 2);
+  if (res.ok) {
+    agorgCloseEditModal();
+    await agorgRefreshActive();
+  }
+}
+
+async function browseAgorgEditRoot() {
+  const start = document.getElementById('agorg-edit-root').value || '/home';
+  const res = await fetchJsonSafe('/api/fs/pick-directory', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ start_dir: start })
+  });
+  if (res.ok && res.path) {
+    document.getElementById('agorg-edit-root').value = res.path;
+  }
+}
+
+async function browseAgorgEditMaster() {
+  const start = document.getElementById('agorg-edit-master').value || '/home';
+  const res = await fetchJsonSafe('/api/fs/pick-directory', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({ start_dir: start })
+  });
+  if (res.ok && res.path) {
+    document.getElementById('agorg-edit-master').value = res.path;
+  }
 }
 
 async function agorgUse() {

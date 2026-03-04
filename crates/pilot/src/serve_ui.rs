@@ -6448,6 +6448,41 @@ const INDEX_HTML: &str = r#"<!doctype html>
       transition: opacity 0.25s;
     }
     .btn:hover::before { opacity: 1; }
+    .btn:hover { border-color: var(--primary); color: #fff; box-shadow: 0 0 12px rgba(0, 245, 255, 0.2); transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn.secondary { background: rgba(255, 255, 255, 0.04); border-color: var(--border); color: var(--muted); }
+    .btn.secondary:hover { background: rgba(255, 255, 255, 0.08); border-color: var(--text-muted); color: var(--text); }
+    
+    /* ═══════════ Modals ═══════════ */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(8px);
+      z-index: 1000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      animation: fadeIn 0.2s ease-out;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal-box {
+      background: var(--bg-mid);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      width: 100%;
+      max-width: 550px;
+      padding: 30px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 0 1px var(--glass-border);
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes modalSlideUp { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    .modal-box h3 { border: none; margin: 0; padding: 0; color: #fff; font-size: 1.1rem; }
+    .modal-footer { margin-top: 10px; display: flex; justify-content: flex-end; gap: 12px; }
     .btn:hover {
       border-color: var(--primary);
       box-shadow: 0 0 20px rgba(0, 245, 255, 0.15), inset 0 0 20px rgba(0, 245, 255, 0.05);
@@ -7760,40 +7795,14 @@ Recommended flow:
     <div class="grid">
       <div class="card">
         <h3>Active Scope</h3>
-        <div class="helper">Manage global scope. Switch between known AGOrg contexts or input manually.</div>
+        <div class="helper">Current AGOrg context and operational metadata.</div>
         <div id="agorg-active-details" style="background:rgba(0,0,0,0.3); border-radius:8px; padding:12px; border:1px solid var(--border); font-size:0.8rem; font-family:'JetBrains Mono',monospace; word-break:break-all;">
           <em style="color:var(--dim);">Loading active scope...</em>
         </div>
-        <label class="field-label" for="agorg-use-id">Manual Switch (UUID or Name)</label>
-        <div class="row">
-          <input id="agorg-use-id" placeholder="UUID or name" list="agorg-datalist" />
-          <datalist id="agorg-datalist"></datalist>
-          <button class="btn secondary" onclick="agorgUse()">Switch</button>
+        <div class="row" style="margin-top:12px;">
+          <button class="btn" onclick="agorgOpenEditModal()">Edit</button>
+          <button class="btn secondary" onclick="agorgRefreshActive()">Refresh</button>
         </div>
-        <div class="row" style="margin-top:8px;">
-          <button class="btn secondary" onclick="agorgUpdate()">Update</button>
-          <button class="btn secondary" style="color:var(--rose); border-color:rgba(255,46,46,0.3);" onclick="agorgDelete()">Delete</button>
-        </div>
-
-        <details class="subtle-block" style="margin-top:12px;">
-          <summary style="cursor:pointer; color:var(--text-muted); font-size:0.86rem; margin-bottom:8px;">Profile Preferences</summary>
-          <div class="section-box" style="margin-top:0;">
-            <label class="field-label" for="agorg-profile-name">Profile Name</label>
-            <input id="agorg-profile-name" placeholder="primary" />
-            <label class="field-label" for="agorg-pref-default-branch">Default Branch</label>
-            <input id="agorg-pref-default-branch" placeholder="dev" />
-            <label class="field-label" for="agorg-pref-release-branch">Release Branch</label>
-            <input id="agorg-pref-release-branch" placeholder="main" />
-            <label class="check-label" style="margin-top:4px;">
-              <input id="agorg-pref-auto-prune" type="checkbox" />
-              Auto-prune stale AGO rows by default
-            </label>
-            <div class="row" style="margin-top:6px;">
-              <button class="btn secondary" onclick="agorgLoadPreferences()">Load Prefs</button>
-              <button class="btn secondary" onclick="agorgSavePreferences()">Save Prefs</button>
-            </div>
-          </div>
-        </details>
       </div>
 
       <div class="card" style="display:flex; flex-direction:column;">
@@ -7926,6 +7935,39 @@ Recommended flow:
     </div>
 
   </section>
+
+  <!-- Modals -->
+  <div id="agorg-edit-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h3>Edit AGOrg Settings</h3>
+      <div class="helper" style="margin-bottom:12px;">Update the metadata for the active scope. ID is immutable.</div>
+      
+      <div class="section-box">
+        <label class="field-label">AGOrg ID (Read-only)</label>
+        <div id="agorg-edit-id" style="padding:10px; background:rgba(0,0,0,0.2); border-radius:8px; font-family:monospace; color:var(--dim); font-size:0.85rem;"></div>
+        
+        <label class="field-label" for="agorg-edit-name">Display Name</label>
+        <input id="agorg-edit-name" placeholder="My Projects" />
+        
+        <label class="field-label" for="agorg-edit-root">Root Directory</label>
+        <div class="row">
+          <input id="agorg-edit-root" placeholder="/path/to/root" />
+          <button class="btn secondary" onclick="browseAgorgEditRoot()">Browse…</button>
+        </div>
+        
+        <label class="field-label" for="agorg-edit-master">Master Directory (Optional)</label>
+        <div class="row">
+          <input id="agorg-edit-master" placeholder="/path/to/master" />
+          <button class="btn secondary" onclick="browseAgorgEditMaster()">Browse…</button>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn secondary" onclick="agorgCloseEditModal()">Cancel</button>
+        <button class="btn" onclick="agorgSaveEditModal()">Save Changes</button>
+      </div>
+    </div>
+  </div>
 
   <section class="panel" id="telemetry">
     <div class="grid">
