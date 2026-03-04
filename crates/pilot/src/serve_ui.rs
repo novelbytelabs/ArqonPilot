@@ -7792,23 +7792,22 @@ Recommended flow:
   <section class="panel" id="agorg">
 
     <!-- Row 1: Active Scope + Registry (50/50) -->
-    <div class="grid">
-      <div class="card">
-        <h3>Active Scope</h3>
-        <div class="helper">Current AGOrg context and operational metadata.</div>
-        <div id="agorg-active-details" style="background:rgba(0,0,0,0.3); border-radius:8px; padding:12px; border:1px solid var(--border); font-size:0.8rem; font-family:'JetBrains Mono',monospace; word-break:break-all;">
+    <div class="grid" style="grid-template-columns: 1fr;">
+      <div class="card" style="display:flex; flex-direction:column;">
+        <h3>Registry</h3>
+        
+        <!-- Active Scope Metadata Display (Embedded in Registry) -->
+        <div class="helper">Current Active Scope:</div>
+        <div id="agorg-active-details" style="background:rgba(0,0,0,0.3); border-radius:8px; padding:12px; border:1px solid var(--border); font-size:0.8rem; font-family:'JetBrains Mono',monospace; word-break:break-all; margin-bottom:12px;">
           <em style="color:var(--dim);">Loading active scope...</em>
         </div>
-        <div class="row" style="margin-top:12px;">
+        <div class="row" style="margin-bottom:20px;">
           <button class="btn" onclick="agorgOpenEditModal()">Edit</button>
           <button class="btn secondary" onclick="agorgRefreshActive()">Refresh</button>
         </div>
-      </div>
 
-      <div class="card" style="display:flex; flex-direction:column;">
-        <h3>Registry</h3>
-        <div class="helper">Click to switch scope instantly.</div>
-        <div id="agorg-registry-list" class="agorg-registry-list" style="flex:1; overflow-y:auto; background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:8px; min-height:200px;">
+        <div class="helper">Click to switch scope instantly. AGOs are nested under their parent AGOrgs.</div>
+        <div id="agorg-registry-list" class="agorg-registry-list" style="flex:1; overflow-y:auto; background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:8px; min-height:300px;">
           <div style="padding:14px; color:var(--dim); font-size:0.78rem; font-family:'JetBrains Mono',monospace;">Loading registry...</div>
         </div>
       </div>

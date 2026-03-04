@@ -2294,57 +2294,76 @@ function clearAgorgResults() {
   agorgDiscoveryOut.textContent = '';
 }
 
-function renderAgorgRegistry(agorgs) {
+function renderAgorgRegistry(tree) {
   if (!agorgRegistryList) return;
   agorgRegistryList.innerHTML = '';
-  if (!agorgs || agorgs.length === 0) {
+  if (!tree || tree.length === 0) {
     agorgRegistryList.innerHTML = '<div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">No registered AGOrgs found.</div>';
     return;
   }
 
-  // Group by master_path
-  const grouped = {};
-  agorgs.forEach(ag => {
-     const path = ag.master_path || 'Independent Orgs';
-     if (!grouped[path]) grouped[path] = [];
-     grouped[path].push(ag);
-  });
-
-  for (const [path, nodes] of Object.entries(grouped)) {
-     if (path !== 'Independent Orgs') {
-       const h = document.createElement('div');
-       h.style = 'padding:8px 12px; background:#1c2635; color:#a8b9e3; font-size:0.75rem; font-weight:700; display:flex; align-items:center; gap:8px;';
-       h.innerHTML = `<span>📁 Master:</span> <span style="font-family:monospace; opacity:0.8;">${path}</span>`;
-       agorgRegistryList.appendChild(h);
-     }
-     
-     nodes.forEach(node => {
-        const el = document.createElement('div');
-        el.className = 'agorg-reg-item' + (path !== 'Independent Orgs' ? ' agorg-tree-node' : '');
-        el.style = 'display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem;';
-        el.innerHTML = `
-          <div style="display:flex; align-items:center;">
-            <span style="margin-right:8px; display:inline-flex; width:1.2rem;">🏢</span>
-            <span style="font-weight:600;">${node.name}</span>
-          </div>
-          <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#a8b9e3;">ORG</span>
-        `;
-        el.onclick = () => switchAgorgScope(node.id);
-        agorgRegistryList.appendChild(el);
-     });
-  }
-
-  // Populate datalist for manual switch
   const datalist = document.getElementById('agorg-datalist');
-  if (datalist) {
-     datalist.innerHTML = '';
-     agorgs.forEach(ag => {
-        const opt = document.createElement('option');
-        opt.value = ag.id;
-        opt.textContent = ag.name;
-        datalist.appendChild(opt);
-     });
-  }
+  if (datalist) datalist.innerHTML = '';
+
+  const renderNode = (node, depth = 0) => {
+    const agorg = node.agorg;
+    if (!agorg) return;
+
+    // Render the ORG
+    const el = document.createElement('div');
+    el.className = 'agorg-reg-item' + (depth > 0 ? ' agorg-tree-node' : '');
+    const paddingLeft = 12 + (depth * 24);
+    el.style = `display:flex; align-items:center; justify-content:space-between; padding:10px 12px 10px ${paddingLeft}px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem;`;
+    if (depth > 0) el.style.background = `rgba(255,255,255,${Math.min(0.05, depth * 0.02)})`;
+
+    el.innerHTML = `
+      <div style="display:flex; align-items:center;">
+        <span style="margin-right:12px; display:inline-flex; width:1.2rem; font-size:1.1rem;">🏢</span>
+        <span style="font-weight:600;">${agorg.name}</span>
+      </div>
+      <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#a8b9e3;">ORG</span>
+    `;
+    el.onclick = () => switchAgorgScope(agorg.id);
+    agorgRegistryList.appendChild(el);
+
+    if (datalist) {
+       const opt = document.createElement('option');
+       opt.value = agorg.id;
+       opt.textContent = agorg.name;
+       datalist.appendChild(opt);
+    }
+
+    // Render associated AGOs nested under this ORG
+    (node.agos || []).forEach(ago => {
+       const agoEl = document.createElement('div');
+       agoEl.className = 'agorg-reg-item' + (depth > 0 ? ' agorg-tree-node' : '');
+       const agoPaddingLeft = paddingLeft + 24;
+       // AGOs are non-interactive listings under the parent ORG
+       agoEl.style = `display:flex; align-items:center; justify-content:space-between; padding:8px 12px 8px ${agoPaddingLeft}px; border-bottom:1px solid #1c2635; cursor:default; font-size:0.82rem; background:rgba(0,0,0,0.1);`;
+       agoEl.innerHTML = `
+         <div style="display:flex; align-items:center;">
+           <span style="margin-right:10px; display:inline-flex; width:1.1rem; opacity:0.8;">🤖</span>
+           <span style="font-weight:500; color:#b8c8ef;">${ago.name}</span>
+         </div>
+         <span style="font-size:0.6rem; font-weight:700; padding:1px 4px; border-radius:3px; background:#1c2635; color:#6a7dff; opacity:0.8; cursor:default;">AGO</span>
+       `;
+       agorgRegistryList.appendChild(agoEl);
+    });
+
+    // Recurse into children
+    (node.child_agorgs || []).forEach(child => renderNode(child, depth + 1));
+  };
+
+  tree.forEach(root => {
+    // root is an AgorgTreeNode, so it has .agorg
+    if (root.agorg && root.agorg.master_path) {
+      const h = document.createElement('div');
+      h.style = 'padding:8px 12px; background:#1c2635; color:#a8b9e3; font-size:0.75rem; font-weight:700; display:flex; align-items:center; gap:8px;';
+      h.innerHTML = `<span>📁 Master:</span> <span style="font-family:monospace; opacity:0.8;">${root.agorg.master_path}</span>`;
+      agorgRegistryList.appendChild(h);
+    }
+    renderNode(root);
+  });
 }
 
 async function agorgList() {
@@ -2352,52 +2371,17 @@ async function agorgList() {
     agorgRegistryList.innerHTML = '<div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">Loading backend properties...</div>';
   }
   try {
-    const snapshot = await hydrateScopeSnapshot(true);
-    const data = { ok: true, agorgs: snapshot.items || [] };
-    const text = JSON.stringify(data, null, 2);
-    if (agorgOut) agorgOut.textContent = text;
-    renderAgorgRegistry(data.agorgs);
-
-    // Attempt to mix in AGOs from the active tree to the registry view.
     const treeData = await fetchJsonSafe('/api/agorg/tree');
-    if (treeData.ok && treeData.tree && treeData.tree.length > 0) {
-      const agos = [];
-      const walk = (node) => {
-        (node.agos || []).forEach(a => agos.push(a));
-        (node.child_agorgs || []).forEach(walk);
-      };
-      treeData.tree.forEach(walk);
-
-      const seen = new Set();
-      const uniqueAgos = agos.filter(a => {
-        if (seen.has(a.id)) return false;
-        seen.add(a.id);
-        return true;
-      });
-
-      uniqueAgos.forEach(ago => {
-        const el = document.createElement('div');
-        el.className = 'agorg-reg-item agorg-tree-node';
-        el.style = 'display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem; margin-left:16px; border-left:1px solid #1c2635;';
-        el.innerHTML = `
-          <div style="display:flex; align-items:center;">
-            <span style="margin-right:8px; display:inline-flex; width:1.2rem;">🤖</span>
-            <span style="font-weight:600;">${ago.name}</span>
-          </div>
-          <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#6a7dff;">AGO</span>
-        `;
-        if (agorgRegistryList) agorgRegistryList.appendChild(el);
-
-        // Also add to datalist
-        const datalist = document.getElementById('agorg-datalist');
-        if (datalist) {
-          const opt = document.createElement('option');
-          opt.value = ago.id;
-          opt.textContent = ago.name;
-          datalist.appendChild(opt);
-        }
-      });
+    if (treeData.ok && treeData.tree) {
+       renderAgorgRegistry(treeData.tree);
+    } else {
+       // Fallback to flat if tree fails
+       const snapshot = await hydrateScopeSnapshot(true);
+       renderAgorgRegistry(snapshot.items || []);
     }
+
+    if (agorgOut) agorgOut.textContent = JSON.stringify(treeData, null, 2);
+
   } catch (err) {
     const msg = (err && err.message) ? err.message : String(err);
     if (agorgOut) agorgOut.textContent = JSON.stringify({ ok: false, error: msg }, null, 2);
