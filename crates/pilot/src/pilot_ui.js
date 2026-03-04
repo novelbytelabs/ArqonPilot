@@ -353,7 +353,7 @@ function collectUiSessionState() {
   });
   return {
     active_tab: currentTab,
-    agorg_use_id: readInputValue('agorg-use-id'),
+    agorg_use_id: document.getElementById('agorg-use-id') ? document.getElementById('agorg-use-id').value : null,
     agorg_master: readInputValue('agorg-master'),
     agorg_root: readInputValue('agorg-root'),
     agorg_name: readInputValue('agorg-name'),
@@ -394,7 +394,9 @@ function applyUiSessionState(session) {
   if (session.active_tab) {
     activatePanel(session.active_tab, { persist: false });
   }
-  setVal('agorg-use-id', session.agorg_use_id);
+  if (document.getElementById('agorg-use-id')) {
+    setVal('agorg-use-id', session.agorg_use_id);
+  }
   setVal('agorg-master', session.agorg_master);
   setVal('agorg-name', session.agorg_name);
   setVal('agorg-profile-name', session.agorg_profile_name);
@@ -481,45 +483,30 @@ async function loadAgorgQuickNav() {
     let html = '<div class="agorg-drop-item" style="font-weight:700;color:#6a7dff;" onclick="activatePanel(\'agorg\'); agorgShowActive();">⚙ Manage AGOrgs / Panel</div>';
     
     if (agData && agData.length > 0) {
+      // Filter to only show registered AGOrgs in the quick nav (exclude flat AGOs if they somehow appear here)
+      const orgsOnly = agData.filter(ag => !ag.repo_path || (ag.id && !ag.name.startsWith('AGO:'))); // Basic guard, hydrateScopeSnapshot.items usually contains the Orgs
+      
       html += '<div class="agorg-drop-header">AGOrgs</div>';
-      agData.forEach(ag => {
-        const badge = ag.id === activeId ? 'ACTIVE' : (recentIds.has(ag.id) ? 'RECENT' : 'ORG');
+      orgsOnly.forEach(ag => {
+        const isActive = ag.id === activeId;
+        const badgeText = isActive ? 'ACTIVE' : (recentIds.has(ag.id) ? 'RECENT' : 'ORG');
+        
+        let badgeStyle = 'font-size:0.6rem; font-weight:700; padding:2px 6px; border-radius:4px;';
+        if (isActive) {
+          badgeStyle += ' background:#00d1ff; color:#001a33; box-shadow: 0 0 10px rgba(0, 209, 255, 0.6); animation: pulse-blue 2s infinite;';
+        } else if (recentIds.has(ag.id)) {
+          badgeStyle += ' background:#1c2635; color:#a8b9e3;';
+        } else {
+          badgeStyle += ' background:#1c2635; color:#6a7dff; opacity:0.7;';
+        }
+
         html += `<div class="agorg-drop-item" onclick="switchAgorgScope('${ag.id}')">
-          <span>${ag.name}</span>
-          <span class="type">${badge}</span>
+          <span style="${isActive ? 'color:#fff; font-weight:600;' : ''}">${ag.name}</span>
+          <span style="${badgeStyle}">${badgeText}</span>
         </div>`;
       });
     }
 
-    // Attempt to list AGOs if available in the database
-    const treeRes = await fetch('/api/agorg/tree');
-    const treeDataRaw = treeRes.ok ? await treeRes.json() : { ok: false, tree: [] };
-    const treeData = treeDataRaw && treeDataRaw.ok && Array.isArray(treeDataRaw.tree)
-      ? treeDataRaw.tree
-      : [];
-    if (treeData.length > 0) {
-      html += '<div class="agorg-drop-header">Sibling AGOs (Active Tree)</div>';
-      const agos = [];
-      const walk = (node) => {
-        (node.agos || []).forEach(a => agos.push(a));
-        (node.child_agorgs || []).forEach(walk);
-      };
-      treeData.forEach(walk);
-      // Remove duplicates by ID
-      const seen = new Set();
-      const uniqueAgos = agos.filter(a => {
-        if (seen.has(a.id)) return false;
-        seen.add(a.id);
-        return true;
-      });
-      uniqueAgos.forEach(ago => {
-        html += `<div class="agorg-drop-item" onclick="switchAgorgScope('${ago.id}')">
-          <span>${ago.name}</span>
-          <span class="type">AGO</span>
-        </div>`;
-      });
-    }
-    
     dropdown.innerHTML = html || '<div class="agorg-drop-header">No registered repositories found.</div>';
   } catch (err) {
     console.error("QuickNav Error:", err);
@@ -2493,7 +2480,8 @@ async function browseAgorgEditMaster() {
 }
 
 async function agorgUse() {
-  const req = { agorg: document.getElementById('agorg-use-id').value.trim() };
+  const el = document.getElementById('agorg-use-id');
+  const req = { agorg: el ? el.value.trim() : '' };
   if (!req.agorg) return;
   const data = await fetchJsonSafe('/api/agorg/use', {
     method: 'POST',
@@ -3171,7 +3159,8 @@ async function agorgOpenPolicyReport() {
 }
 
 async function agorgTree() {
-  const root = document.getElementById('agorg-use-id').value.trim();
+  const el = document.getElementById('agorg-use-id');
+  const root = el ? el.value.trim() : '';
   const query = root ? ('?root=' + encodeURIComponent(root)) : '';
   const res = await fetch('/api/agorg/tree' + query);
   const data = await res.json();

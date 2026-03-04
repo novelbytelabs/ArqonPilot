@@ -6481,6 +6481,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
       animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     }
     @keyframes modalSlideUp { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes pulse-blue {
+      0% { box-shadow: 0 0 5px rgba(0, 209, 255, 0.4); }
+      50% { box-shadow: 0 0 15px rgba(0, 209, 255, 0.8); }
+      100% { box-shadow: 0 0 5px rgba(0, 209, 255, 0.4); }
+    }
     .modal-box h3 { border: none; margin: 0; padding: 0; color: #fff; font-size: 1.1rem; }
     .modal-footer { margin-top: 10px; display: flex; justify-content: flex-end; gap: 12px; }
     .btn:hover {
