@@ -36,6 +36,14 @@ fn skip_if_db_env_denied(
     Ok(false)
 }
 
+fn is_runtime_db_denied(stderr: &str) -> bool {
+    stderr.contains("Operation not permitted")
+        || (stderr.contains("Permission denied") && stderr.contains("shared memory"))
+        || stderr.contains("could not open shared memory segment")
+        || stderr.contains("could not bind Unix address")
+        || stderr.contains("could not create any Unix-domain sockets")
+}
+
 #[test]
 #[allow(deprecated)]
 fn test_policy_invalid_kind() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,14 +59,14 @@ fn test_policy_invalid_kind() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("x");
     let org_name = format!("AdversarialOrg-{}", suffix);
     let home = temp.path().join("home");
-    let pilot_home = std::path::PathBuf::from("/tmp/pilotdb_a9343");
+    let pilot_home = std::path::PathBuf::from(format!("/tmp/pilotdb_adv_kind_{}", suffix));
     fs::create_dir_all(&home)?;
     if skip_if_db_env_denied(&home, &pilot_home, "9343")? {
         return Ok(());
     }
 
     // Setup AGOrg
-    Command::cargo_bin("pilot")?
+    let create_out = Command::cargo_bin("pilot")?
         .env("HOME", &home)
         .env("PILOT_HOME", &pilot_home)
         .env("PILOT_DB_PORT", "9343")
@@ -69,8 +77,20 @@ fn test_policy_invalid_kind() -> Result<(), Box<dyn std::error::Error>> {
         .arg(&org_name)
         .arg("--root")
         .arg(temp.path().to_string_lossy().to_string())
-        .assert()
-        .success();
+        .output()?;
+    if !create_out.status.success() {
+        let stderr = String::from_utf8_lossy(&create_out.stderr);
+        if is_runtime_db_denied(&stderr) {
+            eprintln!("Skipping test: managed Postgres denied by runtime environment.");
+            return Ok(());
+        }
+        let full = format!(
+            "agorg create failed unexpectedly.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&create_out.stdout),
+            stderr
+        );
+        return Err(full.into());
+    }
 
     Command::cargo_bin("pilot")?
         .env("HOME", &home)
@@ -131,14 +151,14 @@ fn test_policy_malformed_json() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("x");
     let org_name = format!("MalformedOrg-{}", suffix);
     let home = temp.path().join("home");
-    let pilot_home = std::path::PathBuf::from("/tmp/pilotdb_a9344");
+    let pilot_home = std::path::PathBuf::from(format!("/tmp/pilotdb_adv_json_{}", suffix));
     fs::create_dir_all(&home)?;
     if skip_if_db_env_denied(&home, &pilot_home, "9344")? {
         return Ok(());
     }
 
     // Setup AGOrg
-    Command::cargo_bin("pilot")?
+    let create_out = Command::cargo_bin("pilot")?
         .env("HOME", &home)
         .env("PILOT_HOME", &pilot_home)
         .env("PILOT_DB_PORT", "9344")
@@ -149,8 +169,20 @@ fn test_policy_malformed_json() -> Result<(), Box<dyn std::error::Error>> {
         .arg(&org_name)
         .arg("--root")
         .arg(temp.path().to_string_lossy().to_string())
-        .assert()
-        .success();
+        .output()?;
+    if !create_out.status.success() {
+        let stderr = String::from_utf8_lossy(&create_out.stderr);
+        if is_runtime_db_denied(&stderr) {
+            eprintln!("Skipping test: managed Postgres denied by runtime environment.");
+            return Ok(());
+        }
+        let full = format!(
+            "agorg create failed unexpectedly.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&create_out.stdout),
+            stderr
+        );
+        return Err(full.into());
+    }
 
     Command::cargo_bin("pilot")?
         .env("HOME", &home)
@@ -197,15 +229,20 @@ fn test_policy_no_active_agorg() -> Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::Builder::new()
         .prefix("policy_adv_scope_")
         .tempdir_in(temp_root)?;
+    let suffix = temp
+        .path()
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("x");
     let home = temp.path().join("home");
-    let pilot_home = std::path::PathBuf::from("/tmp/pilotdb_a9345");
+    let pilot_home = std::path::PathBuf::from(format!("/tmp/pilotdb_adv_scope_{}", suffix));
     fs::create_dir_all(&home)?;
     if skip_if_db_env_denied(&home, &pilot_home, "9345")? {
         return Ok(());
     }
 
     // Try to get policy without active AGOrg in a fresh HOME
-    Command::cargo_bin("pilot")?
+    let out = Command::cargo_bin("pilot")?
         .env("HOME", &home)
         .env("PILOT_HOME", &pilot_home)
         .env("PILOT_DB_PORT", "9345")
@@ -214,9 +251,19 @@ fn test_policy_no_active_agorg() -> Result<(), Box<dyn std::error::Error>> {
         .arg("get")
         .arg("--kind")
         .arg("branch")
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains("No active AGOrg"));
-
-    Ok(())
+        .output()?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        if is_runtime_db_denied(&stderr) {
+            eprintln!("Skipping test: managed Postgres denied by runtime environment.");
+            return Ok(());
+        }
+        assert!(
+            stderr.contains("No active AGOrg"),
+            "Unexpected stderr for no-active-AGOrg test:\n{}",
+            stderr
+        );
+        return Ok(());
+    }
+    return Err("policy get unexpectedly succeeded without active AGOrg".into());
 }

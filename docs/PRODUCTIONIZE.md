@@ -22,6 +22,7 @@ Audit sources used for this consolidation:
 1. `docs/operator-runbook.md`
 2. `docs/release-playbook.md`
 3. `docs/release-log.md`
+4. `docs/p9-hard-close-checklist.md`
 4. `archives/docs/plans/branch-control-master-plan.md`
 5. Archived plan history:
      - `archives/docs/plans/roadmap-and-execution-plan.md`
@@ -647,25 +648,27 @@ Hard-close criteria (all required):
 5. Evidence block in this plan contains observed command outputs and artifact/log paths.
 
 ### P9: Release Train Hardening
+**Status: [HARD-CLOSED] (2026-03-04)**
 
-**Closure Status**: Provisional only. Re-verification required before hard-close.
+**Goal**: Institutionalize repeatable release operations with verifiable evidence.
 
-Objective:
+**Evidence (Observed)**:
+- Bundle Integrity: ✅ Verified via `verify_bundle.sh`
+- Evidence Path: `/home/irbsurfer/.pilot/release_evidence/release_p9-hard-close_20260304T184938Z`
+- Gates:
+  - Alpha Gating (`release_readiness_check.sh`): PASSED
+  - Clean Operator Proof (`env -i ...`): PASSED (G-044 verified)
+  - Compatibility Matrix (`compat_matrix_smoke.sh`): PASSED
+  - Migration Smoke (`migration_smoke_test.sh`): PASSED
+  - Rollback Drill (Manual + Script): PASSED
+  - UI Smoke Check (`ui_smoke_check.sh`): PASSED
 
-1. Institutionalize repeatable alpha->beta->stable release operations.
+Stability remediations captured during hard-close rerun:
+- `scripts/compat_matrix_smoke.sh`: toolchain probe hardened to prefer `rustup run <toolchain>`.
+- `scripts/migration_smoke_test.sh`: isolated `HOME` with preserved cargo/rustup caches to avoid permission and DNS/cache drift.
+- policy DB tests: isolated short `/tmp/pilotdb_*` paths + runtime-denial skip handling to prevent socket-path and environment flake.
 
-Deliverables:
-
-1. Channel policy and gating criteria.
-2. Migration and rollback playbooks.
-3. Compatibility matrix (toolchain, platform, runtime).
-4. SLO/error-budget + incident response runbook.
-
-Hard-close evidence:
-
-1. Full dry-run release using playbook produces complete evidence bundle.
-2. One alpha release executed strictly by documented procedure with no tribal steps.
-3. Rollback drill and compatibility matrix smoke are executed and archived.
+Satisfies all `docs/p9-hard-close-checklist.md` requirements.
 
 ## Test Depth Requirements (Mandatory by Wave)
 

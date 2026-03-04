@@ -6,12 +6,28 @@ cd "$ROOT"
 source "$ROOT/scripts/frozen_versions.sh"
 
 PILOT_BIN="./scripts/pilot_local.sh"
+TMP_HOME="$(mktemp -d /tmp/pilot-migration-smoke.XXXXXX)"
+ORIG_HOME="${HOME}"
+ORIG_CARGO_HOME="${CARGO_HOME:-$ORIG_HOME/.cargo}"
+ORIG_RUSTUP_HOME="${RUSTUP_HOME:-$ORIG_HOME/.rustup}"
+
+pilot_cmd() {
+  HOME="$TMP_HOME" CARGO_HOME="$ORIG_CARGO_HOME" RUSTUP_HOME="$ORIG_RUSTUP_HOME" "$PILOT_BIN" "$@"
+}
+
+cleanup() {
+  pilot_cmd db stop >/dev/null 2>&1 || true
+  rm -rf "$TMP_HOME"
+}
+trap cleanup EXIT
 
 echo "--- Migration Smoke Test Start ---"
+echo "[info] Isolated HOME for deterministic run: $TMP_HOME"
+echo "[info] Preserving cargo/rustup cache from: $ORIG_HOME"
 
 # 0. Safety Cleanup
 echo "[0/3] Stopping any orphaned postgres on port 9132..."
-$PILOT_BIN db stop || true
+pilot_cmd db stop || true
 # Force kill if still there
 PID=$(lsof -t -i :9132 || true)
 if [ -n "$PID" ]; then
@@ -21,42 +37,42 @@ fi
 
 # 1. Clean Startup Test
 echo "[1/3] Cold startup (no DB)..."
-rm -rf ~/.arqon/pilot/db/ ~/.arqon/pilot/run/
-$PILOT_BIN db start
+rm -rf "$TMP_HOME/.arqon/pilot/db/" "$TMP_HOME/.arqon/pilot/run/"
+pilot_cmd db start
 sleep 4 # Give it more time
 
 # Verify tables exist
 echo "[1/3] Checking agorg table existence..."
-$PILOT_BIN agorg list > /dev/null
+pilot_cmd agorg list > /dev/null
 echo "✅ Cold startup OK"
 
 # 2. Warm Startup Test (Migration)
 echo "[2/3] Warm startup (existing DB)..."
 # Force a restart of the binary to trigger migration logic
-$PILOT_BIN db stop
-$PILOT_BIN db start
+pilot_cmd db stop
+pilot_cmd db start
 sleep 2
 
 # Verify still healthy
-$PILOT_BIN agorg list > /dev/null
+pilot_cmd agorg list > /dev/null
 echo "✅ Warm startup OK"
 
 # 3. Data Accessibility Test
 echo "[3/3] Data accessibility test..."
 # Create a dummy AGOrg if none exists
-COUNT=$($PILOT_BIN agorg list | grep -c "|" || true)
+COUNT=$(pilot_cmd agorg list | grep -c "|" || true)
 if [ "$COUNT" -eq 0 ]; then
   echo "No AGOrgs found, creating a dummy to test persistency..."
   # Use current dir as a dummy
-  $PILOT_BIN agorg create --name "MigrationTest" --root "$ROOT" > /dev/null
+  pilot_cmd agorg create --name "MigrationTest" --root "$ROOT" > /dev/null
 fi
 
 # Query after restart
-$PILOT_BIN db stop
-$PILOT_BIN db start
+pilot_cmd db stop
+pilot_cmd db start
 sleep 2
 
-NEW_COUNT=$($PILOT_BIN agorg list | grep -c "|" || true)
+NEW_COUNT=$(pilot_cmd agorg list | grep -c "|" || true)
 if [ "$NEW_COUNT" -gt 0 ]; then
   echo "✅ Data accessibility OK (Found $NEW_COUNT AGOrgs)"
 else

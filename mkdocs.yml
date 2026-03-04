@@ -57,6 +57,7 @@ nav:
   - Release Management:
       - Release Playbook: "release-playbook.md"
       - Release Log: "release-log.md"
+      - P9 Hard-Close Checklist: "p9-hard-close-checklist.md"
       - Releases:
           - 0.2.0-alpha.1: "releases/0.2.0-alpha.1.md"
   - Integration & Architecture:

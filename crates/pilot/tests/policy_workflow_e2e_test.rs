@@ -89,7 +89,7 @@ fn test_policy_workflow_draft_preview_scan() -> Result<(), Box<dyn std::error::E
         .unwrap_or("x");
     let org_name = format!("WorkflowOrg-{}", suffix);
     let home = temp.path().join("home");
-    let pilot_home = std::path::PathBuf::from("/tmp/pilotdb_a9342");
+    let pilot_home = std::path::PathBuf::from(format!("/tmp/pilotdb_e2e_{}", suffix));
     let repo_path = temp.path().join("workflow-repo");
     fs::create_dir_all(&home)?;
     fs::create_dir_all(&repo_path)?;

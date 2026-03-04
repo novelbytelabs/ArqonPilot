@@ -66,11 +66,33 @@ copy_latest() {
   fi
 }
 
-copy_latest "prepush_gate_*.log" "${REPORTS_DIR}" "prepush_gate_latest.log"
+copy_latest_any() {
+  local pattern="$1"
+  local dst_name="$2"
+  shift 2
+  local newest=""
+  local candidate=""
+  for dir in "$@"; do
+    candidate="$(ls -1t "${dir}"/${pattern} 2>/dev/null | head -n 1 || true)"
+    if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+      if [[ -z "${newest}" || "${candidate}" -nt "${newest}" ]]; then
+        newest="${candidate}"
+      fi
+    fi
+  done
+  if [[ -n "${newest}" ]]; then
+    cp "${newest}" "${OUT_DIR}/${dst_name}"
+    echo "copied: ${newest} -> ${OUT_DIR}/${dst_name}"
+  else
+    echo "missing: ${pattern} in candidate dirs: $*"
+  fi
+}
+
+copy_latest_any "prepush_gate_*.log" "prepush_gate_latest.log" "${TMP_REPORTS_DIR}" "${REPORTS_DIR}"
 copy_latest "push_main_*.log" "${REPORTS_DIR}" "push_main_latest.log"
 copy_latest "acceptance_matrix_wave_i_full_*.json" "${REPORTS_DIR}" "acceptance_matrix_wave_i_full_latest.json"
 copy_latest "acceptance_matrix_wave_j_full_*.json" "${REPORTS_DIR}" "acceptance_matrix_wave_j_full_latest.json"
-copy_latest "ui_smoke_*.log" "${TMP_REPORTS_DIR}" "ui_smoke_latest.log"
+copy_latest_any "ui_smoke_*.log" "ui_smoke_latest.log" "${TMP_REPORTS_DIR}" "${REPORTS_DIR}"
 
 GIT_SHA="$(git -C "${ROOT}" rev-parse HEAD)"
 GIT_BRANCH="$(git -C "${ROOT}" branch --show-current)"

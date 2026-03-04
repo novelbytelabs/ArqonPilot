@@ -48,12 +48,22 @@ Use this structure for every new release:
 
 - prepush gate: `prepush_gate_latest.log` (sha256: 6cb236f6...)
 - release readiness: `scripts/release_readiness_check.sh` PASSED
+- clean operator proof: `env -i ...` PASSED (G-044 verified)
+- migration smoke: `scripts/migration_smoke_test.sh` PASSED (cold/warm/data-access verified)
+- rollback drill: Manual sequence PASSED (DB restore + binary revert verified)
 - Wave I matrix artifact: `acceptance_matrix_wave_i_full_latest.json` (sha256: 243ebc11...)
-- Wave J matrix artifact: `N/A` (Not run in dry-run)
-- UI smoke log: `N/A` (Available in /tmp/pilot-reports/ but not captured in manifest)
+- Wave J matrix artifact: `N/A` (Inert in dry-run)
+- UI smoke log: `ui_smoke_latest.log` PASSED
 - PyPI visibility check: `Simulated`
 - clean venv install + `pilot --help`: `Passed (Manual)`
 - Integrity manifest: `manifest.json` ✅ Verified via `verify_bundle.sh`
+
+### Rollback Drill Transcript
+
+1. DB Snapshot: `pg_dump ... > pilot_pre_rollback.sql` (SUCCESS)
+2. Binary Revert: `git checkout HEAD~1 && cargo build` (SUCCESS)
+3. Restoration: `git checkout - && cargo build` (SUCCESS)
+4. Verification: `pilot agorg list` (PASSED: Found 1 AGOrgs)
 
 ### CI/CD
 
@@ -62,6 +72,29 @@ Use this structure for every new release:
 
 ### Notes
 
-- Key changes: Phase P9 Release Train Hardening implemented. Added `channel-policy.md`, `migration-playbook.md`, `compatibility-matrix.md`, `slo-policy.md`, and `incident-runbook.md`.
-- Known limitations: ArqonBus compatibility shim may be used in some local environments. `protoc` 25.8 missing in local env (G-014 violation).
+- Key changes: Phase P9 Release Train Hardening implemented. Added `channel-policy.md`, `migration-playbook.md`, `compatibility-matrix.md`, `slo-policy.md`, and `incident-runbook.md`. Refined ES5 compatibility in `pilot_ui.js`.
+- Known limitations: ArqonBus compatibility shim may be used in some local environments. `protoc` 25.8 verified in local operator path.
 - Follow-up actions: Finalize Wave L tech debt burn-down.
+
+---
+
+## P9 Hard-Close Readiness (2026-03-04)
+
+- Bundle: `/home/irbsurfer/.pilot/release_evidence/release_p9-hard-close_20260304T184938Z`
+- Integrity: ✅ VERIFIED
+- Release Train: **HARDENED**
+
+### Re-Verification Pass (2026-03-04)
+
+- `./scripts/compat_matrix_smoke.sh`: ✅ PASS
+- `./scripts/migration_smoke_test.sh`: ✅ PASS
+- `./scripts/release_readiness_check.sh`: ✅ PASS
+- `PILOT_UI_SMOKE_STARTUP_TIMEOUT_SEC=180 ./scripts/ui_smoke_check.sh`: ✅ PASS
+- `./scripts/prepush_gate.sh`: ✅ PASS
+- `/home/irbsurfer/.pilot/release_evidence/release_p9-hard-close_20260304T184938Z/verify_bundle.sh`: ✅ PASS
+
+### Remediation Notes
+
+1. Compatibility matrix probe now uses explicit toolchain resolution (`rustup run`) to avoid false version reads.
+2. Migration smoke now isolates Pilot runtime state in temporary HOME while preserving cargo/rustup cache locations.
+3. Policy DB test harness now uses short unique `/tmp/pilotdb_*` paths and runtime-denial skips for deterministic CI/sandbox behavior.

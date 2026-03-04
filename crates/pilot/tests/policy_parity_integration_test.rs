@@ -40,11 +40,11 @@ fn setup_agorg(
     org_name: &str,
     root: &std::path::Path,
     home: &std::path::Path,
+    pilot_home: &std::path::Path,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let pilot_home = std::path::PathBuf::from("/tmp/pilotdb_a9341");
     let out = Command::cargo_bin("pilot")?
         .env("HOME", home)
-        .env("PILOT_HOME", &pilot_home)
+        .env("PILOT_HOME", pilot_home)
         .env("PILOT_DB_PORT", "9341")
         .env("PILOT_DB_MODE", "unix_socket")
         .arg("agorg")
@@ -75,7 +75,7 @@ fn setup_agorg(
 
     Command::cargo_bin("pilot")?
         .env("HOME", home)
-        .env("PILOT_HOME", &pilot_home)
+        .env("PILOT_HOME", pilot_home)
         .env("PILOT_DB_PORT", "9341")
         .env("PILOT_DB_MODE", "unix_socket")
         .arg("agorg")
@@ -95,8 +95,13 @@ fn test_policy_parity_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::Builder::new()
         .prefix("policy_parity_")
         .tempdir_in(temp_root)?;
+    let suffix = temp
+        .path()
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("x");
     let home = temp.path().join("home");
-    let pilot_home = std::path::PathBuf::from("/tmp/pilotdb_a9341");
+    let pilot_home = std::path::PathBuf::from(format!("/tmp/pilotdb_parity_{}", suffix));
     let repo_root = temp.path().join("mock-repo");
     fs::create_dir_all(&home)?;
     fs::create_dir_all(&repo_root)?;
@@ -104,13 +109,8 @@ fn test_policy_parity_round_trip() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let suffix = temp
-        .path()
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("x");
     let org_name = format!("ParityRustTest-{}", suffix);
-    if setup_agorg(&org_name, &repo_root, &home)? {
+    if setup_agorg(&org_name, &repo_root, &home, &pilot_home)? {
         return Ok(());
     }
 

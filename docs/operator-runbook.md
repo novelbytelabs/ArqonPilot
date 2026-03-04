@@ -282,6 +282,16 @@ After rollback:
 2. run tests
 3. record incident and resolution via `pilot know record`
 
+### Managed DB Rollback
+
+If a migration fails or data is corrupted:
+
+1. Stop Pilot: `pilot db stop`
+2. Drop current DB: `dropdb -h /tmp/.arqon-pilot -p 9132 pilot_local`
+3. Recreate DB: `createdb -h /tmp/.arqon-pilot -p 9132 pilot_local`
+4. Restore from snapshot: `psql -h /tmp/.arqon-pilot -p 9132 pilot_local < /tmp/pilot_backup.sql`
+5. Restart: `pilot db start`
+
 Avoid:
 
 - history rewriting on shared branches (`reset --hard`, force-push) except emergency local recovery with explicit approval.

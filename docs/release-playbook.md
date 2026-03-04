@@ -54,9 +54,16 @@ git pull --ff-only origin main
 ```bash
 ./scripts/prepush_gate.sh
 ./scripts/release_readiness_check.sh
+./scripts/migration_smoke_test.sh
 ```
 
-4. Run matrix closure checks + UI smoke:
+4. Run Clean Operator Proof (G-044 boundary + no tribal deps):
+
+```bash
+env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/local/bin" bash -lc './scripts/release_readiness_check.sh'
+```
+
+5. Run matrix closure checks + UI smoke:
 
 ```bash
 ./scripts/wave_acceptance_matrix.sh --wave I --profile full
@@ -198,3 +205,16 @@ If publish is bad:
 1. Do not delete published artifacts.
 2. Cut a new alpha patch (`0.2.0a2`), document incident, publish fix.
 3. Record root cause and preventive control in `docs/gotcha-registry.md`.
+
+## Rollback Drill (Mandatory Evidence)
+
+Before every major alpha milestone, execute a simulation rollback drill:
+
+1. Snapshot Managed DB:
+   `pg_dump -h /tmp/.arqon-pilot -p 9132 pilot_local > /tmp/pilot_pre_rollback.sql`
+2. Binary Revert Test:
+   `git checkout HEAD~1 && cargo build -p pilot --locked`
+3. Restoration:
+   `git checkout - && cargo build -p pilot --locked`
+4. Verify Restoration:
+   `pilot agorg list`

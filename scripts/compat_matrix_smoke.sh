@@ -7,9 +7,18 @@ source "$ROOT/scripts/frozen_versions.sh"
 
 echo "--- Compatibility Matrix Smoke Test Start ---"
 
+resolve_rust_version() {
+  local tc="$1"
+  if command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -qE "^${tc}(-| )"; then
+    rustup run "$tc" rustc --version 2>/dev/null || echo "MISSING"
+    return
+  fi
+  rustc +"$tc" --version 2>/dev/null || echo "MISSING"
+}
+
 # 1. Rust Core Check
 echo -n "[1/5] Rust Core ($PILOT_CORE_RUST_VERSION): "
-RUST_VER=$(rustc +$PILOT_CORE_RUST_VERSION --version 2>/dev/null || echo "MISSING")
+RUST_VER=$(resolve_rust_version "$PILOT_CORE_RUST_VERSION")
 if [[ "$RUST_VER" == *"$PILOT_CORE_RUST_VERSION"* ]]; then
   echo "✅ OK"
 else
@@ -19,7 +28,7 @@ fi
 
 # 2. Rust Packaging Check
 echo -n "[2/5] Rust Packaging ($PILOT_PACKAGING_RUST_VERSION): "
-RUST_PKG_VER=$(rustc +$PILOT_PACKAGING_RUST_VERSION --version 2>/dev/null || echo "MISSING")
+RUST_PKG_VER=$(resolve_rust_version "$PILOT_PACKAGING_RUST_VERSION")
 if [[ "$RUST_PKG_VER" == *"$PILOT_PACKAGING_RUST_VERSION"* ]]; then
   echo "✅ OK"
 else

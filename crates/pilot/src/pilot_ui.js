@@ -1052,8 +1052,10 @@ timelineCommandFilter.addEventListener('input', renderTimeline);
 timelineTextFilter.addEventListener('input', renderTimeline);
 
 function branchScopeFilters() {
-  const group = (document.getElementById('branch-matrix-group')?.value || '').trim();
-  const tagRaw = (document.getElementById('branch-matrix-tags')?.value || '').trim();
+  const groupEl = document.getElementById('branch-matrix-group');
+  const tagEl = document.getElementById('branch-matrix-tags');
+  const group = (groupEl && groupEl.value ? groupEl.value : '').trim();
+  const tagRaw = (tagEl && tagEl.value ? tagEl.value : '').trim();
   return {
     group: group || null,
     tags: tags(tagRaw)
@@ -1069,8 +1071,8 @@ function branchMatrixRequest() {
   return {
     group: filters.group,
     tags: filters.tags,
-    search: (document.getElementById('branch-matrix-search')?.value || '').trim() || null,
-    base_branch: (document.getElementById('branch-matrix-base')?.value || document.getElementById('sync-base').value || 'main').trim() || 'main',
+    search: (document.getElementById('branch-matrix-search').value || '').trim() || null,
+    base_branch: (document.getElementById('branch-matrix-base').value || document.getElementById('sync-base').value || 'main').trim() || 'main',
     target_branch: (document.getElementById('branch-name').value || '').trim() || null
   };
 }
@@ -2457,7 +2459,7 @@ async function agorgDiscover() {
 
 function setDiscoveryCache(discovery) {
   agorgDiscoveryCache = discovery;
-  const candidates = Array.isArray(discovery?.candidates) ? discovery.candidates : [];
+  const candidates = Array.isArray(discovery.candidates) ? discovery.candidates : [];
   agorgApprovedPaths = new Set(
     candidates.filter(c => c.kind === 'ago').map(c => c.path)
   );
@@ -2466,7 +2468,7 @@ function setDiscoveryCache(discovery) {
 
 function renderAgorgDiscoveryReview() {
   if (!agorgDiscoveryReview) return;
-  const candidates = Array.isArray(agorgDiscoveryCache?.candidates) ? agorgDiscoveryCache.candidates : [];
+  const candidates = Array.isArray(agorgDiscoveryCache.candidates) ? agorgDiscoveryCache.candidates : [];
   if (!candidates.length) {
     agorgDiscoveryReview.innerHTML = '<div class="tl-empty">Run Discover Preview to populate candidates.</div>';
     return;
@@ -2535,7 +2537,7 @@ function agorgToggleCandidate(encodedPath, approved) {
 }
 
 function agorgSelectAllReview(approve) {
-  const candidates = Array.isArray(agorgDiscoveryCache?.candidates) ? agorgDiscoveryCache.candidates : [];
+  const candidates = Array.isArray(agorgDiscoveryCache.candidates) ? agorgDiscoveryCache.candidates : [];
   if (!candidates.length) return;
   agorgApprovedPaths = new Set(
     approve ? candidates.filter(c => c.kind === 'ago' || c.kind === 'folder').map(c => c.path) : []
@@ -2545,7 +2547,7 @@ function agorgSelectAllReview(approve) {
 
 async function getActiveAgorgId() {
   const active = await fetchJsonSafe('/api/agorg/active');
-  if (!active?.ok || !active.active?.id) return null;
+  if (!active.ok || !active.active.id) return null;
   return active.active.id;
 }
 
@@ -2614,7 +2616,7 @@ async function agorgImportApproved() {
     const agorgName = agorgDefaultScopeCandidate.split('/').filter(Boolean).pop() || 'AGOrg';
     
     // Separate AGOrg candidate from AGO candidates
-    const candidates = Array.isArray(agorgDiscoveryCache?.candidates) ? agorgDiscoveryCache.candidates : [];
+    const candidates = Array.isArray(agorgDiscoveryCache.candidates) ? agorgDiscoveryCache.candidates : [];
     const agoCandidates = candidates.filter(c => 
       c.path !== agorgDefaultScopeCandidate && agorgApprovedPaths.has(c.path)
     );
@@ -4204,8 +4206,8 @@ async function settingsResolvePolicy() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function branchConflictRadarRun() {
-  const branch = (document.getElementById('branch-radar-input')?.value || '').trim();
-  const base = (document.getElementById('branch-radar-base')?.value || 'main').trim();
+  const branch = (document.getElementById('branch-radar-input').value || '').trim();
+  const base = (document.getElementById('branch-radar-base').value || 'main').trim();
   const chip = document.getElementById('branch-radar-chip');
   const results = document.getElementById('branch-radar-results');
   if (!results) return;
@@ -4243,9 +4245,9 @@ async function branchConflictRadarRun() {
 
     const rows = (data.results || []).map(r => {
       const conflictBadge = r.has_conflicts
-        ? `<span style="color:var(--color-failed)">⚠️ ${r.conflicting_files?.length || 0} file(s)</span>`
+        ? `<span style="color:var(--color-failed)">⚠️ ${r.conflicting_files.length || 0} file(s)</span>`
         : `<span style="color:var(--color-ok)">✅ clean</span>`;
-      const files = r.has_conflicts && r.conflicting_files?.length
+      const files = r.has_conflicts && r.conflicting_files.length
         ? `<div style="font-size:0.8em;color:var(--text-muted);margin-top:4px;">${r.conflicting_files.slice(0, 5).map(f => `• ${f}`).join('<br>')}</div>`
         : '';
       const errBadge = r.error ? `<span style="color:var(--color-warn)">⚠ ${r.error}</span>` : '';
@@ -4253,7 +4255,7 @@ async function branchConflictRadarRun() {
         <tr>
           <td style="font-family:var(--font-mono)">${r.repo}</td>
           <td>${conflictBadge}${files}</td>
-          <td>${r.ahead ?? '?'} ↑ / ${r.behind ?? '?'} ↓</td>
+          <td>${r.ahead || '?'} ↑ / ${r.behind || '?'} ↓</td>
           <td>${errBadge}</td>
         </tr>`;
     }).join('');
@@ -4909,22 +4911,22 @@ async function p5OrchestrateStep(domain, action, dryRun) {
     .filter(Boolean);
   const payload = { action, dry_run: dryRun };
   if (domain === 'dependency' && action === 'push') {
-    payload.branch = (document.getElementById('dash-push-branch')?.value || 'main').trim() || 'main';
-    payload.remote = (document.getElementById('dash-push-remote')?.value || 'origin').trim() || 'origin';
+    payload.branch = (document.getElementById('dash-push-branch').value || 'main').trim() || 'main';
+    payload.remote = (document.getElementById('dash-push-remote').value || 'origin').trim() || 'origin';
   }
   if (domain === 'command') {
-    const group = (document.getElementById('multi-group')?.value || document.getElementById('branch-matrix-group')?.value || '').trim();
-    const tags = parseTagsCsv((document.getElementById('multi-tags')?.value || document.getElementById('branch-matrix-tags')?.value || ''));
+    const group = (document.getElementById('multi-group').value || document.getElementById('branch-matrix-group').value || '').trim();
+    const tags = parseTagsCsv((document.getElementById('multi-tags').value || document.getElementById('branch-matrix-tags').value || ''));
     if (group) payload.group = group;
     if (tags.length) payload.tags = tags;
     if (action === 'multi.apply') {
-      payload.branch = (document.getElementById('branch-apply-branch')?.value || '').trim() || 'feat/pilot-wave13';
-      payload.base_branch = (document.getElementById('branch-apply-base')?.value || '').trim() || 'dev';
-      payload.pr_base_branch = (document.getElementById('branch-apply-pr-base')?.value || '').trim() || 'main';
-      const stageSizeRaw = (document.getElementById('branch-apply-stage-size')?.value || '2').trim();
+      payload.branch = (document.getElementById('branch-apply-branch').value || '').trim() || 'feat/pilot-wave13';
+      payload.base_branch = (document.getElementById('branch-apply-base').value || '').trim() || 'dev';
+      payload.pr_base_branch = (document.getElementById('branch-apply-pr-base').value || '').trim() || 'main';
+      const stageSizeRaw = (document.getElementById('branch-apply-stage-size').value || '2').trim();
       const stageSize = Number.parseInt(stageSizeRaw, 10);
       if (Number.isFinite(stageSize) && stageSize > 0) payload.stage_size = stageSize;
-      payload.continue_on_failure = !!document.getElementById('branch-apply-continue')?.checked;
+      payload.continue_on_failure = !!document.getElementById('branch-apply-continue').checked;
     }
   }
 

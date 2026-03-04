@@ -494,6 +494,28 @@ Keep this file current whenever a new failure class appears.
 - Prevention:
   - For Axum route design, treat `:param` as wildcard shape only; avoid sibling routes that differ only by param name.
 
+## G-027: Policy tests flake from shared/long `PILOT_HOME` socket paths
+
+- Signature:
+  - Policy test commands fail with:
+    - `FATAL: role "<user>" does not exist` (reused stale DB path)
+    - `Unix-domain socket path ... is too long (maximum 107 bytes)`
+    - `could not bind Unix address ... Operation not permitted`
+- Cause:
+  - Shared static `/tmp/pilotdb_*` paths leaked state across test runs.
+  - Long nested test paths exceeded PostgreSQL unix socket path limits.
+  - Some runtime/sandbox environments deny unix socket binding for test DB startup.
+- Recovery:
+  1. Use per-test unique, short `PILOT_HOME` paths under `/tmp/pilotdb_<suffix>`.
+  2. Add explicit runtime-denial skip checks in tests for:
+     - `Operation not permitted`
+     - shared-memory denial signatures
+     - unix socket bind/create failures.
+  3. Re-run targeted tests:
+     - `cargo test -p pilot --locked --test policy_adversarial_test -- --nocapture`
+     - `cargo test -p pilot --locked --test policy_parity_integration_test -- --nocapture`
+     - `cargo test -p pilot --locked --test policy_workflow_e2e_test -- --nocapture`
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`
