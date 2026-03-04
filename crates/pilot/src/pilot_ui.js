@@ -527,10 +527,9 @@ async function switchAgorgScope(id) {
   if (data && data.ok) {
     await refreshPolicyHookDriftChips();
   }
-  if (currentTab === 'agorg') {
-    agorgTree();
-    agorgShowActive();
-  }
+  agorgTree();
+  agorgShowActive();
+
   if (currentTab === 'branch') {
     await branchLoadMatrix();
   }
@@ -2281,34 +2280,39 @@ function clearAgorgResults() {
   agorgDiscoveryOut.textContent = '';
 }
 
-function renderAgorgRegistry(tree) {
+function renderAgorgRegistry(tree, activeId = '') {
   if (!agorgRegistryList) return;
   agorgRegistryList.innerHTML = '';
+  const datalist = document.getElementById('agorg-datalist');
+  if (datalist) datalist.innerHTML = '';
+
   if (!tree || tree.length === 0) {
     agorgRegistryList.innerHTML = '<div style="padding:10px; color:#4e6ba6; font-size:0.8rem;">No registered AGOrgs found.</div>';
     return;
   }
 
-  const datalist = document.getElementById('agorg-datalist');
-  if (datalist) datalist.innerHTML = '';
-
   const renderNode = (node, depth = 0) => {
     const agorg = node.agorg;
     if (!agorg) return;
 
-    // Render the ORG
     const el = document.createElement('div');
     el.className = 'agorg-reg-item' + (depth > 0 ? ' agorg-tree-node' : '');
+    el.dataset.agorgId = agorg.id;
     const paddingLeft = 12 + (depth * 24);
-    el.style = `display:flex; align-items:center; justify-content:space-between; padding:10px 12px 10px ${paddingLeft}px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem;`;
-    if (depth > 0) el.style.background = `rgba(255,255,255,${Math.min(0.05, depth * 0.02)})`;
+    
+    // Style for normal vs active
+    let baseStyle = `display:flex; align-items:center; justify-content:space-between; padding:10px 12px 10px ${paddingLeft}px; border-bottom:1px solid #1c2635; cursor:pointer; font-size:0.85rem;`;
+    if (depth > 0) {
+      baseStyle += ` background:rgba(255,255,255,${Math.min(0.05, depth * 0.02)});`;
+    }
+    el.style = baseStyle;
 
     el.innerHTML = `
       <div style="display:flex; align-items:center;">
-        <span style="margin-right:12px; display:inline-flex; width:1.2rem; font-size:1.1rem;">🏢</span>
-        <span style="font-weight:600;">${agorg.name}</span>
+        <span class="agorg-icon" style="margin-right:12px; display:inline-flex; width:1.2rem; font-size:1.1rem;">🏢</span>
+        <span class="agorg-name" style="font-weight:600;">${agorg.name}</span>
       </div>
-      <span style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#a8b9e3;">ORG</span>
+      <span class="agorg-badge" style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#a8b9e3;">ORG</span>
     `;
     el.onclick = () => switchAgorgScope(agorg.id);
     agorgRegistryList.appendChild(el);
@@ -2359,12 +2363,14 @@ async function agorgList() {
   }
   try {
     const treeData = await fetchJsonSafe('/api/agorg/tree');
-    if (treeData.ok && treeData.tree) {
-       renderAgorgRegistry(treeData.tree);
+    const snapshot = await hydrateScopeSnapshot(true);
+    const activeId = snapshot.active ? snapshot.active.id : '';
+
+    if (treeData && treeData.ok && treeData.tree) {
+       renderAgorgRegistry(treeData.tree, activeId);
     } else {
        // Fallback to flat if tree fails
-       const snapshot = await hydrateScopeSnapshot(true);
-       renderAgorgRegistry(snapshot.items || []);
+       renderAgorgRegistry(snapshot.items || [], activeId);
     }
 
     if (agorgOut) agorgOut.textContent = JSON.stringify(treeData, null, 2);
@@ -2396,12 +2402,32 @@ async function agorgShowActive() {
         <div style="margin-bottom:2px;"><strong>Master:</strong> <span style="font-family:monospace;">${data.active.master_path || 'None'}</span></div>
       `;
     }
-    // Highlight active in registry
-    Array.from(document.querySelectorAll('.agorg-reg-item')).forEach(el => el.classList.remove('active'));
+    
+    // Update selection highlight decoupled from DOM rebuilds
+    const activeId = data.active.id;
+    document.querySelectorAll('.agorg-reg-item').forEach(el => {
+      // Ignore AGO child nodes
+      if (!el.dataset.agorgId) return;
+      
+      if (el.dataset.agorgId === activeId) {
+        el.classList.add('active-node');
+        const badge = el.querySelector('.agorg-badge');
+        if (badge) badge.textContent = 'ACTIVE';
+      } else {
+        el.classList.remove('active-node');
+        const badge = el.querySelector('.agorg-badge');
+        if (badge) badge.textContent = 'ORG';
+      }
+    });
   } else {
     if (agorgActiveDetails) {
       agorgActiveDetails.innerHTML = `<em>No active scope set</em>`;
     }
+    document.querySelectorAll('.agorg-reg-item').forEach(el => {
+       el.classList.remove('active-node');
+       const badge = el.querySelector('.agorg-badge');
+       if (badge) badge.textContent = 'ORG';
+    });
   }
   refreshAgorgHeader();
 }
@@ -2421,12 +2447,47 @@ async function agorgOpenEditModal() {
   }
   const active = snapshot.active;
 
-  document.getElementById('agorg-edit-id').textContent = active.id;
-  document.getElementById('agorg-edit-name').value = active.name || "";
-  document.getElementById('agorg-edit-root').value = active.root_path || "";
-  document.getElementById('agorg-edit-master').value = active.master_path || "";
-
+  setVal('agorg-edit-id', snapshot.active.id);
+  setVal('agorg-edit-name', snapshot.active.name);
+  setVal('agorg-edit-root', snapshot.active.root_path);
+  setVal('agorg-edit-master', snapshot.active.master_path || '');
   document.getElementById('agorg-edit-modal').classList.add('active');
+}
+
+async function agorgRemoveSelected() {
+  const snapshot = await hydrateScopeSnapshot();
+  if (!snapshot || !snapshot.active) {
+    alert("No active AGOrg selected to remove.");
+    return;
+  }
+  const id = snapshot.active.id;
+  const name = snapshot.active.name;
+  if (!confirm(`Are you sure you want to REMOVE AGOrg '${name}' (${id}) from the registry?`)) return;
+
+  try {
+    const res = await fetch('/api/agorg/delete', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: id })
+    });
+    const data = await res.json();
+    if (data.ok) {
+       logActivity("Remove AGOrg", `Successfully removed '${name}'`);
+       
+       const nextSnapshot = await hydrateScopeSnapshot(true);
+       if (nextSnapshot && nextSnapshot.agorgs && nextSnapshot.agorgs.length > 0) {
+           // Auto-fallback to the first available AGOrg
+           const nextId = nextSnapshot.agorgs[0].id;
+           await switchAgorgScope(nextId);
+       } else {
+           await agorgRefreshActive();
+       }
+    } else {
+       alert("Failed to remove AGOrg: " + (data.error || "Unknown error"));
+    }
+  } catch (err) {
+    alert("Error removing AGOrg: " + err.message);
+  }
 }
 
 function agorgCloseEditModal() {

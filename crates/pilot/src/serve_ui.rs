@@ -6486,6 +6486,20 @@ const INDEX_HTML: &str = r#"<!doctype html>
       50% { box-shadow: 0 0 15px rgba(0, 209, 255, 0.8); }
       100% { box-shadow: 0 0 5px rgba(0, 209, 255, 0.4); }
     }
+    .agorg-reg-item.active-node {
+      background: rgba(106, 125, 255, 0.15) !important;
+      border-left: 3px solid #6a7dff !important;
+    }
+    .agorg-reg-item.active-node .agorg-icon {
+      filter: drop-shadow(0 0 5px #6a7dff);
+    }
+    .agorg-reg-item.active-node .agorg-name {
+      color: #fff;
+    }
+    .agorg-reg-item.active-node .agorg-badge {
+      background: #6a7dff !important;
+      color: #001a33 !important;
+    }
     .modal-box h3 { border: none; margin: 0; padding: 0; color: #fff; font-size: 1.1rem; }
     .modal-footer { margin-top: 10px; display: flex; justify-content: flex-end; gap: 12px; }
     .btn:hover {
@@ -7806,9 +7820,11 @@ Recommended flow:
         <div id="agorg-active-details" style="background:rgba(0,0,0,0.3); border-radius:8px; padding:12px; border:1px solid var(--border); font-size:0.8rem; font-family:'JetBrains Mono',monospace; word-break:break-all; margin-bottom:12px;">
           <em style="color:var(--dim);">Loading active scope...</em>
         </div>
-        <div class="row" style="margin-bottom:20px;">
+        <div class="row" style="margin-bottom:20px; flex-wrap:wrap;">
           <button class="btn" onclick="agorgOpenEditModal()">Edit</button>
           <button class="btn secondary" onclick="agorgRefreshActive()">Refresh</button>
+          <button class="btn secondary" style="border-color:rgba(255,255,255,0.15);" onclick="agorgRemoveSelected()" title="Remove this AGOrg from the Registry.">Remove</button>
+          <button class="btn" style="margin-left:auto; background:rgba(255,46,46,0.1); border-color:rgba(255,46,46,0.3); color:#ff6b6b; font-size:0.75rem;" onclick="agorgResetDb()" title="Wipe all AGOrg and AGO records from the database. This is for testing only.">⚠️ Reset Database</button>
         </div>
 
         <div class="helper">Click to switch scope instantly. AGOs are nested under their parent AGOrgs.</div>
@@ -7880,9 +7896,6 @@ Recommended flow:
             <button class="btn secondary" onclick="agorgLoadPolicyReports()">Refresh Policy Artifacts</button>
             <select id="agorg-policy-report-select"></select>
             <button class="btn secondary" onclick="agorgOpenPolicyReport()">Open</button>
-          </div>
-          <div class="row" style="margin-top:12px; border-top:1px solid rgba(255,46,46,0.2); padding-top:12px;">
-            <button class="btn" style="background:rgba(255,46,46,0.15); border-color:rgba(255,46,46,0.4); color:#ff4444;" onclick="agorgResetDb()" title="Wipe all AGOrg and AGO records from the database. This is for testing only.">⚠️ Reset Database</button>
           </div>
         </div>
 
