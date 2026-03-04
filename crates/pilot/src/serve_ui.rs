@@ -71,6 +71,176 @@ struct UiCommandRequest {
 struct OrchestratorRequest {
     domain: String, // "branch", "dependency", "command"
     payload: Value,
+    /// Client-supplied operation_id is intentionally ignored; server always generates a new UUID.
+    #[allow(dead_code)]
+    operation_id: Option<String>,
+}
+
+fn orchestrate_is_preview(payload: &Value) -> bool {
+    payload
+        .get("dry_run")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || payload
+            .get("action")
+            .and_then(Value::as_str)
+            .map(|a| {
+                a.contains("preview")
+                    || a == "status"
+                    || a == "policy"
+                    || a == "hook-policy"
+                    || a == "drift"
+            })
+            .unwrap_or(false)
+}
+
+fn normalize_orchestrate_payload(payload: &mut Value, stage: &str) {
+    if stage == "preview" {
+        payload["dry_run"] = json!(true);
+        if payload.get("apply").is_some() {
+            payload["apply"] = json!(false);
+        }
+    }
+}
+
+fn command_request_from_orchestrate_payload(payload: Value) -> std::result::Result<UiCommandRequest, String> {
+    if let Ok(req) = serde_json::from_value::<UiCommandRequest>(payload.clone()) {
+        return Ok(req);
+    }
+
+    let action = payload
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Invalid command payload format".to_string())?;
+
+    let mut cmd_payload = json!({});
+    if let Some(group) = payload.get("group").and_then(Value::as_str) {
+        cmd_payload["group"] = json!(group);
+    }
+    if let Some(tags) = payload.get("tags") {
+        cmd_payload["tags"] = tags.clone();
+    }
+    if let Some(base_branch) = payload.get("base_branch").and_then(Value::as_str) {
+        cmd_payload["base_branch"] = json!(base_branch);
+    }
+    if let Some(pr_base_branch) = payload.get("pr_base_branch").and_then(Value::as_str) {
+        cmd_payload["pr_base_branch"] = json!(pr_base_branch);
+    }
+    if let Some(branch) = payload.get("branch").and_then(Value::as_str) {
+        cmd_payload["branch"] = json!(branch);
+    }
+    if let Some(stage_size) = payload.get("stage_size").and_then(Value::as_u64) {
+        cmd_payload["stage_size"] = json!(stage_size);
+    }
+    if let Some(continue_on_failure) = payload
+        .get("continue_on_failure")
+        .and_then(Value::as_bool)
+    {
+        cmd_payload["continue_on_failure"] = json!(continue_on_failure);
+    }
+
+    let req = match action {
+        "heal.plan" => {
+            cmd_payload["plan_only"] = json!(true);
+            UiCommandRequest {
+                command: "pilot.heal.run".to_string(),
+                payload: cmd_payload,
+            }
+        }
+        "heal.run" => {
+            cmd_payload["plan_only"] = json!(false);
+            UiCommandRequest {
+                command: "pilot.heal.run".to_string(),
+                payload: cmd_payload,
+            }
+        }
+        "multi.status" => UiCommandRequest {
+            command: "pilot.multi.status".to_string(),
+            payload: cmd_payload,
+        },
+        "dag.evaluate" | "multi.dag" => {
+            cmd_payload["dry_run"] = json!(true);
+            UiCommandRequest {
+                command: "pilot.multi.dag".to_string(),
+                payload: cmd_payload,
+            }
+        }
+        "multi.apply" => {
+            let dry_run = payload
+                .get("dry_run")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            cmd_payload["apply"] = json!(!dry_run);
+            UiCommandRequest {
+                command: "pilot.multi.apply".to_string(),
+                payload: cmd_payload,
+            }
+        }
+        _ => {
+            return Err(format!(
+                "Invalid command payload format: unknown action '{}'",
+                action
+            ))
+        }
+    };
+    Ok(req)
+}
+
+/// P5: Canonical cross-tab response envelope.
+/// Injected at the orchestration API boundary — inner handler structs are NOT modified.
+#[derive(Debug, Serialize)]
+struct OrchEnvelope {
+    ok: bool,
+    operation_id: String,
+    domain: String,
+    stage: String,
+    status: String,
+    summary: String,
+    artifact_path: Option<String>,
+    error: Option<String>,
+    inner: Value,
+}
+
+/// Wrap a domain handler's raw JSON response into a canonical OrchEnvelope.
+/// Extracts ok/artifact_path/error from inner response; generates a fresh server-side UUID.
+fn wrap_as_envelope(domain: &str, stage: &str, inner_response: Value) -> OrchEnvelope {
+    let ok = inner_response.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let artifact_path = inner_response
+        .get("artifact_path")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let error = if ok {
+        None
+    } else {
+        inner_response
+            .get("error")
+            .or_else(|| inner_response.get("stderr"))
+            .and_then(Value::as_str)
+            .map(String::from)
+    };
+    let summary = if ok {
+        format!("{domain}/{stage}: completed")
+    } else {
+        format!("{domain}/{stage}: failed")
+    };
+    let status = if stage == "preview" {
+        "preview".to_string()
+    } else if ok {
+        "ok".to_string()
+    } else {
+        "error".to_string()
+    };
+    OrchEnvelope {
+        ok,
+        operation_id: Uuid::new_v4().to_string(),
+        domain: domain.to_string(),
+        stage: stage.to_string(),
+        status,
+        summary,
+        artifact_path,
+        error,
+        inner: inner_response,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -577,6 +747,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/branch/timeline", get(api_branch_timeline))
         .route("/api/orchestrate/timeline", get(api_orchestrate_timeline))
         .route("/api/orchestrate/run", post(api_orchestrate_run))
+        .route("/api/orchestrate/graph-status", get(api_orchestrate_graph_status))
         .route(
             "/api/system/temporary_components",
             get(get_temporary_components),
@@ -4320,9 +4491,11 @@ mod tests {
         agorg_reconcile_apply_dry_run_response, agorg_reconcile_apply_success_response,
         append_codex_contract_record, canonical_branch_payload, classify_bus_health,
         classify_db_health, command_requires_cwd_scope, command_requires_multi_selector,
+        command_request_from_orchestrate_payload,
         command_requires_mutation, command_scope_required, dependency_action_requires_cwd_scope,
         dependency_action_scope_required, filter_prune_paths_by_class, is_safe_cli_token,
         load_persisted_codex_contracts, parse_json_from_mixed_output, payload_has_multi_selector,
+        normalize_orchestrate_payload, orchestrate_is_preview,
         preflight_steps_from_action, prune_expired_branch_previews, resolve_branch_targets,
         scope_filter_rows, sorted_unique_ids, sorted_unique_tags, with_event_agorg_scope,
         BranchMatrixRow, BranchPreviewRecord, BranchRunRequest, CodexContractRecord,
@@ -4362,6 +4535,53 @@ mod tests {
 
         assert!(command_requires_multi_selector("pilot.multi.apply"));
         assert!(!command_requires_multi_selector("pilot.branch.create"));
+    }
+
+    #[test]
+    fn test_orchestrate_preview_detection() {
+        assert!(orchestrate_is_preview(&json!({"dry_run": true, "action": "sync"})));
+        assert!(orchestrate_is_preview(&json!({"action": "status"})));
+        assert!(orchestrate_is_preview(&json!({"action": "hook-policy"})));
+        assert!(!orchestrate_is_preview(&json!({"action": "sync", "dry_run": false})));
+    }
+
+    #[test]
+    fn test_orchestrate_payload_preview_normalization() {
+        let mut payload = json!({"action":"multi.apply","apply":true,"dry_run":false});
+        normalize_orchestrate_payload(&mut payload, "preview");
+        assert_eq!(payload.get("dry_run").and_then(Value::as_bool), Some(true));
+        assert_eq!(payload.get("apply").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn test_command_request_from_orchestrate_action_aliases() {
+        let req = command_request_from_orchestrate_payload(json!({
+            "action": "multi.status",
+            "group": "core",
+            "tags": ["apply-pilot"]
+        }))
+        .expect("multi.status alias should map");
+        assert_eq!(req.command, "pilot.multi.status");
+        assert_eq!(req.payload.get("group").and_then(Value::as_str), Some("core"));
+
+        let dag_req = command_request_from_orchestrate_payload(json!({
+            "action": "dag.evaluate",
+            "group": "core",
+            "tags": ["apply-pilot"]
+        }))
+        .expect("dag.evaluate alias should map");
+        assert_eq!(dag_req.command, "pilot.multi.dag");
+        assert_eq!(dag_req.payload.get("dry_run").and_then(Value::as_bool), Some(true));
+
+        let heal_req = command_request_from_orchestrate_payload(json!({
+            "action": "heal.plan"
+        }))
+        .expect("heal.plan alias should map");
+        assert_eq!(heal_req.command, "pilot.heal.run");
+        assert_eq!(
+            heal_req.payload.get("plan_only").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
@@ -6681,10 +6901,20 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </div>
 
   <section class="panel active" id="dashboard">
-    <div class="sequence-strip">
-      <button type="button" class="seq-step seq-step-btn" onclick="dashWorkflowHint('health')" title="Guided path only: no commands are executed">Status -> Bus Health -> Oracle Query -> Heal Plan -> Heal Run</button>
-      <button type="button" class="seq-step seq-step-btn" onclick="dashWorkflowHint('branch')" title="Guided path only: no commands are executed">Branch Preview -> Multi Status -> DAG -> Staged Apply</button>
-      <button type="button" class="seq-step seq-step-btn" onclick="dashWorkflowHint('push')" title="Guided path only: no commands are executed">Push Safe -> Timeline Verify</button>
+    <div class="card" style="grid-column: 1 / -1;">
+      <h3>Command Graph Orchestration (P5)</h3>
+      <div class="helper">Unified cross-tab sequence. Preview operations never mutate. Execution emits lineage.</div>
+      <div class="chip-row" id="p5-rail-strip">
+        <span id="p5-chip-status" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('dependency', 'status', true)" title="Preview Database and Dependency Status">Status</span>
+        <span id="p5-chip-bus" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('dependency', 'bus-status', true)" title="Preview Bus Health">Bus Health</span>
+        <span id="p5-chip-heal-plan" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('command', 'heal.plan', true)" title="Preview Heal Plan">Heal Plan</span>
+        <span id="p5-chip-heal-run" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('command', 'heal.run', false)" title="Execute Heal Run (Mutates)">Heal Run</span>
+        <span id="p5-chip-push" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('dependency', 'push', false)" title="Execute Push Safe (Mutates)">Push Safe</span>
+        <span id="p5-chip-branch" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('branch', 'status', true)" title="Preview Branch Status">Branch Preview</span>
+        <span id="p5-chip-multi" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('command', 'multi.status', true)" title="Preview Multi Repo Status">Multi</span>
+        <span id="p5-chip-dag" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('command', 'dag.evaluate', true)" title="Preview DAG Evaluation">DAG</span>
+        <span id="p5-chip-apply" class="chip neutral" style="cursor:pointer" onclick="p5OrchestrateStep('command', 'multi.apply', false)" title="Execute Staged Apply (Mutates)">Staged Apply</span>
+      </div>
     </div>
     <div class="grid">
       <div class="card" style="grid-column: 1 / -1;">
@@ -8751,31 +8981,67 @@ async fn api_orchestrate_run(
     State(state): State<Arc<UiState>>,
     Json(req): Json<OrchestratorRequest>,
 ) -> Response {
-    match req.domain.as_str() {
+    // Determine stage from payload: dry_run=true or action=preview-class → "preview"
+    let is_preview = orchestrate_is_preview(&req.payload);
+    let stage = if is_preview { "preview" } else { "execute" };
+    let mut payload = req.payload.clone();
+    normalize_orchestrate_payload(&mut payload, stage);
+
+    let inner_response: Value = match req.domain.as_str() {
         "branch" => {
-            if let Ok(branch_req) = serde_json::from_value::<BranchRunRequest>(req.payload) {
-                api_branch_run(State(state), Json(branch_req)).await
+            if let Ok(branch_req) = serde_json::from_value::<BranchRunRequest>(payload) {
+                let resp = api_branch_run(State(state), Json(branch_req)).await;
+                extract_json_body(resp).await
             } else {
-                error_response(StatusCode::BAD_REQUEST, "Invalid branch payload format")
+                json!({"ok": false, "error": "Invalid branch payload format"})
             }
         }
         "dependency" => {
-            if let Ok(dep_req) = serde_json::from_value::<DependencyActionRequest>(req.payload) {
-                run_dependency_action(State(state), Json(dep_req)).await
+            if let Ok(dep_req) = serde_json::from_value::<DependencyActionRequest>(payload) {
+                let resp = run_dependency_action(State(state), Json(dep_req)).await;
+                extract_json_body(resp).await
             } else {
-                error_response(StatusCode::BAD_REQUEST, "Invalid dependency payload format")
+                json!({"ok": false, "error": "Invalid dependency payload format"})
             }
         }
         "command" => {
-            if let Ok(cmd_req) = serde_json::from_value::<UiCommandRequest>(req.payload) {
-                run_command(State(state), Json(cmd_req)).await
-            } else {
-                error_response(StatusCode::BAD_REQUEST, "Invalid command payload format")
+            match command_request_from_orchestrate_payload(payload) {
+                Ok(cmd_req) => {
+                    let resp = run_command(State(state), Json(cmd_req)).await;
+                    extract_json_body(resp).await
+                }
+                Err(err) => {
+                    json!({"ok": false, "error": err})
+                }
             }
         }
-        other => error_response(
-            StatusCode::BAD_REQUEST,
-            &format!("Unknown orchestrator domain: {other}"),
-        ),
-    }
+        other => json!({
+            "ok": false,
+            "error": format!("Unknown orchestrator domain: {other}")
+        }),
+    };
+
+    let envelope = wrap_as_envelope(&req.domain, stage, inner_response);
+    (StatusCode::OK, Json(serde_json::to_value(&envelope).unwrap_or_default())).into_response()
+}
+
+/// P5: Return current orchestration graph step-status (stateless — always returns schema info).
+async fn api_orchestrate_graph_status() -> Response {
+    Json(json!({
+        "ok": true,
+        "schema_version": "p5.1",
+        "envelope_fields": ["ok", "operation_id", "domain", "stage", "status", "summary", "artifact_path", "error", "inner"],
+        "domains": ["branch", "dependency", "command"],
+        "stages": ["preview", "execute"],
+        "status_values": ["preview", "ok", "error"]
+    }))
+    .into_response()
+}
+
+/// Extract the JSON body from an axum Response for envelope wrapping.
+async fn extract_json_body(resp: Response) -> Value {
+    let bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap_or_default();
+    serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({"ok": false, "error": "non-JSON body"}))
 }

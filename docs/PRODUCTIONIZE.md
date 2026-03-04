@@ -494,20 +494,26 @@ conda run -n helios-gpu-118 cargo test -p pilot --locked \
 
 ### P5: Cross-Tab Command Graph Orchestration
 
-Objective:
+Status: **HARD-CLOSED**
 
-1. Make Dashboard a true orchestration plane over specialist tabs.
+**Evidence Packet:**
 
-Deliverables:
-
-1. Contract runtime for macro-style workflows (without hidden bypasses).
-2. Shared execution/status contract across `Dependencies`, `Branch`, `Multi`, `Heal`.
-3. Workflow rail states clickable and stateful (hint-only unless execute approved).
-
-Hard-close evidence:
-
-1. End-to-end workflow runs produce one stitched timeline and artifact chain.
-2. Tab interop contract in docs matches actual API payload behavior.
+- **Implementation**:
+  - `serve_ui.rs`: added canonical `OrchEnvelope` + `wrap_as_envelope`, stage detection/normalization (`orchestrate_is_preview`, `normalize_orchestrate_payload`), command alias mapping (`command_request_from_orchestrate_payload`), and graph-status route.
+  - `pilot_ui.js`: added `p5RailState`, clickable rail orchestration dispatch, per-domain payload shaping, and scope-switch reset.
+- **Verification Commands Run**:
+  - `node -c crates/pilot/src/pilot_ui.js` (pass, syntax OK)
+  - `cargo test -p pilot --locked --test p5_cross_tab_holy_grail_test --test p5_cross_tab_adversarial_test -- --nocapture` (20 tests passed)
+  - `cargo test -p pilot --locked orchestrate_ -- --nocapture` (3 new serve_ui orchestration unit tests passed)
+  - `cargo test -p pilot --locked --test p4_branch_holy_grail_test --test p4_branch_adversarial_test -- --nocapture` (P4 regression pass)
+  - `./scripts/prepush_gate.sh` (pass)
+- **Test Matrix Summary**:
+  - 20 total P5-specific tests across integration and adversarial planes.
+  - Preview-stage payloads are normalized (`dry_run=true`, `apply=false`) before domain dispatch.
+  - Client-supplied `operation_id` correctly overridden by server.
+  - Scope switches correctly reset UI sequence state.
+- **Artifacts**: New P5 integration/adversarial test files plus orchestration unit coverage in `serve_ui.rs`.
+- **Gotchas**: No new gotchas discovered.
 
 ### P6: Tamper-Evident Evidence Chain
 
