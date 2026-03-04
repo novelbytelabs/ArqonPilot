@@ -7809,6 +7809,12 @@ Recommended flow:
   </section>
 
   <section class="panel" id="agorg">
+    <div class="sequence-strip">
+      <button class="seq-step seq-step-btn" onclick="agorgRefreshActive()" title="Sync active scope and registry list.">Quick Sync</button>
+      <button class="seq-step seq-step-btn" onclick="agorgDiscoverPreview()" title="Discover projects in current master.">Import > Discover > </button>
+      <button class="seq-step seq-step-btn" onclick="activateSubPanel('agorg-create-panel', document.querySelector('.sub-tab[onclick*=\'agorg-create-panel\']'))" title="Go to batch creation workflow.">Create New</button>
+      <button class="seq-step seq-step-btn" onclick="agorgReconcile()" title="Run policy reconciliation report.">Policy Report > Reconcile</button>
+    </div>
 
     <!-- Row 1: Active Scope + Registry (50/50) -->
     <div class="grid" style="grid-template-columns: 1fr;">
