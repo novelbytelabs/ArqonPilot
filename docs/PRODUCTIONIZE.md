@@ -466,8 +466,8 @@ Hard-close evidence:
 - `crates/pilot/src/serve_ui.rs`: Registered `GET /api/branch/timeline` route; added `api_branch_timeline` handler (domain="branch" filter, G-007 compliant offset/limit bounds ≤10k/500); inserted Conflict Radar HTML panel (card with radar branch/base inputs, chip, results container, `branchConflictRadarRun()` wiring).
 - `crates/pilot/src/pilot_ui.js`: Added `branchConflictRadarRun()` function (calls `/api/branch/conflict-radar`, renders per-repo conflict table with ahead/behind counts and file list); updated `branchTimelineLoad()` with per-event expandable drill-down (JSON payload truncated at 2000 chars per G-007).
 - `crates/pilot-branch/src/lib.rs`: Promoted `ConflictRadarResult`, `BranchTimelineEvent` structs to `pub`; promoted `parse_merge_tree_conflicts` to `pub fn`.
-- `crates/pilot/tests/p4_branch_holy_grail_test.rs`: New integration test file — 13 behavior-first tests covering conflict_radar lib, undo journal lib, timeline JSON contracts, and route registration guards.
-- `crates/pilot/tests/p4_branch_adversarial_test.rs`: New adversarial test file — 10 edge-case tests covering typed-confirmation model contract, ConfirmationType serialization, conflict radar fallback, undo null-ref/nonexistent-repo, timeline offset/limit G-007 bounds.
+- `crates/pilot/tests/p4_branch_holy_grail_test.rs`: New integration test file — 12 behavior-first tests covering conflict_radar lib, undo journal lib, timeline JSON contracts, and route registration guards.
+- `crates/pilot/tests/p4_branch_adversarial_test.rs`: New adversarial test file — 13 edge-case tests covering typed-confirmation model contract, ConfirmationType serialization, conflict radar fallback, undo null-ref/nonexistent-repo, timeline offset/limit G-007 bounds.
 
 **Commands run (observed):**
 ```
@@ -478,8 +478,8 @@ conda run -n helios-gpu-118 cargo test -p pilot --locked \
 
 **Test results by tier:**
 - JS syntax: `node -c pilot_ui.js` → **OK**
-- Integration — p4_branch_holy_grail_test: **13 tests passed; 0 failed** (2m 39s build including full crate graph; both test binaries executed, shell returned clean)
-- Adversarial — p4_branch_adversarial_test: **10 tests passed; 0 failed** (same build run)
+- Integration — p4_branch_holy_grail_test: **12 tests passed; 0 failed** (build executed cleanly)
+- Adversarial — p4_branch_adversarial_test: **13 tests passed; 0 failed** (build executed cleanly)
 - pilot-branch unit tests (existing): unmodified; no regressions introduced by pub visibility promotions
 
 **Deliverable verification:**
