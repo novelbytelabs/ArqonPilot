@@ -1074,6 +1074,37 @@ async fn run_command(
                 "Scope guard: multi-repo command requires explicit selector (group or tags).",
             );
         }
+
+        if req.command == "pilot.multi.register" {
+            let path_raw = match req.payload.get("path").and_then(Value::as_str) {
+                Some(v) if !v.trim().is_empty() => v.trim(),
+                _ => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "Scope guard: pilot.multi.register requires a non-empty 'path'.",
+                    )
+                }
+            };
+            let input_path = PathBuf::from(path_raw);
+            let normalized = if input_path.is_absolute() {
+                canonicalize_path_lossy(&input_path)
+            } else {
+                match std::env::current_dir() {
+                    Ok(cwd) => canonicalize_path_lossy(&cwd.join(input_path)),
+                    Err(_) => canonicalize_path_lossy(&input_path),
+                }
+            };
+            let roots = scope_roots(&scope);
+            if !path_in_any_root(&normalized, &roots) {
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    &format!(
+                        "Scope guard: repo path '{}' is outside active AGOrg scope.",
+                        normalized.display()
+                    ),
+                );
+            }
+        }
     }
 
     if let Some(allowlist) = &state.allowed_commands {
@@ -8427,9 +8458,17 @@ Recommended flow:
   <section class="panel" id="multi">
     <div id="multi-empty-state" class="empty-state-notice" aria-live="polite"></div>
     <div class="sequence-strip">
-      <button class="seq-step seq-step-btn" onclick="multiMacroListStatusOrder()" title="Run List, then Status, then Order with visible 3-second pauses.">List > Status > Order</button>
-      <span class="seq-step">DAG -> PR Plan</span>
+      <button class="seq-step seq-step-btn" onclick="multiMacroListStatusOrder()">List > Status > Order</button>
+      <button class="seq-step seq-step-btn" onclick="multiMacroDagPrPlan()">DAG > PR Plan</button>
       <span class="seq-step">Staged Apply (Dry Run -> Execute)</span>
+    </div>
+    <div class="pre-wrap" style="margin-bottom:12px;">
+      <div class="pre-actions">
+        <button id="multi-macro-toggle-btn" class="action-btn" onclick="toggleMultiMacroLog()">🔽 Expand Macro Telemetry</button>
+        <button class="action-btn" onclick="copyToClipboard('multi-macro-log-out', this)">📋 Copy</button>
+        <button class="action-btn" onclick="clearElement('multi-macro-log-out')">🧹 Clear</button>
+      </div>
+      <pre id="multi-macro-log-out" class="term-out" style="display:none;" role="status" aria-live="polite" tabindex="-1">Macro telemetry ready.</pre>
     </div>
     <div class="grid">
       <div class="card">
@@ -8462,7 +8501,7 @@ Recommended flow:
           <button id="multi-order-btn" class="btn secondary" onclick="multiOrder()">Order</button>
           <button id="multi-dag-btn" class="btn secondary" onclick="multiDag()">DAG</button>
         </div>
-        <button class="btn" onclick="multiPrsCreate()">PR Plan (Dry Run)</button>
+        <button id="multi-pr-plan-btn" class="btn" onclick="multiPrsCreate()">PR Plan (Dry Run)</button>
         <div class="pre-wrap" style="margin-top:12px;">
           <div class="pre-actions">
             <button id="multi-output-html" class="action-btn" onclick="multiSetOutputMode('html')">HTML</button>
@@ -8470,7 +8509,7 @@ Recommended flow:
             <button class="action-btn" onclick="copyToClipboard('multi-action-out', this)">COPY</button>
             <button class="action-btn" onclick="clearElement('multi-action-out')">CLEAR</button>
           </div>
-          <pre id="multi-action-out" class="term-out">ready</pre>
+          <pre id="multi-action-out" class="term-out" tabindex="-1">ready</pre>
         </div>
       </div>
       <div class="card">
@@ -8657,7 +8696,9 @@ Recommended flow:
           <div class="form-row">
             <div class="form-label">Name</div>
             <div class="form-content">
-              <input id="repo-name" placeholder="ArqonPilot" />
+              <select id="repo-name" onchange="repoSelectAgo()">
+                <option value="">Select AGO from active AGOrg…</option>
+              </select>
             </div>
           </div>
 
@@ -8730,6 +8771,27 @@ Recommended flow:
       <div class="modal-footer">
         <button class="btn secondary" onclick="agorgCloseEditModal()">Cancel</button>
         <button class="btn" onclick="agorgSaveEditModal()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="multi-scope-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h3>Scope Required</h3>
+      <div class="helper" style="margin-bottom:12px;">
+        Set at least one selector before running this macro:
+        <b>Group</b> or <b>Tags</b>.
+      </div>
+      <div class="section-box">
+        <label class="field-label" for="multi-scope-modal-group">Group</label>
+        <input id="multi-scope-modal-group" placeholder="core" autocomplete="off" />
+        <label class="field-label" for="multi-scope-modal-tags">Tags (comma-separated)</label>
+        <input id="multi-scope-modal-tags" placeholder="pilot,wave7" autocomplete="off" />
+        <div class="helper" style="margin-top:8px;">Enter either Group, Tags, or both. Click Apply to update selectors.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="applyMultiScopeModal()">Apply</button>
+        <button class="btn secondary" onclick="closeMultiScopeModal()">Close</button>
       </div>
     </div>
   </div>

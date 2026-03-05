@@ -83,6 +83,11 @@ const multiOutputJsonBtn = document.getElementById('multi-output-json');
 const multiListBtn = document.getElementById('multi-list-btn');
 const multiStatusBtn = document.getElementById('multi-status-btn');
 const multiOrderBtn = document.getElementById('multi-order-btn');
+const multiPrPlanBtn = document.getElementById('multi-pr-plan-btn');
+const multiMacroLogOut = document.getElementById('multi-macro-log-out');
+const multiMacroToggleBtn = document.getElementById('multi-macro-toggle-btn');
+const multiScopeModal = document.getElementById('multi-scope-modal');
+let repoAgoOptionsCache = [];
 
 function logActivity(title, data) {
   if (!agorgActivityLog) return;
@@ -280,6 +285,7 @@ let agorgDefaultScopeCandidate = null;
 let multiOutputMode = 'html';
 let multiActionLast = null;
 let multiMacroRunning = false;
+let multiMacroExpanded = false;
 
 function activatePanel(tabName, opts = {}) {
   const persist = opts.persist !== false;
@@ -563,6 +569,7 @@ async function switchAgorgScope(id) {
   }
   agorgTree();
   agorgShowActive();
+  await loadRepoAgoOptions();
 
   if (currentTab === 'branch') {
     await branchLoadMatrix();
@@ -2635,6 +2642,7 @@ async function agorgUse() {
     agorgList();
     agorgShowActive();
     agorgTree();
+    await loadRepoAgoOptions();
     if (currentTab === 'branch') {
       await branchLoadMatrix();
     }
@@ -3439,21 +3447,101 @@ async function browseRepoPath() {
   const data = await pickDirectory(pathIn.value);
   if (data && data.ok && data.path) {
     pathIn.value = data.path;
-    if (!nameIn.value.trim()) {
-      const parts = data.path.split(/[/\\]/).filter(Boolean);
-      nameIn.value = parts[parts.length - 1] || 'NewRepo';
+    if (nameIn) {
+      const match = repoAgoOptionsCache.find((ago) => ago.path === data.path);
+      if (match) {
+        nameIn.value = match.name;
+      } else {
+        nameIn.value = '';
+      }
     }
   }
+}
+
+function collectAgosFromTree(nodes, out = []) {
+  if (!Array.isArray(nodes)) return out;
+  for (const node of nodes) {
+    if (Array.isArray(node.agos)) {
+      for (const ago of node.agos) {
+        if (!ago || !ago.name || !ago.repo_path) continue;
+        out.push({ name: String(ago.name), path: String(ago.repo_path) });
+      }
+    }
+    if (Array.isArray(node.child_agorgs)) {
+      collectAgosFromTree(node.child_agorgs, out);
+    }
+  }
+  return out;
+}
+
+function renderRepoAgoOptions(options) {
+  const sel = document.getElementById('repo-name');
+  if (!sel) return;
+  const current = sel.value || '';
+  sel.innerHTML = '<option value="">Select AGO from active AGOrg…</option>';
+  for (const ago of options) {
+    const opt = document.createElement('option');
+    opt.value = ago.name;
+    opt.textContent = `${ago.name} - ${ago.path}`;
+    sel.appendChild(opt);
+  }
+  if (current && options.some((x) => x.name === current)) {
+    sel.value = current;
+  }
+}
+
+function repoSelectAgo() {
+  const sel = document.getElementById('repo-name');
+  const pathIn = document.getElementById('repo-path');
+  if (!sel || !pathIn) return;
+  const picked = (sel.value || '').trim();
+  if (!picked) return;
+  const match = repoAgoOptionsCache.find((ago) => ago.name === picked);
+  if (match) {
+    pathIn.value = match.path;
+  }
+}
+
+async function loadRepoAgoOptions() {
+  const sel = document.getElementById('repo-name');
+  if (!sel) return;
+  repoAgoOptionsCache = [];
+  renderRepoAgoOptions([]);
+  const active = await fetchJsonSafe('/api/agorg/active');
+  if (!active || !active.ok || !active.agorg || !active.agorg.id) {
+    return;
+  }
+  const tree = await fetchJsonSafe(`/api/agorg/tree?root=${encodeURIComponent(active.agorg.id)}`);
+  if (!tree || !tree.ok) {
+    return;
+  }
+  const all = collectAgosFromTree(tree.tree, []);
+  const unique = new Map();
+  for (const ago of all) {
+    if (!unique.has(ago.path)) unique.set(ago.path, ago);
+  }
+  repoAgoOptionsCache = Array.from(unique.values()).sort((a, b) => a.name.localeCompare(b.name));
+  renderRepoAgoOptions(repoAgoOptionsCache);
 }
 
 async function multiRegister() {
   const outputEl = document.getElementById('multi-register-out');
   const actionsEl = document.getElementById('multi-register-actions');
+  const selectedAgoName = (document.getElementById('repo-name').value || '').trim();
+  const selectedAgo = selectedAgoName
+    ? repoAgoOptionsCache.find((ago) => ago.name === selectedAgoName)
+    : null;
+  const pathValue = (document.getElementById('repo-path').value || '').trim();
+  if (!pathValue) {
+    showInlineError(outputEl, 'Missing path', 'Select an AGO name or browse a repo path first.');
+    if (outputEl) outputEl.style.display = 'block';
+    return;
+  }
   if (outputEl) outputEl.style.display = 'block';
   if (actionsEl) actionsEl.style.display = 'flex';
   const res = await run('pilot.multi.register', {
-    path: document.getElementById('repo-path').value,
-    name: document.getElementById('repo-name').value || null,
+    path: pathValue,
+    name: (selectedAgo ? selectedAgo.name : selectedAgoName) || null,
     group: document.getElementById('repo-group').value || null,
     tags: tags(document.getElementById('repo-tags').value)
   }, { outputEl: outputEl });
@@ -3505,11 +3593,115 @@ function multiScopeSelector() {
   };
 }
 
+function multiHasScope() {
+  const group = (document.getElementById('multi-group').value || '').trim();
+  const selectedTags = tags(document.getElementById('multi-tags').value);
+  return !!group || selectedTags.length > 0;
+}
+
+function openMultiScopeModal() {
+  if (!multiScopeModal) return;
+  const modalGroup = document.getElementById('multi-scope-modal-group');
+  const modalTags = document.getElementById('multi-scope-modal-tags');
+  const groupInput = document.getElementById('multi-group');
+  const tagsInput = document.getElementById('multi-tags');
+  if (modalGroup && groupInput) modalGroup.value = groupInput.value || '';
+  if (modalTags && tagsInput) modalTags.value = tagsInput.value || '';
+  if (modalGroup) {
+    modalGroup.disabled = false;
+    modalGroup.readOnly = false;
+  }
+  if (modalTags) {
+    modalTags.disabled = false;
+    modalTags.readOnly = false;
+  }
+  multiScopeModal.classList.add('active');
+  setTimeout(() => {
+    if (modalGroup) {
+      modalGroup.focus();
+      modalGroup.select();
+    }
+  }, 0);
+}
+
+function closeMultiScopeModal() {
+  if (!multiScopeModal) return;
+  multiScopeModal.classList.remove('active');
+}
+
+function applyMultiScopeModal() {
+  const modalGroup = document.getElementById('multi-scope-modal-group');
+  const modalTags = document.getElementById('multi-scope-modal-tags');
+  const groupInput = document.getElementById('multi-group');
+  const tagsInput = document.getElementById('multi-tags');
+  const groupValue = (modalGroup?.value || '').trim();
+  const tagsValue = (modalTags?.value || '').trim();
+  if (groupInput) groupInput.value = groupValue;
+  if (tagsInput) tagsInput.value = tagsValue;
+  if (!groupValue && !tagsValue) {
+    showInlineError(
+      multiActionOut,
+      'Scope required',
+      'Enter Group, Tags, or both before continuing.'
+    );
+    if (modalGroup) modalGroup.focus();
+    return;
+  }
+  closeMultiScopeModal();
+  multiRefreshRegistry();
+  if (groupInput) groupInput.focus();
+}
+
 function multiSetOutputMode(mode) {
   multiOutputMode = mode === 'json' ? 'json' : 'html';
   if (multiOutputHtmlBtn) multiOutputHtmlBtn.classList.toggle('active', multiOutputMode === 'html');
   if (multiOutputJsonBtn) multiOutputJsonBtn.classList.toggle('active', multiOutputMode === 'json');
   multiRenderActionOutput();
+}
+
+function toggleMultiMacroLog(forceExpand = null) {
+  if (!multiMacroLogOut || !multiMacroToggleBtn) return;
+  if (forceExpand === true) multiMacroExpanded = true;
+  else if (forceExpand === false) multiMacroExpanded = false;
+  else multiMacroExpanded = !multiMacroExpanded;
+  multiMacroLogOut.style.display = multiMacroExpanded ? 'block' : 'none';
+  multiMacroToggleBtn.textContent = multiMacroExpanded
+    ? '🔼 Collapse Macro Telemetry'
+    : '🔽 Expand Macro Telemetry';
+}
+
+function appendMultiMacroTelemetry(label, data) {
+  if (!multiMacroLogOut) return;
+  const now = new Date().toISOString();
+  const ok = !!(data && data.ok);
+  const status = ok ? 'PASS' : 'FAIL';
+  const formatted = formatMultiOutput(`pilot.multi.${label.toLowerCase().replace(/\s+/g, '_')}`, data);
+  const summary = formatted
+    .split('\n')
+    .find((line) => line.startsWith('Summary: '))
+    ?.replace('Summary: ', '') || 'No summary available';
+  const error = data?.error || data?.inner?.error || '';
+  const block = [
+    `=== ${label} @ ${now} ===`,
+    `Result: ${status}`,
+    `Summary: ${summary}`,
+    error ? `Error: ${error}` : null,
+    ''
+  ].filter(Boolean).join('\n');
+  const current = multiMacroLogOut.textContent && multiMacroLogOut.textContent !== 'Macro telemetry ready.'
+    ? `${multiMacroLogOut.textContent}\n`
+    : '';
+  multiMacroLogOut.textContent = `${current}${block}`;
+}
+
+function focusResultsForA11y(el) {
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  try {
+    el.focus({ preventScroll: true });
+  } catch (_) {
+    el.focus();
+  }
 }
 
 function multiRenderActionOutput() {
@@ -3551,6 +3743,9 @@ function runMultiCommand(command, payload, opts = {}) {
   }).then((data) => {
     multiActionLast = { command, data };
     multiRenderActionOutput();
+    if (opts.focusResultOnComplete) {
+      focusResultsForA11y(outputEl);
+    }
     return data;
   });
 }
@@ -3685,14 +3880,17 @@ function multiApplyExecute() {
   });
 }
 
-function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function multiMacroListStatusOrder() {
   if (multiMacroRunning) return;
+  if (!multiHasScope()) {
+    openMultiScopeModal();
+    return;
+  }
   multiMacroRunning = true;
   try {
+    toggleMultiMacroLog(true);
+    let passCount = 0;
+    let failCount = 0;
     const steps = [
       { btn: multiListBtn, fn: multiList, name: 'List' },
       { btn: multiStatusBtn, fn: multiStatus, name: 'Status' },
@@ -3702,15 +3900,45 @@ async function multiMacroListStatusOrder() {
       if (step.btn) {
         step.btn.focus();
       }
-      if (multiActionOut) {
-        multiActionOut.textContent = `Macro running: ${step.name}\nWaiting 3s for visibility...`;
-      }
-      await sleepMs(3000);
-      await step.fn();
-      await sleepMs(3000);
+      const result = await step.fn();
+      appendMultiMacroTelemetry(step.name, result);
+      if (result && result.ok) passCount += 1;
+      else failCount += 1;
     }
-    if (multiActionOut) {
-      multiActionOut.textContent += '\n\nMacro complete: List > Status > Order';
+    if (multiMacroLogOut) {
+      multiMacroLogOut.textContent += `\nMacro Summary: ${passCount} passed, ${failCount} failed`;
+      focusResultsForA11y(multiMacroLogOut);
+    }
+  } finally {
+    multiMacroRunning = false;
+  }
+}
+
+async function multiMacroDagPrPlan() {
+  if (multiMacroRunning) return;
+  if (!multiHasScope()) {
+    openMultiScopeModal();
+    return;
+  }
+  multiMacroRunning = true;
+  try {
+    toggleMultiMacroLog(true);
+    let passCount = 0;
+    let failCount = 0;
+    const steps = [
+      { btn: multiDagBtn, fn: multiDag, name: 'DAG' },
+      { btn: multiPrPlanBtn, fn: multiPrsCreate, name: 'PR Plan' }
+    ];
+    for (const step of steps) {
+      if (step.btn) step.btn.focus();
+      const result = await step.fn();
+      appendMultiMacroTelemetry(step.name, result);
+      if (result && result.ok) passCount += 1;
+      else failCount += 1;
+    }
+    if (multiMacroLogOut) {
+      multiMacroLogOut.textContent += `\nMacro Summary: ${passCount} passed, ${failCount} failed`;
+      focusResultsForA11y(multiMacroLogOut);
     }
   } finally {
     multiMacroRunning = false;
@@ -4294,6 +4522,7 @@ async function bootUi() {
   await dashRefreshTemporaryComponents();
   await dashRunTemporaryChecklist();
   await agorgLoadPolicyReports();
+  await loadRepoAgoOptions();
   await codexLoadContracts();
   setInterval(loadHistory, 30000);
   document.querySelectorAll('input, textarea, select').forEach((el) => {
@@ -4339,6 +4568,11 @@ async function bootUi() {
   if (branchPruneModal) {
     branchPruneModal.addEventListener('click', (evt) => {
       if (evt.target === branchPruneModal) branchCancelPruneConfirm();
+    });
+  }
+  if (multiScopeModal) {
+    multiScopeModal.addEventListener('click', (evt) => {
+      if (evt.target === multiScopeModal) closeMultiScopeModal();
     });
   }
   restoreBranchLogLimit();

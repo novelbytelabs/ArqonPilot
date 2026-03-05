@@ -39,27 +39,30 @@ Expected result:
 
 - Header shows your AGOrg in scope.
 
-## Step 2: Register ArqonPilot in Multi Tab (Exact UI Clicks)
+## Step 2: Register ArqonPilot in AGOrg Management (Exact UI Clicks)
 
 This is the part that was missing for most people.
 
-1. Click **Multi** tab.
-2. In the **Register Repo** section, fill the fields:
+1. Click **AGOrg** tab.
+2. Open **AGOrg Management**.
+3. Click the **REPO REGISTRY** sub-tab.
+4. In **Register Repo**, fill the fields:
      - **Path**: `/home/irbsurfer/Projects/arqon/ArqonPilot`
      - **Name**: `ArqonPilot`
      - **Group**: `core`
-     - **Tags**: `apply-pilot,operator`
-3. Click **Register**.
-4. Confirm the response includes:
+     - **Tags**: `pilot` (or your preferred tags)
+5. Click **Register**.
+6. Confirm the response includes:
      - `"execution_mode": "local_direct"`
-5. Click **Status** or **List** in the same tab.
-6. Confirm `ArqonPilot` appears in output.
+7. Registration is idempotent:
+     - registering same path again does not create duplicates,
+     - changing group/tags updates the existing record.
 
 If you do not see it:
 
 - re-check the path is absolute,
 - click Register again,
-- then re-run List/Status.
+- then open **Multi** and verify the `Registry` chip count is non-zero.
 
 ## Step 3: Verify Policy/Gate Inputs in Settings
 
@@ -83,14 +86,24 @@ Expected result:
 
 ## Step 4: Run the Safe Routine (UI + Gate)
 
-1. Go to **Dashboard**.
-2. In **System Status**, click in this order:
+1. Go to **Multi** first and set selectors:
+     - **Group**: `core`
+     - **Tags**: `pilot`
+2. Click the macro button:
+     - `List > Status > Order`
+3. Optional planning macro:
+     - `DAG > PR Plan`
+4. Review results in:
+     - Multi action output (default HTML summary),
+     - Macro telemetry window (expand/collapse, copy/clear).
+5. Go to **Dashboard**.
+6. In **System Status**, click in this order:
      - `Policy`
      - `Hook Policy`
      - `Drift`
      - `Gate`
-3. Review the output panel after each click.
-4. If all pass, run push workflow (`Push Safe` in UI, or terminal push routine if your branch flow requires it).
+7. Review the output panel after each click.
+8. If all pass, run push workflow (`Push Safe` in UI, or terminal push routine if your branch flow requires it).
 
 Expected result:
 
@@ -124,9 +137,10 @@ This should pass before commit/push.
 
 1. UI started on `7788` with mutations enabled.
 2. AGOrg active in header chip.
-3. ArqonPilot registered in Multi tab.
+3. ArqonPilot registered in AGOrg Management -> REPO REGISTRY.
 4. `operator_routine` policy present/active.
-5. Dashboard: Policy/Hook/Drift/Gate checked.
-6. `./scripts/prepush_gate.sh` passes.
+5. Multi selector set (group/tags) and `List > Status > Order` macro runs cleanly.
+6. Dashboard: Policy/Hook/Drift/Gate checked.
+7. `./scripts/prepush_gate.sh` passes.
 
-When all six are true, you are in the correct Pilot-for-Pilot operating state.
+When all seven are true, you are in the correct Pilot-for-Pilot operating state.
