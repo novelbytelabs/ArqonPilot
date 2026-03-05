@@ -6623,8 +6623,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
       display: flex;
       flex-direction: column;
       gap: 6px;
-      max-height: 340px;
-      overflow-y: auto;
       padding-right: 4px;
     }
     .tl-card {
@@ -7811,8 +7809,8 @@ Recommended flow:
   <section class="panel" id="agorg">
     <div class="sequence-strip">
       <button class="seq-step seq-step-btn" onclick="agorgRefreshActive()" title="Sync active scope and registry list.">Quick Sync</button>
-      <button class="seq-step seq-step-btn" onclick="agorgMacroImportDiscover()" title="Switch to Import tab and pick a directory.">Import > Discover</button>
-      <button class="seq-step seq-step-btn" onclick="activateSubPanel('agorg-create-panel', document.querySelector('.sub-tab[onclick*=\'agorg-create-panel\']'))" title="Go to batch creation workflow.">Create New</button>
+      <button class="seq-step seq-step-btn" onclick="agorgMacroImportDiscover()" title="Switch to Onboarding tab and pick a directory.">Import > Discover</button>
+      <button class="seq-step seq-step-btn" onclick="agorgMacroCreateNew()" title="Switch to Onboarding tab and focus creation options.">Create New</button>
       <button class="seq-step seq-step-btn" onclick="agorgReconcile()" title="Run policy reconciliation report.">Policy Report > Reconcile</button>
     </div>
 
@@ -7844,32 +7842,29 @@ Recommended flow:
     <div class="card" style="margin-top:24px;">
       <h3>AGOrg Management</h3>
       <div class="sub-tabs" style="margin-top:10px;">
-        <button class="sub-tab active" onclick="activateSubPanel('agorg-import-panel', this)">IMPORT EXISTING</button>
-        <button class="sub-tab" onclick="activateSubPanel('agorg-create-panel', this)">CREATE NEW</button>
+        <button class="sub-tab active" onclick="activateSubPanel('agorg-onboarding-panel', this)">ONBOARDING</button>
         <button class="sub-tab" onclick="activateSubPanel('agorg-governance-panel', this)">GOVERNANCE</button>
       </div>
 
-      <!-- Sub-Panel: Import -->
-      <div id="agorg-import-panel" class="sub-panel active">
-        <h3 style="border-bottom: 2px solid var(--accent); padding-bottom: 8px; margin-bottom: 16px;">IMPORT EXISTING</h3>
-        <div class="helper">Onboard an existing Master Directory. All repositories must exist as siblings within this space.</div>
+      <!-- Sub-Panel: Onboarding -->
+      <div id="agorg-onboarding-panel" class="sub-panel active">
+        <div class="helper">Onboard a collective by either discovering an existing Master Directory or creating a new one from scratch.</div>
 
         <div class="grid" style="margin-top:16px; grid-template-columns: 1fr;">
-          <!-- Section 1: Target Definition -->
+          <!-- Section 1: Master Directory -->
           <div class="section-box">
-            <h4>1) TARGET</h4>
-            <label class="field-label" for="agorg-master">Directory</label>
+            <h4>MASTER DIRECTORY (ORG)</h4>
             <div class="row">
-              <input id="agorg-master" placeholder="/path/to/parent/dir" value="" onchange="agorgDiscoverPreview()" />
+              <input id="agorg-master" placeholder="/path/to/master/dir (existing or new)" value="" onchange="agorgDiscoverPreview()" />
               <button class="btn secondary" onclick="browseAgorgMaster()">Browse…</button>
-              <button class="btn secondary" onclick="agorgCreateNewFolder()">Create New Folder</button>
+              <button class="btn secondary" onclick="agorgDiscoverPreview()">Scan / Discover</button>
             </div>
           </div>
         </div>
 
         <!-- Section: Discovery Review -->
         <div class="section-box" style="margin-top:16px;">
-          <h4>2) DISCOVERY REVIEW</h4>
+          <h4>BRANCH & LEAF DIRECTORIES</h4>
           <div class="row" style="justify-content: space-between;">
             <div class="row">
               <button class="btn secondary" onclick="agorgSelectAllReview(true)">Select All</button>
@@ -7881,50 +7876,35 @@ Recommended flow:
                </div>
             </div>
           </div>
-          <div id="agorg-discovery-review" class="timeline" style="max-height: 320px; overflow-y: auto; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(0,0,0,0.2);">
-            <div class="tl-empty">Run Discover Preview to populate candidates.</div>
+          <div id="agorg-discovery-review" class="timeline" style="padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(0,0,0,0.2);">
+            <div class="tl-empty">Enter a path and click Scan / Discover to review project candidates.</div>
           </div>
         </div>
 
-
-      </div>
-
-      <!-- Sub-Panel: Create -->
-      <div id="agorg-create-panel" class="sub-panel">
-        <h3 style="border-bottom: 2px solid var(--accent); padding-bottom: 8px; margin-bottom: 16px;">CREATE NEW</h3>
-        <div class="helper">Create a new Master Directory and optionally instantiate several AGOs at once.</div>
-        <div class="grid" style="margin-top:16px;">
-          <div class="section-box">
-            <h4>Destination</h4>
-            <label class="field-label" for="agorg-create-dest">Parent Folder</label>
-            <div class="row">
-              <input id="agorg-create-dest" placeholder="/home/irbsurfer/Projects/arqon" value="/home/irbsurfer/Projects/arqon" />
-              <button class="btn secondary" onclick="browseAgorgCreateDest()">Browse…</button>
-            </div>
-            <label class="field-label" for="agorg-create-name">New Master Directory Name</label>
-            <input id="agorg-create-name" placeholder="MyNewOrg" />
-            <label class="check-label" style="margin-top:6px;">
+        <!-- Section: Creation Options (Collapsible) -->
+        <details class="subtle-block" id="agorg-creation-details" style="margin-top:20px;">
+          <summary style="cursor:pointer; color:var(--text-muted); font-size:0.86rem; margin-bottom:8px; padding: 8px; background: rgba(0,0,0,0.1); border-radius: 4px;">Advanced: Creation Options (Batch Instantiate)</summary>
+          <div class="section-box" style="margin-top:0;">
+            <div class="helper" style="margin-bottom:12px;">If the Master Directory does not exist, use these options to bootstrap it with sibling AGOs.</div>
+            
+            <label class="field-label" for="agorg-create-siblings">Sibling AGOs (one per line)</label>
+            <textarea id="agorg-create-siblings" class="batch-list" placeholder="Core&#10;Pilot&#10;Sense" style="min-height:80px;"></textarea>
+            
+            <label class="check-label" style="margin-top:10px;">
               <input id="agorg-create-git" type="checkbox" checked />
-              git init each
+              git init each project
             </label>
-          </div>
-          <details class="subtle-block" style="margin-top:12px;">
-            <summary style="cursor:pointer; color:var(--text-muted); font-size:0.86rem; margin-bottom:8px;">Advanced: Batch Setup</summary>
-            <div class="section-box" style="margin-top:0;">
-              <h4>Sibling AGOs</h4>
-              <label class="field-label" for="agorg-create-siblings">One per line</label>
-              <textarea id="agorg-create-siblings" class="batch-list" placeholder="Core&#10;Pilot&#10;Sense"></textarea>
+
+            <div class="row" style="margin-top:16px;">
+              <button class="btn" style="background:rgba(0, 245, 255, 0.1); border-color:rgba(0, 245, 255, 0.3);" onclick="agorgBatchCreate()">Batch Create & Register</button>
             </div>
-          </details>
-        </div>
-        <div class="row" style="margin-top:16px;">
-          <button class="btn" onclick="agorgBatchCreate()">Batch Create & Register</button>
-        </div>
+          </div>
+        </details>
+
       </div>
 
       <!-- Sub-Panel: Governance -->
       <div id="agorg-governance-panel" class="sub-panel">
-        <h3 style="border-bottom: 2px solid var(--accent); padding-bottom: 8px; margin-bottom: 16px;">GOVERNANCE & POLICY</h3>
         <div class="helper">Audit and reconcile policy drift across the collective. Use `Policy Report` to scan and `Reconcile Apply` to resolve auto-fixable issues.</div>
         <div class="section-box" style="margin-top:16px;">
           <div class="row">

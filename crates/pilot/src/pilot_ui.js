@@ -2325,7 +2325,7 @@ function renderAgorgRegistry(tree, activeId = '') {
         <span class="agorg-icon" style="margin-right:12px; display:inline-flex; width:1.2rem; font-size:1.1rem;">🏢</span>
         <span class="agorg-name" style="font-weight:600;">${agorg.name}</span>
       </div>
-      <span class="agorg-badge" style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#a8b9e3;">ORG</span>
+      <span class="agorg-badge" style="font-size:0.65rem; font-weight:700; padding:2px 4px; border-radius:3px; background:#1c2635; color:#a8b9e3;">AGOrg</span>
     `;
     el.onclick = () => switchAgorgScope(agorg.id);
     agorgRegistryList.appendChild(el);
@@ -2363,7 +2363,7 @@ function renderAgorgRegistry(tree, activeId = '') {
     if (root.agorg && root.agorg.master_path) {
       const h = document.createElement('div');
       h.style = 'padding:8px 12px; background:#1c2635; color:#a8b9e3; font-size:0.75rem; font-weight:700; display:flex; align-items:center; gap:8px;';
-      h.innerHTML = `<span>📁 Master:</span> <span style="font-family:monospace; opacity:0.8;">${root.agorg.master_path}</span>`;
+      h.innerHTML = `<span>📁 ORG (Master):</span> <span style="font-family:monospace; opacity:0.8;">${root.agorg.master_path}</span>`;
       agorgRegistryList.appendChild(h);
     }
     renderNode(root);
@@ -2412,7 +2412,7 @@ async function agorgShowActive() {
         <div style="color:#fff; font-weight:700; margin-bottom:4px; font-size:1.05rem;">${data.active.name}</div>
         <div style="margin-bottom:2px;"><strong>ID:</strong> <span style="font-family:monospace; color:#6a7dff;">${data.active.id}</span></div>
         <div style="margin-bottom:2px;"><strong>Root:</strong> <span style="font-family:monospace;">${data.active.root_path}</span></div>
-        <div style="margin-bottom:2px;"><strong>Master:</strong> <span style="font-family:monospace;">${data.active.master_path || 'None'}</span></div>
+        <div style="margin-bottom:2px;"><strong>Master (ORG):</strong> <span style="font-family:monospace;">${data.active.master_path || 'None'}</span></div>
       `;
     }
     
@@ -2453,14 +2453,31 @@ async function agorgRefreshActive() {
 }
 
 async function agorgMacroImportDiscover() {
-  const importBtn = document.querySelector('.sub-tab[onclick*="agorg-import-panel"]');
-  if (importBtn) {
-    activateSubPanel('agorg-import-panel', importBtn);
+  const onboardTab = document.querySelector('.sub-tab[onclick*="agorg-onboarding-panel"]');
+  if (onboardTab) {
+    activateSubPanel('agorg-onboarding-panel', onboardTab);
   }
   // Small delay to ensure panel is active before browser opens
   setTimeout(() => {
     browseAgorgMaster();
   }, 50);
+}
+
+async function agorgMacroCreateNew() {
+  const onboardTab = document.querySelector('.sub-tab[onclick*="agorg-onboarding-panel"]');
+  if (onboardTab) {
+    activateSubPanel('agorg-onboarding-panel', onboardTab);
+  }
+  // Expand creation options and focus the master path field
+  const details = document.getElementById('agorg-creation-details');
+  if (details) {
+    details.open = true;
+  }
+  const masterInput = document.getElementById('agorg-master');
+  if (masterInput) {
+    masterInput.focus();
+    masterInput.select();
+  }
 }
 
 async function agorgOpenEditModal() {
@@ -2699,7 +2716,7 @@ function renderAgorgDiscoveryReview() {
     let icon = '📄';
     let kindTag = 'OTHER';
     let chipClass = 'neutral';
-    if (c.kind === 'agorg') { icon = '🏢'; kindTag = 'ORG'; chipClass = 'warn'; }
+    if (c.kind === 'agorg') { icon = '🏢'; kindTag = 'AGOrg'; chipClass = 'warn'; }
     else if (c.kind === 'ago') { icon = '📦'; kindTag = 'AGO'; chipClass = 'ok'; }
     else if (c.kind === 'folder') { icon = '📁'; kindTag = 'DIR'; chipClass = 'neutral'; }
 
@@ -2730,9 +2747,16 @@ function renderAgorgDiscoveryReview() {
         <li>Click the <b>IMPORT APPROVED</b> button.</li>
       </ul>
     </div>
-    <div style="padding:6px 4px;color:#a8b9e3;font-size:0.82rem;display:flex;justify-content:space-between;">
-      <span>Approved ${approvedCount}/${selectableCount} candidates</span>
-      ${agorgDefaultScopeCandidate ? `<span style="color:var(--accent);font-weight:600;">AGOrg Scope Selected</span>` : `<span style="color:#ff4d4d;font-weight:600;">⚠️ No AGOrg Scope Selected</span>`}
+    <div style="padding:6px 4px; border-bottom: 2px solid rgba(0,245,255,0.3); margin-bottom: 8px;">
+      <div style="display:grid; grid-template-columns:30px 30px 90px 1fr; gap:8px; align-items:center; width:100%;">
+        <div style="font-size:0.65rem; color:var(--accent); font-weight:bold; text-align:center;" title="Designate this folder as the AGOrg root">AGOrg</div>
+        <div style="font-size:0.65rem; color:var(--accent); font-weight:bold; text-align:center;" title="Include as a child project">AGO</div>
+        <div style="font-size:0.65rem; color:var(--accent); font-weight:bold; padding-left:4px;">KIND</div>
+        <div style="font-size:0.65rem; color:var(--accent); font-weight:bold;">
+          PROJECT PATH / IDENTITY
+          ${agorgDefaultScopeCandidate ? `<span style="float:right; color:var(--accent); font-weight:bold;">AGOrg Scope Selected</span>` : `<span style="float:right; color:#ff4d4d; font-weight:bold;">⚠️ No AGOrg Scope Selected</span>`}
+        </div>
+      </div>
     </div>
     ${rows}
   `;
@@ -3300,28 +3324,38 @@ async function browseAgorgCreateDest() {
 }
 
 async function agorgBatchCreate() {
+  const masterPath = document.getElementById('agorg-master').value.trim();
+  if (!masterPath) {
+    showInlineError("Master Directory path is required for batch creation.", out);
+    return;
+  }
+
+  // Derive destination and name from the unified master path
+  const parts = masterPath.split(/[/\\]/).filter(Boolean);
+  const name = parts.pop() || 'NewOrg';
+  const destination = masterPath.substring(0, masterPath.lastIndexOf(name)).replace(/[/\\]$/, '') || '/';
+
   const req = {
-    destination: document.getElementById('agorg-create-dest').value.trim(),
-    name: document.getElementById('agorg-create-name').value.trim(),
+    destination: destination,
+    name: name,
     siblings: document.getElementById('agorg-create-siblings').value.split('\n').map(s => s.trim()).filter(s => !!s),
     use_git: !!document.getElementById('agorg-create-git').checked
   };
-  if (!req.destination || !req.name) {
-    showInlineError("Destination and Name are required.", out);
-    return;
-  }
+
+  logActivity("Batch Creating Collective", req);
   const res = await fetch('/api/agorg/batch-create', {
     method: 'POST',
     headers: {'content-type':'application/json'},
     body: JSON.stringify(req)
   });
   const data = await res.json();
-  const text = JSON.stringify(data, null, 2);
-  agorgOut.textContent = text;
-  out.textContent = text;
+  logActivity("Batch Create Result", data);
+
   if (data.ok) {
     agorgList();
     agorgTree();
+  } else {
+    showInlineError(data.error || "Batch creation failed.", out);
   }
 }
 
