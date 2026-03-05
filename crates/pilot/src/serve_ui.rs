@@ -7811,7 +7811,7 @@ Recommended flow:
   <section class="panel" id="agorg">
     <div class="sequence-strip">
       <button class="seq-step seq-step-btn" onclick="agorgRefreshActive()" title="Sync active scope and registry list.">Quick Sync</button>
-      <button class="seq-step seq-step-btn" onclick="agorgDiscoverPreview()" title="Discover projects in current master.">Import > Discover > </button>
+      <button class="seq-step seq-step-btn" onclick="agorgMacroImportDiscover()" title="Switch to Import tab and pick a directory.">Import > Discover</button>
       <button class="seq-step seq-step-btn" onclick="activateSubPanel('agorg-create-panel', document.querySelector('.sub-tab[onclick*=\'agorg-create-panel\']'))" title="Go to batch creation workflow.">Create New</button>
       <button class="seq-step seq-step-btn" onclick="agorgReconcile()" title="Run policy reconciliation report.">Policy Report > Reconcile</button>
     </div>
@@ -7846,6 +7846,7 @@ Recommended flow:
       <div class="sub-tabs" style="margin-top:10px;">
         <button class="sub-tab active" onclick="activateSubPanel('agorg-import-panel', this)">IMPORT EXISTING</button>
         <button class="sub-tab" onclick="activateSubPanel('agorg-create-panel', this)">CREATE NEW</button>
+        <button class="sub-tab" onclick="activateSubPanel('agorg-governance-panel', this)">GOVERNANCE</button>
       </div>
 
       <!-- Sub-Panel: Import -->
@@ -7920,32 +7921,31 @@ Recommended flow:
           <button class="btn" onclick="agorgBatchCreate()">Batch Create & Register</button>
         </div>
       </div>
-    </div>
 
-
-
-    <!-- Row 3: Governance & Policy -->
-    <div class="card" style="margin-top:24px;">
-      <h3>Governance & Policy</h3>
-      <div class="helper">Audit and reconcile policy drift across the collective. Use `Policy Report` to scan and `Reconcile Apply` to resolve auto-fixable issues.</div>
-      <div class="section-box" style="margin-top:16px;">
-        <div class="row">
-          <select id="agorg-reconcile-class">
-            <option value="">all classes</option>
-            <option value="topology">topology (auto-fix)</option>
-            <option value="policy_dependency">policy_dependency (manual)</option>
-            <option value="policy_branch">policy_branch (manual)</option>
-            <option value="metadata">metadata (manual)</option>
-          </select>
-          <button class="btn secondary" onclick="agorgReconcile()">Policy Report</button>
-          <button class="btn secondary" onclick="agorgReconcileApply()">Reconcile Apply</button>
-        </div>
-        <div class="row">
-          <button class="btn secondary" onclick="agorgLoadPolicyReports()">Refresh Policy Artifacts</button>
-          <select id="agorg-policy-report-select"></select>
-          <button class="btn secondary" onclick="agorgOpenPolicyReport()">Open</button>
+      <!-- Sub-Panel: Governance -->
+      <div id="agorg-governance-panel" class="sub-panel">
+        <h3 style="border-bottom: 2px solid var(--accent); padding-bottom: 8px; margin-bottom: 16px;">GOVERNANCE & POLICY</h3>
+        <div class="helper">Audit and reconcile policy drift across the collective. Use `Policy Report` to scan and `Reconcile Apply` to resolve auto-fixable issues.</div>
+        <div class="section-box" style="margin-top:16px;">
+          <div class="row">
+            <select id="agorg-reconcile-class">
+              <option value="">all classes</option>
+              <option value="topology">topology (auto-fix)</option>
+              <option value="policy_dependency">policy_dependency (manual)</option>
+              <option value="policy_branch">policy_branch (manual)</option>
+              <option value="metadata">metadata (manual)</option>
+            </select>
+            <button class="btn secondary" onclick="agorgReconcile()">Policy Report</button>
+            <button class="btn secondary" onclick="agorgReconcileApply()">Reconcile Apply</button>
+          </div>
+          <div class="row">
+            <button class="btn secondary" onclick="agorgLoadPolicyReports()">Refresh Policy Artifacts</button>
+            <select id="agorg-policy-report-select"></select>
+            <button class="btn secondary" onclick="agorgOpenPolicyReport()">Open</button>
+          </div>
         </div>
       </div>
+
     </div>
 
     <!-- Row 4: Activity Log -->

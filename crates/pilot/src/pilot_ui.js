@@ -2452,6 +2452,17 @@ async function agorgRefreshActive() {
   await agorgTree();
 }
 
+async function agorgMacroImportDiscover() {
+  const importBtn = document.querySelector('.sub-tab[onclick*="agorg-import-panel"]');
+  if (importBtn) {
+    activateSubPanel('agorg-import-panel', importBtn);
+  }
+  // Small delay to ensure panel is active before browser opens
+  setTimeout(() => {
+    browseAgorgMaster();
+  }, 50);
+}
+
 async function agorgOpenEditModal() {
   const snapshot = await hydrateScopeSnapshot();
   if (!snapshot || !snapshot.active) {
