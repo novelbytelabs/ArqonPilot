@@ -67,15 +67,76 @@ This is the standard operator launch command for local AGOrg/Branch/Dependencies
 
 6. Governance policy lifecycle (CLI)
 
+   - `pilot policy list --kind branch [--ago-path <abs-path>] [--limit 25]`
    - `pilot policy get --kind branch`
    - `pilot policy set-draft --kind branch --file <policy.json>`
    - `pilot policy preview --kind branch --version <n>`
    - `pilot policy approve --kind branch --version <n> --simulation-artifact <path>`
    - `pilot policy activate --kind branch --version <n>`
+   - `pilot policy delete --kind branch --version <n> [--ago-path <abs-path>]`
    - `pilot policy resolve --kind branch --repo-path <abs-path>`
    - `pilot policy scan --kind branch [--group <g>] [--tag <t>]`
    - `pilot policy exceptions list --kind branch`
    - `pilot policy decisions --kind branch --limit 100`
+
+## 2.1 Pilot-for-Pilot Enforced Routine (ArqonPilot Repo)
+
+This routine is now enforced by `./scripts/prepush_gate.sh` before toolchain/test checks.
+
+Policy intent:
+
+1. ArqonPilot pushes must originate from the correct repo boundary.
+2. Pilot UI scope must be active before push.
+3. Current repo (`ArqonPilot`) must be registered as an AGO in the active AGOrg.
+
+Enforcement point:
+
+1. `./scripts/pilot_discipline_gate.sh` (called as step `[0/4]` in `prepush_gate.sh`).
+
+Standard local routine:
+
+1. Start control plane:
+   - `cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations`
+2. In UI, select active AGOrg in header chip (`AGOrg: ...`).
+3. Confirm `ArqonPilot` appears as AGO under that AGOrg.
+4. Run:
+   - `./scripts/prepush_gate.sh`
+   - `./scripts/push_main.sh`
+
+Bypass controls (only for controlled emergencies):
+
+1. Disable discipline gate for one run:
+   - `PILOT_ENFORCE_AGORG_DISCIPLINE=0 ./scripts/prepush_gate.sh`
+2. CI lane automatically skips discipline gate (`CI=true` path).
+
+### Beginner Click-by-Click (No Assumptions)
+
+If you are new, do this exactly in order:
+
+1. Start UI:
+   - `cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations`
+2. Open `http://127.0.0.1:7788`.
+3. Click AGOrg chip (top-right), then confirm active scope is correct.
+4. Click `Multi` tab, then in `Register Repo` fill:
+   - Path: `/home/irbsurfer/Projects/arqon/ArqonPilot`
+   - Name: `ArqonPilot`
+   - Group: `core`
+   - Tags: `apply-pilot,operator`
+   - Click `Register`.
+   - Expected success includes `"execution_mode": "local_direct"`.
+5. Still in `Multi`, click `List` or `Status` and verify `ArqonPilot` appears.
+6. Go to `Dashboard`, click in order:
+   - `Policy` -> `Hook Policy` -> `Drift` -> `Gate`
+7. Run gate from terminal:
+   - `./scripts/prepush_gate.sh`
+
+If anything fails, use the full beginner tutorial:
+- `docs/pilot-for-pilot-tutorial.md`
+
+If `Register` still shows a generic timeout:
+- restart `pilot serve`,
+- hard refresh browser,
+- retry register.
 
 ## 3. Dashboard-First Operational Flow
 

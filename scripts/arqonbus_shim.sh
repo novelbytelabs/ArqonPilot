@@ -29,7 +29,7 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/arqonbus_shim.sh [start|stop|status|logs]
+Usage: ./scripts/arqonbus_shim.sh [start|stop|restart|status|logs]
 
 Starts a compatibility ArqonBus websocket server for Arqon Pilot Control Panel
 without modifying frozen ArqonBus source.
@@ -129,7 +129,7 @@ PY
 stop() {
   if ! is_running; then
     echo "[shim] not running"
-    rm -f "$PID_FILE"
+    rm -f "$PID_FILE" 2>/dev/null || true
     return 0
   fi
 
@@ -149,7 +149,7 @@ stop() {
     kill -9 "$pid" 2>/dev/null || true
   fi
 
-  rm -f "$PID_FILE"
+  rm -f "$PID_FILE" 2>/dev/null || true
   echo "[shim] stopped"
 }
 
@@ -172,10 +172,16 @@ logs() {
   tail -n 120 "$LOG_FILE"
 }
 
+restart() {
+  stop
+  start
+}
+
 cmd="${1:-start}"
 case "$cmd" in
   start) start ;;
   stop) stop ;;
+  restart) restart ;;
   status) status ;;
   logs) logs ;;
   -h|--help|help) usage ;;

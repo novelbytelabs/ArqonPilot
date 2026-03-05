@@ -74,6 +74,7 @@ const depDriftStatus = document.getElementById('dep-drift-status');
 const agorgRegistryList = document.getElementById('agorg-registry-list');
 const agorgActiveDetails = document.getElementById('agorg-active-details');
 const agorgActivityLog = document.getElementById('agorg-activity-log');
+const multiRegistryOut = document.getElementById('multi-registry-out');
 
 function logActivity(title, data) {
   if (!agorgActivityLog) return;
@@ -292,8 +293,10 @@ function activatePanel(tabName, opts = {}) {
     unifiedTimelineLoad();
   }
   if (tabName === 'settings') {
-    settingsLoadPolicy();
-    settingsLoadExceptions();
+    settingsRefreshTargetOptions().then(() => {
+      settingsReloadPolicyControls();
+      settingsLoadExceptions();
+    });
   }
   if (['oracle', 'heal', 'dependencies', 'multi'].includes(tabName)) {
     fetchJsonSafe('/api/agorg/active').then(res => {
@@ -316,6 +319,9 @@ function activatePanel(tabName, opts = {}) {
         }
       }
     });
+  }
+  if (tabName === 'multi') {
+    multiRefreshRegistry();
   }
   if (persist && !restoringUiSession) queueUiSessionSave();
 }
@@ -546,6 +552,11 @@ async function switchAgorgScope(id) {
   if (currentTab === 'branch') {
     await branchLoadMatrix();
   }
+  if (currentTab === 'settings') {
+    await settingsRefreshTargetOptions();
+    await settingsReloadPolicyControls();
+    await settingsLoadExceptions();
+  }
   queueUiSessionSave();
   p5ResetRailState(); // P5: clear orchestration rail state on scope switch
   document.getElementById('agorg-hero-dropdown').classList.remove('active');
@@ -649,6 +660,13 @@ function showInlineError(message, containerEl = null, nextSteps = null) {
   console.error('[Error]', message);
 }
 
+function clearInlineError(containerEl = null) {
+  const targetEl = containerEl || out;
+  if (!targetEl) return;
+  const existing = targetEl.querySelector('.error-message');
+  if (existing) existing.remove();
+}
+
 async function run(command, payload, opts = {}) {
   const label = opts.label || command;
   const chip = opts.chip || null;
@@ -666,7 +684,8 @@ async function run(command, payload, opts = {}) {
   }
   try {
     const ctl = new AbortController();
-    const timeoutId = setTimeout(() => ctl.abort(), 25000);
+    const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 90000;
+    const timeoutId = setTimeout(() => ctl.abort(), timeoutMs);
     const res = await fetch('/api/orchestrate/run', {
       method: 'POST',
       headers: {'content-type':'application/json'},
@@ -688,7 +707,7 @@ async function run(command, payload, opts = {}) {
     return data;
   } catch (err) {
     const msg = (err && err.name === 'AbortError')
-      ? 'Request timed out. Check ArqonBus bridge health and try again.'
+      ? 'Request timed out waiting for API response. If this is a control-plane command, check server logs for fallback/local execution details.'
       : (err && err.message ? err.message : String(err));
     const payloadErr = { ok: false, error: msg, command };
     const errorText = JSON.stringify(payloadErr, null, 2);
@@ -2604,6 +2623,11 @@ async function agorgUse() {
     if (currentTab === 'branch') {
       await branchLoadMatrix();
     }
+    if (currentTab === 'settings') {
+      await settingsRefreshTargetOptions();
+      await settingsReloadPolicyControls();
+      await settingsLoadExceptions();
+    }
     queueUiSessionSave();
   }
   p5ResetRailState(); // P5: clear orchestration rail state on scope switch
@@ -3394,16 +3418,69 @@ async function browseAgorgParent() {
   }
 }
 
-function multiRegister() {
-  run('pilot.multi.register', {
+async function browseRepoPath() {
+  const pathIn = document.getElementById('repo-path');
+  const nameIn = document.getElementById('repo-name');
+  const data = await pickDirectory(pathIn.value);
+  if (data && data.ok && data.path) {
+    pathIn.value = data.path;
+    if (!nameIn.value.trim()) {
+      const parts = data.path.split(/[/\\]/).filter(Boolean);
+      nameIn.value = parts[parts.length - 1] || 'NewRepo';
+    }
+  }
+}
+
+async function multiRegister() {
+  const outputEl = document.getElementById('multi-register-out');
+  const actionsEl = document.getElementById('multi-register-actions');
+  if (outputEl) outputEl.style.display = 'block';
+  if (actionsEl) actionsEl.style.display = 'flex';
+  const res = await run('pilot.multi.register', {
     path: document.getElementById('repo-path').value,
     name: document.getElementById('repo-name').value || null,
     group: document.getElementById('repo-group').value || null,
     tags: tags(document.getElementById('repo-tags').value)
-  });
+  }, { outputEl: outputEl });
+  if (res && res.ok) {
+    multiRefreshRegistry();
+  }
+}
+
+function copyMultiRegister() {
+  const outputEl = document.getElementById('multi-register-out');
+  if (outputEl && outputEl.textContent) {
+    navigator.clipboard.writeText(outputEl.textContent).then(() => {
+      msg('Copied to clipboard');
+    }).catch(err => {
+      console.error('Failed to copy: ', err);
+      msg('Copy failed');
+    });
+  }
+}
+
+function clearMultiRegister() {
+  const outputEl = document.getElementById('multi-register-out');
+  const actionsEl = document.getElementById('multi-register-actions');
+  if (outputEl) {
+    outputEl.textContent = '';
+    outputEl.style.display = 'none';
+  }
+  if (actionsEl) actionsEl.style.display = 'none';
 }
 function multiList() {
   run('pilot.multi.list', { group: document.getElementById('multi-group').value || null, tags: tags(document.getElementById('multi-tags').value) });
+}
+
+function multiRefreshRegistry() {
+  if (!multiRegistryOut) return;
+  run('pilot.multi.list', {
+    group: null,
+    tags: []
+  }, {
+    outputEl: multiRegistryOut,
+    mirrorDashboard: false
+  });
 }
 function multiStatus() {
   run('pilot.multi.status', { group: document.getElementById('multi-group').value || null, tags: tags(document.getElementById('multi-tags').value) });
@@ -4094,6 +4171,9 @@ let settingsActiveSimulationId = "";
 
 function settingsSetStatus(data, level = 'info') {
   if (!settingsStatusOut) return;
+  if (level !== 'error') {
+    clearInlineError(settingsStatusPanel);
+  }
   
   if (data && typeof data === 'object' && data.ok) {
      if (data.details && Array.isArray(data.details)) {
@@ -4187,16 +4267,176 @@ function settingsShowError(message, context = null) {
   logActivity('Settings Error', context || { error: message });
 }
 
+function isErrorResponse(res) {
+  return !res || res.ok === false || typeof res.error === 'string';
+}
+
+function settingsTargetValue() {
+  const el = document.getElementById('settings-policy-target');
+  return el ? (el.value || '').trim() : '';
+}
+
+async function settingsRefreshTargetOptions() {
+  const targetEl = document.getElementById('settings-policy-target');
+  if (!targetEl) return;
+  const prev = settingsTargetValue();
+  targetEl.innerHTML = '<option value="">AGOrg level (no AGO override)</option>';
+
+  const active = await fetchJsonSafe('/api/agorg/active');
+  if (!active.ok || !active.active || !active.active.id) {
+    return;
+  }
+
+  const matrix = await fetchJsonSafe('/api/branch/matrix', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({
+      group: null,
+      tags: [],
+      search: null,
+      base_branch: 'main',
+      target_branch: null
+    })
+  });
+  if (!matrix.ok || !Array.isArray(matrix.rows)) {
+    return;
+  }
+
+  const seen = new Set();
+  matrix.rows.forEach(row => {
+    const path = (row && row.path) ? String(row.path).trim() : '';
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    const label = row.repo ? `${row.repo} - ${path}` : path;
+    const opt = document.createElement('option');
+    opt.value = path;
+    opt.textContent = label;
+    targetEl.appendChild(opt);
+  });
+
+  if (prev && seen.has(prev)) {
+    targetEl.value = prev;
+  } else {
+    targetEl.value = '';
+  }
+}
+
+async function settingsReloadPolicyControls() {
+  await settingsLoadPolicy();
+  await settingsLoadPolicyVersions();
+}
+
+function settingsSelectedVersion() {
+  const list = document.getElementById('settings-policy-versions');
+  if (!list || !list.value) return null;
+  const parsed = Number.parseInt(list.value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function settingsLoadPolicyVersions() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const target = settingsTargetValue();
+  const list = document.getElementById('settings-policy-versions');
+  if (!list) return;
+  list.innerHTML = '<option>Loading...</option>';
+
+  let url = `/api/settings/policy/${kind}/versions?limit=50`;
+  if (target) url += `&ago_path=${encodeURIComponent(target)}`;
+  const res = await fetchJsonSafe(url);
+  if (isErrorResponse(res)) {
+    list.innerHTML = '';
+    settingsShowError('Failed to load policy versions: ' + (res.error || 'unknown error'), res);
+    return;
+  }
+  const items = Array.isArray(res.items) ? res.items : [];
+  if (!items.length) {
+    list.innerHTML = '<option value="">No saved versions yet</option>';
+    return;
+  }
+  list.innerHTML = '';
+  items.forEach(item => {
+    const opt = document.createElement('option');
+    opt.value = String(item.version);
+    const updatedBy = item.updated_by || 'unknown';
+    const status = item.status || 'unknown';
+    opt.textContent = `v${item.version} [${status}] by ${updatedBy}`;
+    list.appendChild(opt);
+  });
+  // Default to newest version to avoid ambiguous "no selection" flows.
+  if (list.options.length > 0) {
+    list.selectedIndex = 0;
+  }
+}
+
+async function settingsLoadSelectedPolicyVersion() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const version = settingsSelectedVersion();
+  const target = settingsTargetValue() || '';
+  if (version === null) {
+    const list = document.getElementById('settings-policy-versions');
+    if (list && list.options.length > 0) list.selectedIndex = 0;
+  }
+  const resolvedVersion = settingsSelectedVersion();
+  if (resolvedVersion === null) {
+    settingsShowError('Select a policy version first.');
+    return;
+  }
+  const res = await fetchJsonSafe(`/api/settings/policy/${kind}/load_version`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      ago_path: target === '' ? null : target,
+      version: resolvedVersion
+    })
+  });
+  if (isErrorResponse(res)) {
+    settingsShowError('Failed to load selected version: ' + (res.error || 'unknown error'), res);
+    return;
+  }
+  const editor = document.getElementById('settings-policy-editor');
+  editor.value = JSON.stringify(res.policy_json || {}, null, 2);
+  settingsSetStatus(`Loaded ${kind} v${resolvedVersion} into editor`, 'success');
+}
+
+async function settingsDeleteSelectedPolicyVersion() {
+  const kind = document.getElementById('settings-policy-kind').value || 'branch';
+  const version = settingsSelectedVersion();
+  const target = settingsTargetValue() || '';
+  const confirm = (document.getElementById('settings-policy-delete-confirm')?.value || '').trim();
+  if (version === null) {
+    settingsShowError('Select a policy version first.');
+    return;
+  }
+  const res = await fetchJsonSafe(`/api/settings/policy/${kind}/delete_version`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      ago_path: target === '' ? null : target,
+      version,
+      confirm
+    })
+  });
+  if (isErrorResponse(res)) {
+    settingsShowError('Failed to delete selected version: ' + (res.error || 'unknown error'), res);
+    return;
+  }
+  settingsSetStatus(`Deleted ${kind} v${version}`, 'success');
+  const confirmEl = document.getElementById('settings-policy-delete-confirm');
+  if (confirmEl) confirmEl.value = '';
+  await settingsReloadPolicyControls();
+}
+
 async function settingsLoadPolicy() {
   const kind = document.getElementById('settings-policy-kind').value || 'branch';
-  const target = document.getElementById('settings-policy-target').value.trim();
+  const target = settingsTargetValue();
   const editor = document.getElementById('settings-policy-editor');
+  settingsSetStatus(`Loading ${kind} policy...`, 'info');
   
   let url = `/api/settings/policy/${kind}`;
   if (target) url += `?ago_path=${encodeURIComponent(target)}`;
   
   const res = await fetchJsonSafe(url);
-  if (!res.ok) {
+  if (isErrorResponse(res)) {
     if (res.error === "Policy not found") {
        editor.value = "{\n  // No policy specific to this scope. Will fallback/inherit.\n}";
        settingsSetStatus("No policy found for this target. Editor is in fallback/inherit mode.", 'warn');
@@ -4205,15 +4445,22 @@ async function settingsLoadPolicy() {
     }
     return;
   }
+  if (!Object.prototype.hasOwnProperty.call(res, 'policy_json')) {
+    settingsShowError('Error loading policy: malformed response payload', res);
+    return;
+  }
   editor.value = JSON.stringify(res.policy_json, null, 2);
-  settingsSetStatus(res, 'success');
+  const source = res.source || 'Unknown';
+  const version = Object.prototype.hasOwnProperty.call(res, 'version') ? res.version : '?';
+  const status = res.status || 'unknown';
+  settingsSetStatus(`Loaded ${kind} policy (${source}) v${version} [${status}]`, 'success');
   logActivity('Loaded Policy', `Kind: ${kind}\nID: ${res.id}\nStatus: ${res.status}`);
   settingsActiveSimulationId = "";
 }
 
 async function settingsDraftPolicy() {
   const kind = document.getElementById('settings-policy-kind').value || 'branch';
-  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  const target = settingsTargetValue() || "";
   const editor = document.getElementById('settings-policy-editor');
   
   let policyJson;
@@ -4233,18 +4480,18 @@ async function settingsDraftPolicy() {
     })
   });
   
-  if (!res.ok) {
+  if (isErrorResponse(res)) {
     settingsShowError('Failed to save draft: ' + (res.error || 'unknown error'), res);
     return;
   }
   settingsSetStatus(res, 'success');
   settingsActiveSimulationId = "";
-  settingsLoadPolicy();
+  settingsReloadPolicyControls();
 }
 
 async function settingsSimulatePolicy() {
   const kind = document.getElementById('settings-policy-kind').value || 'branch';
-  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  const target = settingsTargetValue() || "";
   const editor = document.getElementById('settings-policy-editor');
   
   let policyJson;
@@ -4264,7 +4511,7 @@ async function settingsSimulatePolicy() {
     })
   });
   
-  if (!res.ok) {
+  if (isErrorResponse(res)) {
     logActivity('Simulation Failed', res.error);
     settingsShowError('Simulation failed: ' + (res.error || 'unknown error'), res);
     return;
@@ -4277,7 +4524,7 @@ async function settingsSimulatePolicy() {
 
 async function settingsActivatePolicy() {
   const kind = document.getElementById('settings-policy-kind').value || 'branch';
-  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  const target = settingsTargetValue() || "";
   
   if (!settingsActiveSimulationId) {
     settingsShowError("Must successfully simulate policy first!");
@@ -4293,19 +4540,19 @@ async function settingsActivatePolicy() {
     })
   });
 
-  if (!res.ok) {
+  if (isErrorResponse(res)) {
     settingsShowError('Activation failed: ' + (res.error || 'unknown error'), res);
     return;
   }
   
   settingsSetStatus(res, 'success');
   settingsActiveSimulationId = "";
-  settingsLoadPolicy();
+  settingsReloadPolicyControls();
 }
 
 async function settingsLoadExceptions() {
   const kind = document.getElementById('settings-policy-kind').value || 'branch';
-  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  const target = settingsTargetValue() || "";
   
   let url = `/api/settings/exceptions/${kind}`;
   if (target) url += `?ago_path=${encodeURIComponent(target)}`;
@@ -4313,21 +4560,23 @@ async function settingsLoadExceptions() {
   const res = await fetchJsonSafe(url);
   const list = document.getElementById('settings-exceptions-list');
   list.innerHTML = "";
-  if (!res.ok) {
-    if(!res.error) res.error = res;
-    settingsShowError('Failed to load exceptions', res);
+  if (isErrorResponse(res)) {
+    settingsShowError('Failed to load exceptions: ' + (res.error || 'unknown error'), res);
     return;
   }
   
-  if(Array.isArray(res)) {
-      res.forEach(exc => {
-          const opt = document.createElement("option");
-          opt.value = exc.id;
-          opt.textContent = `[${exc.rule_path}] by ${exc.owner} - ${exc.reason} (Expires: ${new Date(exc.expires_at).toLocaleString()})`;
-          list.appendChild(opt);
-      });
-      settingsSetStatus({ ok: true, loaded: res.length }, 'success');
+  const items = Array.isArray(res) ? res : (Array.isArray(res.exceptions) ? res.exceptions : null);
+  if (!items) {
+    settingsShowError('Failed to load exceptions: malformed response payload', res);
+    return;
   }
+  items.forEach(exc => {
+      const opt = document.createElement("option");
+      opt.value = exc.id;
+      opt.textContent = `[${exc.rule_path}] by ${exc.owner} - ${exc.reason} (Expires: ${new Date(exc.expires_at).toLocaleString()})`;
+      list.appendChild(opt);
+  });
+  settingsSetStatus({ ok: true, loaded: items.length }, 'success');
 }
 
 async function settingsDeleteException() {
@@ -4337,7 +4586,7 @@ async function settingsDeleteException() {
      return;
   }
   const res = await fetchJsonSafe(`/api/settings/exceptions/delete/${list.value}`, { method: 'POST' });
-  if(!res.ok) {
+  if(isErrorResponse(res)) {
       settingsShowError("Failed to delete: " + (res.error || 'unknown error'), res);
       return;
   }
@@ -4347,7 +4596,7 @@ async function settingsDeleteException() {
 
 async function settingsAddException() {
   const kind = document.getElementById('settings-policy-kind').value || 'branch';
-  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  const target = settingsTargetValue() || "";
   
   const rule = document.getElementById('settings-exc-rule').value.trim();
   const reason = document.getElementById('settings-exc-reason').value.trim();
@@ -4375,7 +4624,7 @@ async function settingsAddException() {
      })
   });
   
-  if(!res.ok) {
+  if(isErrorResponse(res)) {
      settingsShowError("Failed to add exception: " + (res.error || 'unknown error'), res);
      return;
   }
@@ -4389,7 +4638,7 @@ async function settingsAddException() {
 
 async function settingsComplianceScan() {
   const kind = document.getElementById('settings-policy-kind').value || 'branch';
-  const target = document.getElementById('settings-policy-target').value.trim() || "";
+  const target = settingsTargetValue() || "";
   
   settingsSetStatus("Running compliance scan...", "info");
   
@@ -4402,7 +4651,7 @@ async function settingsComplianceScan() {
      })
   });
   
-  if(!res.ok) {
+  if(isErrorResponse(res)) {
      settingsShowError("Scan failed: " + (res.error || 'unknown error'), res);
      return;
   }
@@ -4418,7 +4667,7 @@ async function settingsExploreDecisions() {
   
   const res = await fetchJsonSafe(`/api/settings/decisions?kind=${kind}&limit=${limit}`);
   
-  if(!res.ok) {
+  if(isErrorResponse(res)) {
      settingsShowError("Failed to fetch decisions: " + (res.error || 'unknown error'), res);
      return;
   }
@@ -4432,7 +4681,7 @@ async function settingsExploreDecisions() {
 
 async function settingsResolvePolicy() {
   const kind = document.getElementById('settings-policy-kind').value || 'branch';
-  const target = document.getElementById('settings-policy-target').value.trim();
+  const target = settingsTargetValue();
   
   if(!target) {
       settingsShowError("Target (repo path) is required to resolve policy");
@@ -4450,7 +4699,7 @@ async function settingsResolvePolicy() {
      })
   });
   
-  if(!res.ok) {
+  if(isErrorResponse(res)) {
      settingsShowError("Resolve failed: " + (res.error || 'unknown error'), res);
      return;
   }

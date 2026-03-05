@@ -61,6 +61,9 @@ Canonical full-control launch command (repo-local build, mutations enabled):
 cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
 ```
 
+Pilot-for-Pilot first-time setup (AGOrg scope + Multi registration + dashboard routine):
+- `docs/pilot-for-pilot-tutorial.md`
+
 If ArqonBus is frozen and its default module entrypoint is incompatible in your checkout,
 start the compatibility shim from this repo instead of editing ArqonBus:
 

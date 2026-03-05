@@ -87,6 +87,90 @@ Keep this file current whenever a new failure class appears.
 - Prevention:
   - Make `./scripts/repo_boundary_guard.sh` the first command in every new AI session.
 
+## G-045: Pre-push discipline gate blocks push after AGOrg/session drift
+
+- Signature:
+  - `[discipline] ERROR: Pilot UI API is unavailable on http://127.0.0.1:7788`
+  - `[discipline] ERROR: no active AGOrg scope selected`
+  - `[discipline] ERROR: current repo is not registered as an AGO under active AGOrg`
+- Cause:
+  - `scripts/prepush_gate.sh` now enforces `scripts/pilot_discipline_gate.sh` (step `[0/4]`) before compile/test checks.
+  - Active UI scope is unset, wrong, or missing `ArqonPilot` AGO registration.
+- Recovery:
+  1. Start Pilot UI on expected port:
+     - `cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations`
+  2. Select correct AGOrg in header chip (`AGOrg: ...`).
+  3. Ensure `ArqonPilot` is registered as AGO under that AGOrg.
+  4. Re-run:
+     - `./scripts/prepush_gate.sh`
+     - `./scripts/push_main.sh`
+- Controlled bypass:
+  - `PILOT_ENFORCE_AGORG_DISCIPLINE=0 ./scripts/prepush_gate.sh`
+
+## G-046: `pilot.multi.register` appears to succeed then times out in UI
+
+- Signature:
+  - UI first shows:
+    - `"status": "running", "command": "pilot.multi.register"`
+  - then falls back to:
+    - `"error": "Request timed out. Check ArqonBus bridge health and try again."`
+- Cause:
+  - A 25s frontend abort timer could fire before backend bus-recovery/fallback completed.
+  - `pilot.multi.*` commands are local control-plane operations and do not require waiting on the bus bridge path.
+- Recovery:
+  1. Use build containing the fix:
+     - `run()` timeout raised to 90s for command orchestration.
+     - `pilot.multi.*` routes execute via local direct path in `run_command`.
+  2. Restart Pilot UI process and hard-refresh browser.
+  3. Retry `Register Repo` in Multi tab.
+- Verification:
+  - Result should return `ok: true` with:
+    - `"execution_mode": "local_direct"`
+  - If it fails, error body should include a concrete command failure, not a generic bus timeout.
+
+## G-047: Mixed/stale Pilot UI instances cause misleading behavior
+
+- Signature:
+  - startup error:
+    - `Refusing mixed Pilot UI versions ... conflicts with current version ...`
+  - or UI behavior does not match latest code (old timeout message, missing dropdown updates).
+- Cause:
+  - multiple `pilot serve` instances running on different ports/builds, or browser serving stale JS bundle.
+- Recovery:
+  1. Stop old Pilot UI processes.
+  2. Start a single latest instance:
+     - `cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations`
+  3. Hard refresh browser.
+  4. Verify current behavior:
+     - Multi register success includes `execution_mode: "local_direct"`.
+     - Settings `Target AGO` appears as dropdown, not free-text input.
+
+## G-048: Local-direct command path fails on UI-injected scope metadata
+
+- Signature:
+  - `Local direct execution failed: Invalid pilot.multi.register payload: unknown field agorg_scope`
+- Cause:
+  - UI command guard injects `agorg_scope` for scope enforcement, but strict CLI payload schema for `pilot.multi.*` does not accept that field.
+- Recovery:
+  1. Use build where local execution sanitizes UI-only control fields before invoking CLI parser.
+ 2. Retry Multi register; expected result includes:
+     - `"execution_mode": "local_direct"`
+
+## G-049: Settings APIs return mixed JSON shapes (`ok` absent / arrays), causing false UI errors
+
+- Signature:
+  - Settings panel shows:
+    - `Error: Failed to load exceptions`
+  - even when backend returned valid exception list array.
+- Cause:
+  - `fetchJsonSafe` does not normalize HTTP status into `ok`.
+  - Some settings endpoints return object payloads without `ok`, others return bare arrays.
+  - UI code was treating anything without `ok: true` as failure.
+- Recovery:
+  1. Use build where settings handlers treat only `ok:false` or explicit `error` as failure.
+  2. Accept valid array payload for exceptions endpoint.
+  3. On malformed payload, surface explicit `malformed response payload` error.
+
 ## G-018: Widespread compilation failure after `evaluate_*_policy` signature changes
 
 - Signature:

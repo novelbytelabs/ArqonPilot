@@ -300,6 +300,47 @@ pilot serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --teleme
 echo "$ARQONBUS_AUTH_JWT" | wc -c
 ```
 
+## 3.2) Multi Register shows running then times out
+
+Symptoms:
+- Multi tab `Register Repo` first shows:
+  - `"status": "running", "command": "pilot.multi.register"`
+- then shows timeout JSON.
+
+Cause:
+- Older UI/backend instances can still use bus-wait execution path and short client timeout.
+
+Expected on fixed build:
+- successful register returns JSON containing:
+  - `"execution_mode": "local_direct"`
+
+Recovery:
+1. Restart Pilot UI from latest local source:
+
+```bash
+cd ~/Projects/arqon/ArqonPilot
+cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
+```
+
+2. Hard refresh browser.
+3. Retry `Multi -> Register Repo`.
+4. Verify with:
+
+```bash
+./scripts/pilot_local.sh multi list --group core --tag apply-pilot --report-json
+```
+
+## 3.3) Settings Target AGO field is empty or not selectable
+
+Expected behavior:
+- `Settings -> Governance Configuration -> Target AGO` is a dropdown auto-populated from active AGOrg in-scope repos.
+
+If empty:
+1. Confirm active AGOrg scope in header chip.
+2. Open Branch tab once (matrix bootstrap) and return to Settings.
+3. Ensure repos are registered/imported in-scope under active AGOrg.
+4. Switch AGOrg scope away and back to force refresh.
+
 If bus shows `DISCONNECTED` and nothing is listening on `9100`, start the local compatibility shim
 from ArqonPilot (no ArqonBus source changes required):
 
@@ -698,3 +739,35 @@ Fix:
 1. Confirm instance id in AGOrg header chip suffix (e.g. `(ui-7788)`).
 2. If you want shared state, start both windows with the same `--ui-instance-id`.
 3. If you want isolation, use distinct ids explicitly.
+
+## 2.6) Pre-push fails at `Pilot-for-Pilot discipline gate`
+
+Symptoms:
+- `ERROR: Pilot UI API is unavailable on http://127.0.0.1:7788`
+- `ERROR: no active AGOrg scope selected`
+- `ERROR: current repo is not registered as an AGO under active AGOrg`
+
+Cause:
+- `prepush_gate.sh` now enforces AGOrg discipline for ArqonPilot pushes.
+- The gate validates active scope + AGO membership using the local control-plane API.
+
+Fix:
+1. Start UI on the expected port:
+
+```bash
+cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
+```
+
+2. Select the correct AGOrg in header chip (`AGOrg: ...`).
+3. Confirm `ArqonPilot` is registered as AGO under the active AGOrg.
+4. Re-run:
+
+```bash
+./scripts/prepush_gate.sh
+```
+
+Emergency bypass (controlled use only):
+
+```bash
+PILOT_ENFORCE_AGORG_DISCIPLINE=0 ./scripts/prepush_gate.sh
+```

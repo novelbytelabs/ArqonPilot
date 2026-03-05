@@ -197,7 +197,7 @@ pub async fn run_bridge(cfg: &BusBridgeConfig) -> Result<()> {
         let auth = json!({
             "type": "command",
             "command": "authenticate",
-            "data": {"token": token},
+            "args": {"token": token},
             "room": cfg.room,
             "channel": cfg.channel,
         });
@@ -210,7 +210,7 @@ pub async fn run_bridge(cfg: &BusBridgeConfig) -> Result<()> {
     let join = json!({
         "type": "command",
         "command": "join_channel",
-        "data": {"channel_id": cfg.channel},
+        "args": {"channel_id": cfg.channel},
         "room": cfg.room,
         "channel": cfg.channel,
     });
@@ -220,10 +220,10 @@ pub async fn run_bridge(cfg: &BusBridgeConfig) -> Result<()> {
         .into_diagnostic()?;
 
     let ready = json!({
-        "type": "event",
-        "eventType": "pilot.bridge.ready",
+        "type": "telemetry",
         "payload": {
             "schema_version": CONTRACT_SCHEMA_VERSION,
+            "event_type": "pilot.bridge.ready",
             "room": cfg.room,
             "channel": cfg.channel,
             "telemetry_channel": cfg.telemetry_channel
@@ -308,11 +308,10 @@ pub async fn run_bridge(cfg: &BusBridgeConfig) -> Result<()> {
                 )
                 .await?;
                 json!({
-                    "type": "command_response",
-                    "command": command,
-                    "reply_to": request_id,
-                    "success": true,
-                    "data": report,
+                    "type": "response",
+                    "request_id": request_id,
+                    "status": "success",
+                    "payload": report,
                     "room": cfg.room,
                     "channel": cfg.channel,
                 })
@@ -335,10 +334,9 @@ pub async fn run_bridge(cfg: &BusBridgeConfig) -> Result<()> {
                 )
                 .await?;
                 json!({
-                    "type": "command_response",
-                    "command": command,
-                    "reply_to": request_id,
-                    "success": false,
+                    "type": "response",
+                    "request_id": request_id,
+                    "status": "error",
                     "error": err,
                     "room": cfg.room,
                     "channel": cfg.channel,
@@ -371,7 +369,7 @@ pub async fn send_command_once(
         let auth = json!({
             "type": "command",
             "command": "authenticate",
-            "data": {"token": token},
+            "args": {"token": token},
             "room": cfg.room,
             "channel": cfg.channel,
         });
@@ -386,7 +384,7 @@ pub async fn send_command_once(
         "id": request_id,
         "type": "command",
         "command": command,
-        "data": payload,
+        "args": payload,
         "room": cfg.room,
         "channel": cfg.channel,
     });
@@ -407,17 +405,9 @@ pub async fn send_command_once(
                 Err(_) => continue,
             };
 
-            if value.get("type").and_then(Value::as_str) != Some("command_response") {
-                continue;
+            if is_matching_command_response(&value, command, &request_id) {
+                return Ok(value);
             }
-            if value.get("command").and_then(Value::as_str) != Some(command) {
-                continue;
-            }
-            if value.get("reply_to").and_then(Value::as_str) != Some(request_id.as_str()) {
-                continue;
-            }
-
-            return Ok(value);
         }
 
         Err(miette::miette!(
@@ -435,6 +425,31 @@ pub async fn send_command_once(
     }
 }
 
+fn is_matching_command_response(value: &Value, command: &str, request_id: &str) -> bool {
+    let msg_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+    let id_matches = value.get("reply_to").and_then(Value::as_str) == Some(request_id)
+        || value.get("request_id").and_then(Value::as_str) == Some(request_id)
+        || value.get("id").and_then(Value::as_str) == Some(request_id);
+
+    if !id_matches {
+        return false;
+    }
+
+    // Newer ArqonBus responses may use `type=response` and omit `command`.
+    if msg_type == "response" {
+        return true;
+    }
+
+    if msg_type != "command_response" {
+        return false;
+    }
+
+    match value.get("command").and_then(Value::as_str) {
+        Some(cmd) => cmd == command,
+        None => true,
+    }
+}
+
 async fn emit_event(
     writer: &mut futures_util::stream::SplitSink<
         tokio_tungstenite::WebSocketStream<
@@ -447,10 +462,13 @@ async fn emit_event(
     event_type: &str,
     payload: &impl Serialize,
 ) -> Result<()> {
+    let payload_value = serde_json::to_value(payload).into_diagnostic()?;
     let msg = json!({
-        "type": "event",
-        "eventType": event_type,
-        "payload": payload,
+        "type": "telemetry",
+        "payload": {
+            "event_type": event_type,
+            "data": payload_value,
+        },
         "room": room,
         "channel": channel,
     });
@@ -472,6 +490,9 @@ fn extract_command_name(v: &Value) -> Option<String> {
 }
 
 fn extract_payload(v: &Value) -> Value {
+    if let Some(args) = v.get("args") {
+        return args.clone();
+    }
     if let Some(data) = v.get("data") {
         return data.clone();
     }
@@ -503,6 +524,10 @@ fn run_pilot_subcommand(command: &str, payload: Value) -> std::result::Result<Va
         .ok_or_else(|| "pilot report-json output missing".to_string())?;
 
     serde_json::from_str(json_line).map_err(|e| format!("Invalid report-json payload: {}", e))
+}
+
+pub fn run_pilot_subcommand_local(command: &str, payload: Value) -> Result<Value> {
+    run_pilot_subcommand(command, payload).map_err(|e| miette::miette!(e))
 }
 
 fn map_bus_command_to_args(
@@ -736,6 +761,49 @@ pub fn default_room() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_matches_legacy_command_response() {
+        let v = json!({
+            "type": "command_response",
+            "command": "pilot.multi.register",
+            "reply_to": "req-1"
+        });
+        assert!(is_matching_command_response(
+            &v,
+            "pilot.multi.register",
+            "req-1"
+        ));
+    }
+
+    #[test]
+    fn test_matches_new_response_shape() {
+        let v = json!({
+            "type": "response",
+            "request_id": "req-2",
+            "status": "success",
+            "payload": {"message":"ok"}
+        });
+        assert!(is_matching_command_response(
+            &v,
+            "pilot.multi.register",
+            "req-2"
+        ));
+    }
+
+    #[test]
+    fn test_rejects_mismatched_request() {
+        let v = json!({
+            "type": "response",
+            "request_id": "req-other",
+            "status": "success"
+        });
+        assert!(!is_matching_command_response(
+            &v,
+            "pilot.multi.register",
+            "req-3"
+        ));
+    }
 
     #[test]
     fn map_branch_create_defaults_to_dry_run() {

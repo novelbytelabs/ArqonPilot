@@ -105,6 +105,9 @@ cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel 
    - `Start Bus`
    - `Bus Status`
 5. Use `Dependencies` tab for drift diagnosis before push.
+6. Before push, run:
+   - `./scripts/prepush_gate.sh`
+   - this now enforces Pilot-for-Pilot AGOrg discipline (`scripts/pilot_discipline_gate.sh`).
 
 ## Documentation
 

@@ -76,6 +76,7 @@ nav:
       - Developer Guide: "developer-guide.md"
   - Tutorials:
       - AGOrg Interface: "tutorial/agorg-interface.md"
+      - Pilot for Pilot Tutorial: "pilot-for-pilot-tutorial.md"
   - FC Artifacts:
       - Context Verification: "fc1_artifacts/context_verification.md"
       - FC2 Hardclose: "fc1_artifacts/fc2_hardclose.md"

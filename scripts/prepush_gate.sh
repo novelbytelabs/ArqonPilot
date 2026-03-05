@@ -24,6 +24,13 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "[pre-push] log file: $LOG_FILE"
 
+if [[ "${CI:-}" != "true" && "${PILOT_ENFORCE_AGORG_DISCIPLINE:-1}" == "1" ]]; then
+  echo "[0/4] Pilot-for-Pilot discipline gate"
+  ./scripts/pilot_discipline_gate.sh
+else
+  echo "[0/4] Pilot-for-Pilot discipline gate (skipped; CI or disabled)"
+fi
+
 TRANSIENT_NET_PATTERN='Could not resolve host|Temporary failure in name resolution|error sending request for url|failed to download from|spurious network error|operation timed out|failed to query replaced source registry'
 
 print_dns_diag() {

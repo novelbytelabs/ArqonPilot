@@ -158,6 +158,67 @@ impl GovernanceStore {
         }
     }
 
+    pub async fn list_policy_versions(
+        &self,
+        agorg_id: Uuid,
+        ago_path: Option<&str>,
+        policy_kind: &str,
+        limit: usize,
+    ) -> Result<Vec<AgorgPolicyRecord>> {
+        let client = self.connect().await?;
+        let rows = client
+            .query(
+                "SELECT id, agorg_id, ago_path, policy_kind, version, policy_json, status, updated_at, updated_by
+                 FROM agorg_policies
+                 WHERE agorg_id = $1
+                   AND policy_kind = $2
+                   AND ago_path IS NOT DISTINCT FROM $3
+                 ORDER BY version DESC
+                 LIMIT $4",
+                &[&agorg_id, &policy_kind, &ago_path, &(limit as i64)],
+            )
+            .await
+            .into_diagnostic()?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push(AgorgPolicyRecord {
+                id: r.get(0),
+                agorg_id: r.get(1),
+                ago_path: r.get(2),
+                policy_kind: r.get(3),
+                version: r.get(4),
+                policy_json: r.get(5),
+                status: r.get(6),
+                updated_at: r.get(7),
+                updated_by: r.get(8),
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn delete_policy_version(
+        &self,
+        agorg_id: Uuid,
+        ago_path: Option<&str>,
+        policy_kind: &str,
+        version: i32,
+    ) -> Result<u64> {
+        let client = self.connect().await?;
+        let deleted = client
+            .execute(
+                "DELETE FROM agorg_policies
+                 WHERE agorg_id = $1
+                   AND policy_kind = $2
+                   AND ago_path IS NOT DISTINCT FROM $3
+                   AND version = $4",
+                &[&agorg_id, &policy_kind, &ago_path, &version],
+            )
+            .await
+            .into_diagnostic()?;
+        Ok(deleted)
+    }
+
     pub async fn update_policy_status(
         &self,
         policy_id: Uuid,

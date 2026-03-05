@@ -1,5 +1,5 @@
 use crate::agorg::{self, AgorgStore};
-use crate::bus::{send_command_once, BusBridgeConfig};
+use crate::bus::{run_pilot_subcommand_local, send_command_once, BusBridgeConfig};
 use crate::governance::{eval::*, model::*, store::GovernanceStore};
 use crate::service_supervisor::{supervised_start, RetryPolicy};
 use crate::shim_runtime::bus_shim_command;
@@ -11,7 +11,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
-use miette::{IntoDiagnostic, Result};
+use miette::{IntoDiagnostic, Result, WrapErr};
 use pilot_branch as branch;
 use pilot_multi as multi;
 use serde::{Deserialize, Serialize};
@@ -774,8 +774,16 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/evidence/verify", post(api_evidence_verify))
         .route("/api/settings/policy/:kind", get(api_settings_get_policy))
         .route(
+            "/api/settings/policy/:kind/versions",
+            get(api_settings_list_policy_versions),
+        )
+        .route(
             "/api/settings/policy/:kind/draft",
             post(api_settings_draft_policy),
+        )
+        .route(
+            "/api/settings/policy/:kind/load_version",
+            post(api_settings_load_policy_version),
         )
         .route(
             "/api/settings/policy/:kind/simulate",
@@ -784,6 +792,10 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route(
             "/api/settings/policy/:kind/activate",
             post(api_settings_activate_policy),
+        )
+        .route(
+            "/api/settings/policy/:kind/delete_version",
+            post(api_settings_delete_policy_version),
         )
         .route(
             "/api/settings/exceptions/:kind",
@@ -1084,22 +1096,155 @@ async fn run_command(
         return error_response(StatusCode::BAD_REQUEST, &err);
     }
 
-    match send_command_once_with_retry(&state.bus, &req.command, req.payload, 3).await {
+    let command = req.command.clone();
+    let payload = req.payload.clone();
+    let local_payload = sanitize_payload_for_local_exec(payload.clone());
+    if should_prefer_local_command(&command) {
+        match run_pilot_subcommand_local(&command, local_payload.clone()) {
+            Ok(local_response) => {
+                let wrapped = json!({
+                    "ok": true,
+                    "execution_mode": "local_direct",
+                    "response": local_response
+                });
+                let _ = state.events.send(json!({
+                    "source": "ui_command",
+                    "command": command,
+                    "execution_mode": "local_direct",
+                    "response": wrapped,
+                }));
+                return Json(UiCommandResponse {
+                    ok: true,
+                    response: wrapped,
+                })
+                .into_response();
+            }
+            Err(err) => {
+                let msg = format!("Local direct execution failed: {}", err);
+                let _ = state.events.send(json!({
+                    "source": "ui_command",
+                    "command": command,
+                    "error": msg,
+                }));
+                return error_response(StatusCode::BAD_GATEWAY, &msg);
+            }
+        }
+    }
+
+    match send_command_with_bus_recovery(&state, &command, payload.clone()).await {
         Ok(response) => {
             let _ = state.events.send(json!({
                 "source": "ui_command",
-                "command": req.command,
+                "command": command,
                 "response": response,
             }));
             Json(UiCommandResponse { ok: true, response }).into_response()
         }
         Err(err) => {
+            let err_msg = err.to_string();
+            if should_use_local_command_fallback(&err_msg) {
+                match run_pilot_subcommand_local(&command, local_payload) {
+                    Ok(local_response) => {
+                        let wrapped = json!({
+                            "ok": true,
+                            "fallback_mode": "local_command",
+                            "fallback_reason": err_msg,
+                            "response": local_response
+                        });
+                        let _ = state.events.send(json!({
+                            "source": "ui_command",
+                            "command": command,
+                            "fallback": "local_command",
+                            "response": wrapped,
+                        }));
+                        return Json(UiCommandResponse {
+                            ok: true,
+                            response: wrapped,
+                        })
+                        .into_response();
+                    }
+                    Err(local_err) => {
+                        let combined = format!(
+                            "Bus path failed: {} | Local fallback failed: {}",
+                            err_msg, local_err
+                        );
+                        let _ = state.events.send(json!({
+                            "source": "ui_command",
+                            "command": command,
+                            "error": combined,
+                        }));
+                        return error_response(StatusCode::BAD_GATEWAY, &combined);
+                    }
+                }
+            }
             let _ = state.events.send(json!({
                 "source": "ui_command",
-                "command": req.command,
-                "error": err.to_string(),
+                "command": command,
+                "error": err_msg,
             }));
-            error_response(StatusCode::BAD_GATEWAY, &err.to_string())
+            error_response(StatusCode::BAD_GATEWAY, &err_msg)
+        }
+    }
+}
+
+fn is_bus_recoverable_error(message: &str) -> bool {
+    let msg = message.to_ascii_lowercase();
+    msg.contains("connection refused")
+        || msg.contains("timed out")
+        || msg.contains("reset without closing handshake")
+        || msg.contains("websocket protocol error")
+}
+
+fn should_use_local_command_fallback(message: &str) -> bool {
+    let msg = message.to_ascii_lowercase();
+    msg.contains("timed out")
+        || msg.contains("connection refused")
+        || msg.contains("auto-starting arqonbus shim")
+        || msg.contains("bus connect failed")
+}
+
+fn should_prefer_local_command(command: &str) -> bool {
+    command.starts_with("pilot.multi.")
+}
+
+fn sanitize_payload_for_local_exec(mut payload: Value) -> Value {
+    if let Some(map) = payload.as_object_mut() {
+        // UI-injected scope metadata is for server-side guards and not part of CLI schemas.
+        map.remove("agorg_scope");
+    }
+    payload
+}
+
+async fn send_command_with_bus_recovery(
+    state: &UiState,
+    command: &str,
+    payload: Value,
+) -> Result<Value> {
+    // Keep this fast so UI can surface deterministic fallback within client timeout.
+    match send_command_once_with_retry(&state.bus, command, payload.clone(), 1).await {
+        Ok(response) => Ok(response),
+        Err(initial_err) => {
+            let initial_msg = initial_err.to_string();
+            if !is_bus_recoverable_error(&initial_msg) {
+                return Err(initial_err);
+            }
+
+            let (code, out, err) = run_local_script(&bus_shim_command("start"))
+                .await
+                .into_diagnostic()
+                .wrap_err("Failed to auto-start ArqonBus shim after bridge error")?;
+            if code != 0 {
+                let detail = if !err.trim().is_empty() { err } else { out };
+                return Err(miette::miette!(
+                    "Bus auto-start failed after bridge error: {}",
+                    detail.trim()
+                ));
+            }
+
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            send_command_once_with_retry(&state.bus, command, payload, 1)
+                .await
+                .wrap_err("Command failed after auto-starting ArqonBus shim")
         }
     }
 }
@@ -4696,10 +4841,11 @@ mod tests {
         classify_db_health, command_request_from_orchestrate_payload, command_requires_cwd_scope,
         command_requires_multi_selector, command_requires_mutation, command_scope_required,
         dependency_action_requires_cwd_scope, dependency_action_scope_required,
-        filter_prune_paths_by_class, is_safe_cli_token, load_persisted_codex_contracts,
-        normalize_orchestrate_payload, orchestrate_is_preview, parse_json_from_mixed_output,
-        payload_has_multi_selector, preflight_steps_from_action, prune_expired_branch_previews,
-        resolve_branch_targets, scope_filter_rows, sorted_unique_ids, sorted_unique_tags,
+        filter_prune_paths_by_class, is_bus_recoverable_error, is_safe_cli_token,
+        load_persisted_codex_contracts, normalize_orchestrate_payload, orchestrate_is_preview,
+        parse_json_from_mixed_output, payload_has_multi_selector, preflight_steps_from_action,
+        prune_expired_branch_previews, resolve_branch_targets, scope_filter_rows,
+        default_policy_json_for_kind, sanitize_payload_for_local_exec, should_prefer_local_command, should_use_local_command_fallback, sorted_unique_ids, sorted_unique_tags,
         with_event_agorg_scope, BranchMatrixRow, BranchPreviewRecord, BranchRunRequest,
         CodexContractRecord,
     };
@@ -4883,6 +5029,68 @@ mod tests {
         assert!(!running);
         assert_eq!(state, "UNAVAILABLE");
         assert!(note.contains("spawn failed"));
+    }
+
+    #[test]
+    fn test_is_bus_recoverable_error() {
+        assert!(is_bus_recoverable_error(
+            "Bus connect failed ws://127.0.0.1:9100: IO error: Connection refused (os error 111)"
+        ));
+        assert!(is_bus_recoverable_error(
+            "WebSocket protocol error: Connection reset without closing handshake"
+        ));
+        assert!(is_bus_recoverable_error("request timed out"));
+        assert!(!is_bus_recoverable_error("command not in ui allowlist"));
+    }
+
+    #[test]
+    fn test_should_use_local_command_fallback() {
+        assert!(should_use_local_command_fallback(
+            "Timed out waiting for command response for pilot.multi.register"
+        ));
+        assert!(should_use_local_command_fallback(
+            "Bus connect failed ws://127.0.0.1:9100"
+        ));
+        assert!(!should_use_local_command_fallback(
+            "command not in ui allowlist"
+        ));
+    }
+
+    #[test]
+    fn test_should_prefer_local_command() {
+        assert!(should_prefer_local_command("pilot.multi.register"));
+        assert!(should_prefer_local_command("pilot.multi.status"));
+        assert!(!should_prefer_local_command("pilot.oracle.scan"));
+        assert!(!should_prefer_local_command("pilot.heal.run"));
+    }
+
+    #[test]
+    fn test_sanitize_payload_for_local_exec_removes_agorg_scope() {
+        let input = json!({
+            "schema_version": 1,
+            "path": "/tmp/repo",
+            "name": "Repo",
+            "group": "core",
+            "tags": ["apply-pilot"],
+            "agorg_scope": {
+                "id": "abc",
+                "name": "Arqon"
+            }
+        });
+        let out = sanitize_payload_for_local_exec(input);
+        assert!(out.get("agorg_scope").is_none());
+        assert_eq!(out.get("path").and_then(Value::as_str), Some("/tmp/repo"));
+        assert_eq!(out.get("name").and_then(Value::as_str), Some("Repo"));
+    }
+
+    #[test]
+    fn test_default_policy_json_for_operator_routine_kind() {
+        let v = default_policy_json_for_kind("operator_routine").unwrap();
+        let obj = v
+            .as_object()
+            .expect("operator_routine default policy should be a JSON object");
+        assert!(!obj.is_empty());
+        assert!(default_policy_json_for_kind("not-a-kind").is_err());
     }
 
     #[test]
@@ -6194,7 +6402,7 @@ async fn consume_bus_telemetry(bus: &BusBridgeConfig, tx: &broadcast::Sender<Val
         let auth = json!({
             "type": "command",
             "command": "authenticate",
-            "data": {"token": token},
+            "args": {"token": token},
             "room": bus.room,
             "channel": bus.telemetry_channel,
         });
@@ -6207,7 +6415,7 @@ async fn consume_bus_telemetry(bus: &BusBridgeConfig, tx: &broadcast::Sender<Val
     let join = json!({
         "type": "command",
         "command": "join_channel",
-        "data": {"channel_id": bus.telemetry_channel},
+        "args": {"channel_id": bus.telemetry_channel},
         "room": bus.room,
         "channel": bus.telemetry_channel,
     });
@@ -6233,6 +6441,12 @@ async fn consume_bus_telemetry(bus: &BusBridgeConfig, tx: &broadcast::Sender<Val
             .unwrap_or(false)
             || parsed
                 .get("eventType")
+                .and_then(Value::as_str)
+                .map(|e| e.starts_with("pilot."))
+                .unwrap_or(false)
+            || parsed
+                .get("payload")
+                .and_then(|p| p.get("event_type"))
                 .and_then(Value::as_str)
                 .map(|e| e.starts_with("pilot."))
                 .unwrap_or(false);
@@ -6798,6 +7012,43 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .agorg-reg-item.active-node {
       background: rgba(106, 125, 255, 0.15) !important;
       border-left: 3px solid #6a7dff !important;
+    }
+
+    /* ═══════════ Form Layout ═══════════ */
+    .form-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 2px;
+    }
+    .form-label {
+      width: 60px;
+      min-width: 60px;
+      font-size: 0.72rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .form-content {
+      flex: 1;
+      display: flex;
+      gap: 8px;
+    }
+    .term-out {
+      margin-top: 12px;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: #b8c8ef;
+      white-space: pre-wrap;
+      word-break: break-all;
+      min-height: 100px;
+      max-height: 300px;
+      overflow-y: auto;
     }
     .agorg-reg-item.active-node .agorg-icon {
       filter: drop-shadow(0 0 5px #6a7dff);
@@ -8071,20 +8322,66 @@ Recommended flow:
       <div class="card">
         <h3>Register Repo</h3>
         <div class="helper">Register each repository once, then target groups/tags for all multi-repo operations below.</div>
-        <input id="repo-path" placeholder="/path/to/repo" />
-        <input id="repo-name" placeholder="ArqonContinuum" />
-        <input id="repo-group" placeholder="core" />
-        <input id="repo-tags" placeholder="apply-pilot,wave7" />
+        
+        <div class="form-row">
+          <div class="form-label">Path</div>
+          <div class="form-content">
+            <input id="repo-path" placeholder="/path/to/repo" />
+            <button class="btn secondary" style="padding: 9px 12px;" onclick="browseRepoPath()">Browse</button>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label">Name</div>
+          <div class="form-content">
+            <input id="repo-name" placeholder="ArqonContinuum" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label">Group</div>
+          <div class="form-content">
+            <input id="repo-group" placeholder="core" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label">Tags</div>
+          <div class="form-content">
+            <input id="repo-tags" placeholder="apply-pilot,wave7" />
+          </div>
+        </div>
+
         <button class="btn" onclick="multiRegister()">Register</button>
+        <div id="multi-register-actions" class="row" style="margin-top: 12px; display: none; justify-content: flex-end;">
+          <button class="btn secondary" style="padding: 4px 8px; font-size: 0.65rem;" onclick="copyMultiRegister()">Copy</button>
+          <button class="btn secondary" style="padding: 4px 8px; font-size: 0.65rem;" onclick="clearMultiRegister()">Clear</button>
+        </div>
+        <pre id="multi-register-out" class="term-out" style="display:none;"></pre>
       </div>
       <div class="card">
         <h3>List / Status / Order / DAG / PR Plan</h3>
         <div class="helper" id="multi-list-helper">Run in this order when uncertain: `List` -> `Status` -> `Order` -> `DAG` -> `PR Plan`.</div>
+        <div class="helper">Registry snapshot auto-loads when this tab opens and after successful Register.</div>
+        <pre id="multi-registry-out" class="term-out" style="margin-bottom:12px;">Loading registry...</pre>
         <div class="chip-row">
           <span id="multi-dag-chip" class="chip neutral" tabindex="0" role="status">DAG: idle</span>
         </div>
-        <input id="multi-group" placeholder="core" />
-        <input id="multi-tags" placeholder="apply-pilot,wave7" />
+
+        <div class="form-row">
+          <div class="form-label">Group</div>
+          <div class="form-content">
+            <input id="multi-group" placeholder="core" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label">Tags</div>
+          <div class="form-content">
+            <input id="multi-tags" placeholder="apply-pilot,wave7" />
+          </div>
+        </div>
+
         <div class="row">
           <button class="btn secondary" onclick="multiList()" aria-describedby="multi-list-helper">List</button>
           <button class="btn secondary" onclick="multiStatus()">Status</button>
@@ -8099,17 +8396,42 @@ Recommended flow:
         <div class="chip-row">
           <span id="multi-apply-chip" class="chip neutral" tabindex="0" role="status">Staged Apply: idle</span>
         </div>
-        <input id="multi-apply-branch" placeholder="feat/pilot-wave13" value="feat/pilot-wave13" />
-        <input id="multi-apply-base" placeholder="dev" value="dev" />
-        <input id="multi-apply-pr-base" placeholder="main" value="main" />
-        <input id="multi-apply-stage-size" placeholder="2" value="2" />
-        <label style="font-size:0.82rem;color:#a8b9e3;">
-          <input id="multi-apply-continue" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
-          Continue on failure
-        </label>
+
+        <div class="form-row">
+          <div class="form-label">Branch</div>
+          <div class="form-content">
+            <input id="multi-apply-branch" placeholder="feat/pilot-wave13" value="feat/pilot-wave13" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label">Base</div>
+          <div class="form-content">
+            <input id="multi-apply-base" placeholder="dev" value="dev" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label">PR Base</div>
+          <div class="form-content">
+            <input id="multi-apply-pr-base" placeholder="main" value="main" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label">Size</div>
+          <div class="form-content" style="display:flex; align-items:center; gap:12px;">
+            <input id="multi-apply-stage-size" placeholder="2" value="2" style="width: 80px;" />
+            <label style="font-size:0.82rem;color:#a8b9e3; display:flex; align-items:center; gap:6px; cursor:pointer; white-space:nowrap;">
+              <input id="multi-apply-continue" type="checkbox" style="width:auto;margin:0;" />
+              Continue on failure
+            </label>
+          </div>
+        </div>
+
         <div class="row">
-          <button id="multi-apply-dry-btn" class="btn secondary" onclick="multiApplyDryRun()">Staged Apply (Dry Run)</button>
-          <button id="multi-apply-exec-btn" class="btn" onclick="multiApplyExecute()">Staged Apply (Execute)</button>
+          <button class="btn secondary" onclick="multiApplyDryRun()">Staged Apply (Dry Run)</button>
+          <button class="btn" onclick="multiApplyExecute()">Staged Apply (Execute)</button>
         </div>
       </div>
     </div>
@@ -8387,7 +8709,7 @@ Recommended flow:
         <p class="helper">Use this section to view inherited policies, manage overrides, and establish exceptions.</p>
         
         <label class="field-label" for="settings-policy-kind">Select Policy Type</label>
-        <select id="settings-policy-kind" onchange="settingsLoadPolicy()">
+        <select id="settings-policy-kind" onchange="settingsReloadPolicyControls()">
           <option value="branch" selected>Branch Rules</option>
           <option value="dependency">Dependency & Lockfiles</option>
           <option value="release">Release Structure</option>
@@ -8397,8 +8719,10 @@ Recommended flow:
           <option value="operator_routine">Operator Routine</option>
         </select>
 
-        <label class="field-label" for="settings-policy-target">Target AGO (Leave blank for AGOrg level)</label>
-        <input id="settings-policy-target" type="text" placeholder="e.g. core/engine" onchange="settingsLoadPolicy()"/>
+        <label class="field-label" for="settings-policy-target">Target AGO (auto-populated from active AGOrg scope)</label>
+        <select id="settings-policy-target" onchange="settingsReloadPolicyControls()">
+          <option value="">AGOrg level (no AGO override)</option>
+        </select>
 
         <div class="row">
            <button class="btn secondary" onclick="settingsLoadPolicy()">Refresh Active Policy</button>
@@ -8417,6 +8741,19 @@ Recommended flow:
 
         <label class="field-label" for="settings-policy-editor">Policy JSON (Draft / Active)</label>
         <textarea id="settings-policy-editor" placeholder="JSON policy definition" style="min-height:200px;"></textarea>
+        
+        <hr style="border-color:var(--border);margin:16px 0;" />
+        <h4>Policy Versions (Precision CRUD)</h4>
+        <p class="helper">Create/update with <code>Save Draft</code>. Read exact versions. Delete a specific version only after typing <code>DELETE</code>.</p>
+        <div class="row">
+          <button class="btn secondary" onclick="settingsLoadPolicyVersions()">Refresh Versions</button>
+          <button class="btn secondary" onclick="settingsLoadSelectedPolicyVersion()">Load Selected Version</button>
+        </div>
+        <select id="settings-policy-versions" size="6" style="height:auto; min-height:120px;"></select>
+        <div class="grid" style="grid-template-columns: 1fr auto; gap: 8px; margin-top: 10px;">
+          <input id="settings-policy-delete-confirm" placeholder="Type DELETE to enable deletion" />
+          <button class="btn action-btn" onclick="settingsDeleteSelectedPolicyVersion()" style="color:var(--rose);border-color:var(--rose)">Delete Selected Version</button>
+        </div>
       </div>
 
       <div class="card">
@@ -8622,8 +8959,42 @@ struct ActivatePolicyRequest {
     simulation_evidence_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct PolicyVersionsQuery {
+    ago_path: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LoadPolicyVersionRequest {
+    ago_path: Option<String>,
+    version: i32,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeletePolicyVersionRequest {
+    ago_path: Option<String>,
+    version: i32,
+    confirm: String,
+}
+
 fn normalize_scope_path(opt: Option<&str>) -> String {
     opt.unwrap_or("__agorg__").trim().to_string()
+}
+
+fn default_policy_json_for_kind(kind: &str) -> std::result::Result<Value, String> {
+    let value = match kind {
+        "branch" => serde_json::to_value(BranchPolicy::default()),
+        "dependency" => serde_json::to_value(DependencyPolicy::default()),
+        "release" => serde_json::to_value(ReleasePolicy::default()),
+        "security" => serde_json::to_value(SecurityPolicy::default()),
+        "quality" => serde_json::to_value(QualityPolicy::default()),
+        "runtime" => serde_json::to_value(RuntimePolicy::default()),
+        "operator_routine" => serde_json::to_value(OperatorRoutinePolicy::default()),
+        _ => return Err(format!("Unsupported policy kind '{}'", kind)),
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(value)
 }
 
 async fn api_settings_get_policy(
@@ -8639,34 +9010,224 @@ async fn api_settings_get_policy(
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    let ago_path = query.get("ago_path");
+    let ago_path = query.get("ago_path").map(|s| s.trim()).filter(|s| !s.is_empty());
     let gov_store = GovernanceStore::new(state.agorg_store.dsn());
-
-    let policy_res = if let Some(path) = ago_path {
-        gov_store
-            .get_ago_policy_override(active_scope.id, path, &params.kind)
+    if let Some(path) = ago_path {
+        match gov_store
+            .get_effective_policy_record(active_scope.id, path, &params.kind)
             .await
-    } else {
-        gov_store.get_policy(active_scope.id, &params.kind).await
-    };
+        {
+            Ok(Some((record, source_name))) => {
+                let hash = compute_policy_hash(&record.policy_json);
+                return Json(json!({
+                    "id": record.id.to_string(),
+                    "agorg_id": record.agorg_id.to_string(),
+                    "ago_path": record.ago_path,
+                    "version": record.version,
+                    "status": record.status,
+                    "policy_json": record.policy_json,
+                    "hash": hash,
+                    "source": source_name,
+                    "is_override": record.ago_path.is_some()
+                }))
+                .into_response();
+            }
+            Ok(None) => match default_policy_json_for_kind(&params.kind) {
+                Ok(policy_json) => {
+                    let hash = compute_policy_hash(&policy_json);
+                    return Json(json!({
+                        "id": format!("default:{}", params.kind),
+                        "agorg_id": active_scope.id.to_string(),
+                        "ago_path": path,
+                        "version": 0,
+                        "status": "default",
+                        "policy_json": policy_json,
+                        "hash": hash,
+                        "source": "Default",
+                        "is_override": false
+                    }))
+                    .into_response();
+                }
+                Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
+            },
+            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    }
 
-    match policy_res {
+    match gov_store.get_policy(active_scope.id, &params.kind).await {
         Ok(Some(record)) => {
             let hash = compute_policy_hash(&record.policy_json);
-            let resp = PolicyResponse {
-                id: record.id.to_string(),
-                agorg_id: record.agorg_id.to_string(),
-                ago_path: record.ago_path,
-                version: record.version,
-                status: record.status,
-                policy_json: record.policy_json,
-                hash,
-            };
-            Json(resp).into_response()
+            Json(json!({
+                "id": record.id.to_string(),
+                "agorg_id": record.agorg_id.to_string(),
+                "ago_path": record.ago_path,
+                "version": record.version,
+                "status": record.status,
+                "policy_json": record.policy_json,
+                "hash": hash,
+                "source": "AGOrg",
+                "is_override": false
+            }))
+            .into_response()
         }
-        Ok(None) => error_response(StatusCode::NOT_FOUND, "Policy not found"),
+        Ok(None) => match default_policy_json_for_kind(&params.kind) {
+            Ok(policy_json) => {
+                let hash = compute_policy_hash(&policy_json);
+                Json(json!({
+                    "id": format!("default:{}", params.kind),
+                    "agorg_id": active_scope.id.to_string(),
+                    "ago_path": Value::Null,
+                    "version": 0,
+                    "status": "default",
+                    "policy_json": policy_json,
+                    "hash": hash,
+                    "source": "Default",
+                    "is_override": false
+                }))
+                .into_response()
+            }
+            Err(err) => error_response(StatusCode::BAD_REQUEST, &err),
+        },
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
+}
+
+async fn api_settings_list_policy_versions(
+    State(state): State<Arc<UiState>>,
+    axum::extract::Path(params): axum::extract::Path<PolicyPathParams>,
+    Query(query): Query<PolicyVersionsQuery>,
+) -> Response {
+    let active_scope = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return error_response(StatusCode::PRECONDITION_FAILED, "No active AGOrg scope")
+        }
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let limit = query.limit.unwrap_or(25).clamp(1, 100);
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    match gov_store
+        .list_policy_versions(
+            active_scope.id,
+            query.ago_path.as_deref(),
+            &params.kind,
+            limit,
+        )
+        .await
+    {
+        Ok(rows) => Json(json!({
+            "ok": true,
+            "kind": params.kind,
+            "ago_path": query.ago_path,
+            "count": rows.len(),
+            "items": rows.iter().map(|r| json!({
+                "id": r.id.to_string(),
+                "version": r.version,
+                "status": r.status,
+                "updated_at": r.updated_at,
+                "updated_by": r.updated_by
+            })).collect::<Vec<_>>()
+        }))
+        .into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn api_settings_load_policy_version(
+    State(state): State<Arc<UiState>>,
+    axum::extract::Path(params): axum::extract::Path<PolicyPathParams>,
+    Json(req): Json<LoadPolicyVersionRequest>,
+) -> Response {
+    let active_scope = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return error_response(StatusCode::PRECONDITION_FAILED, "No active AGOrg scope")
+        }
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    match gov_store
+        .get_policy_by_version(
+            active_scope.id,
+            req.ago_path.as_deref(),
+            &params.kind,
+            req.version,
+        )
+        .await
+    {
+        Ok(Some(record)) => {
+            let hash = compute_policy_hash(&record.policy_json);
+            Json(json!({
+                "id": record.id.to_string(),
+                "agorg_id": record.agorg_id.to_string(),
+                "ago_path": record.ago_path,
+                "version": record.version,
+                "status": record.status,
+                "policy_json": record.policy_json,
+                "hash": hash,
+                "source": if req.ago_path.is_some() { "AGO Override" } else { "AGOrg" },
+                "is_override": req.ago_path.is_some()
+            }))
+            .into_response()
+        }
+        Ok(None) => error_response(StatusCode::NOT_FOUND, "Policy version not found"),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn api_settings_delete_policy_version(
+    State(state): State<Arc<UiState>>,
+    axum::extract::Path(params): axum::extract::Path<PolicyPathParams>,
+    Json(req): Json<DeletePolicyVersionRequest>,
+) -> Response {
+    if !state.allow_mutations {
+        return error_response(StatusCode::FORBIDDEN, "Mutations are disabled");
+    }
+    if req.confirm.trim() != "DELETE" {
+        return error_response(
+            StatusCode::PRECONDITION_FAILED,
+            "Deletion blocked: type DELETE to confirm",
+        );
+    }
+
+    let active_scope = match state.agorg_store.get_active_agorg().await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return error_response(StatusCode::PRECONDITION_FAILED, "No active AGOrg scope")
+        }
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    let deleted = match gov_store
+        .delete_policy_version(
+            active_scope.id,
+            req.ago_path.as_deref(),
+            &params.kind,
+            req.version,
+        )
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if deleted == 0 {
+        return error_response(StatusCode::NOT_FOUND, "Policy version not found");
+    }
+    let _ = state.events.send(json!({
+        "source": "governance",
+        "action": "delete_policy_version",
+        "policy_kind": params.kind,
+        "ago_path": req.ago_path,
+        "version": req.version
+    }));
+    Json(json!({
+        "ok": true,
+        "kind": params.kind,
+        "ago_path": req.ago_path,
+        "version": req.version,
+        "deleted": deleted
+    }))
+    .into_response()
 }
 
 async fn api_settings_draft_policy(

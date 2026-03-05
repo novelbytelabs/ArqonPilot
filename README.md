@@ -62,6 +62,28 @@ Canonical full-control UI start command:
 cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations
 ```
 
+## Pilot for Pilot (Beginner Walkthrough)
+
+If you are using Arqon Pilot to manage Arqon Pilot itself, use this order:
+
+1. Start UI:
+   - `cargo run -p pilot -- serve --ws-url ws://127.0.0.1:9100 --room pilot --channel control --telemetry-channel telemetry --ui-port 7788 --ui-allow-mutations`
+2. Open `http://127.0.0.1:7788`.
+3. Click AGOrg chip in header and make sure scope is active.
+4. Go to `Multi` tab -> `Register Repo` and enter:
+   - Path: `/home/irbsurfer/Projects/arqon/ArqonPilot`
+   - Name: `ArqonPilot`
+   - Group: `core`
+   - Tags: `apply-pilot,operator`
+   - Click `Register`, then click `List` or `Status` and confirm ArqonPilot is present.
+5. Go to `Dashboard` and click:
+   - `Policy`, `Hook Policy`, `Drift`, `Gate`
+6. Run terminal gate:
+   - `./scripts/prepush_gate.sh`
+
+Full click-by-click tutorial:
+- `docs/pilot-for-pilot-tutorial.md`
+
 ## Critical Linux/Conda Runtime Step
 
 If you installed `arqon-pilot` via PyPI inside conda and see:

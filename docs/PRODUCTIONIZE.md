@@ -906,16 +906,18 @@ Use this checklist each session before declaring progress:
 4. Use `./scripts/push_main.sh` for push diagnostics and summary.
 5. Treat DNS/index instability as environment incidents first, then code issues.
 6. No silent placeholders/stubs in production flows.
+7. For ArqonPilot repo pushes, enforce AGOrg discipline gate (active scope + AGO registration) before compile/test gate.
 
 ## Resume Checklist
 
 1. `./scripts/verify_toolchain_policy.sh`
 2. If policy fails: `./scripts/repair_lock_182.sh --no-gate`
-3. `./scripts/prepush_gate.sh`
-4. `./scripts/push_main.sh`
-5. Check latest logs under `~/.pilot/reports/` (fallback `/tmp/pilot-reports/`)
-6. Reconcile docs with recent artifacts if any behavior changed
-7. Update gotcha registry if a new class of failure appeared
+3. Ensure control plane is up on `:7788` and active AGOrg scope is correct.
+4. `./scripts/prepush_gate.sh`
+5. `./scripts/push_main.sh`
+6. Check latest logs under `~/.pilot/reports/` (fallback `/tmp/pilot-reports/`)
+7. Reconcile docs with recent artifacts if any behavior changed
+8. Update gotcha registry if a new class of failure appeared
 
 ## What Success Looks Like
 

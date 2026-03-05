@@ -809,4 +809,52 @@ mod tests {
         assert_eq!(dag.edges.len(), 2);
         assert_eq!(dag.stages.len(), 3);
     }
+
+    #[test]
+    fn test_register_repo_idempotent_on_same_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("workspace.db");
+        let registry = MultiRegistry::open(&db).unwrap();
+
+        let r1 = dir.path().join("repo1");
+        std::fs::create_dir_all(&r1).unwrap();
+
+        let first = registry
+            .register_repo(
+                &r1,
+                Some("repo1"),
+                Some("core"),
+                &["apply-pilot".to_string(), "operator".to_string()],
+            )
+            .unwrap();
+        let second = registry
+            .register_repo(
+                &r1,
+                Some("repo1"),
+                Some("core"),
+                &["operator".to_string(), "apply-pilot".to_string()],
+            )
+            .unwrap();
+        assert_eq!(first.id, second.id);
+
+        let repos = registry.list_repos(&RepoFilter::default()).unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].name, "repo1");
+        assert_eq!(repos[0].group_name.as_deref(), Some("core"));
+
+        let updated = registry
+            .register_repo(
+                &r1,
+                Some("repo1-renamed"),
+                Some("platform"),
+                &["operator".to_string()],
+            )
+            .unwrap();
+        assert_eq!(updated.id, first.id);
+        let repos_after = registry.list_repos(&RepoFilter::default()).unwrap();
+        assert_eq!(repos_after.len(), 1);
+        assert_eq!(repos_after[0].name, "repo1-renamed");
+        assert_eq!(repos_after[0].group_name.as_deref(), Some("platform"));
+        assert_eq!(repos_after[0].tags, vec!["operator".to_string()]);
+    }
 }

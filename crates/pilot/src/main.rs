@@ -506,6 +506,15 @@ struct PolicyArgs {
 
 #[derive(Subcommand)]
 enum PolicyCommands {
+    /// List policy versions for a scope
+    List {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        ago_path: Option<String>,
+        #[arg(long, default_value = "25")]
+        limit: usize,
+    },
     /// Get effective policy
     Get {
         #[arg(long)]
@@ -540,6 +549,15 @@ enum PolicyCommands {
     Activate {
         #[arg(long)]
         kind: String,
+        #[arg(long)]
+        version: u32,
+    },
+    /// Delete a specific policy version
+    Delete {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        ago_path: Option<String>,
         #[arg(long)]
         version: u32,
     },
@@ -1646,26 +1664,88 @@ async fn run_cli(cli: &Cli) -> Result<CommandReport> {
 
             match &args.command {
                 MultiCommands::Register(args) => {
-                    let entry = registry
-                        .register_repo(
-                            &args.path,
-                            args.name.as_deref(),
-                            args.group.as_deref(),
-                            &args.tags,
-                        )
-                        .map_err(|e| miette::miette!("Register failed: {e}"))?;
+                    let canonical = args
+                        .path
+                        .canonicalize()
+                        .map_err(|e| miette::miette!("Register failed: {}", e))?;
+                    let desired_name = args.name.clone().unwrap_or_else(|| {
+                        canonical
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "repo".to_string())
+                    });
+                    let desired_group = args.group.clone();
+                    let mut desired_tags = args.tags.clone();
+                    desired_tags.sort();
+                    desired_tags.dedup();
 
-                    println!(
-                        "Registered: {} ({}) group={:?} tags={:?}",
-                        entry.name,
-                        entry.path.display(),
-                        entry.group_name,
-                        entry.tags
-                    );
+                    let existing = registry
+                        .list_repos(&multi::RepoFilter::default())
+                        .map_err(|e| miette::miette!("Register failed: {}", e))?
+                        .into_iter()
+                        .find(|r| r.path == canonical);
+
+                    let (entry, already_registered) = if let Some(curr) = existing {
+                        let mut current_tags = curr.tags.clone();
+                        current_tags.sort();
+                        current_tags.dedup();
+                        let unchanged = curr.name == desired_name
+                            && curr.group_name == desired_group
+                            && current_tags == desired_tags;
+                        if unchanged {
+                            (curr, true)
+                        } else {
+                            (
+                                registry
+                                    .register_repo(
+                                        &args.path,
+                                        args.name.as_deref(),
+                                        args.group.as_deref(),
+                                        &args.tags,
+                                    )
+                                    .map_err(|e| miette::miette!("Register failed: {e}"))?,
+                                false,
+                            )
+                        }
+                    } else {
+                        (
+                            registry
+                                .register_repo(
+                                    &args.path,
+                                    args.name.as_deref(),
+                                    args.group.as_deref(),
+                                    &args.tags,
+                                )
+                                .map_err(|e| miette::miette!("Register failed: {e}"))?,
+                            false,
+                        )
+                    };
+
+                    if already_registered {
+                        println!(
+                            "Already registered: {} ({}) group={:?} tags={:?}",
+                            entry.name,
+                            entry.path.display(),
+                            entry.group_name,
+                            entry.tags
+                        );
+                    } else {
+                        println!(
+                            "Registered: {} ({}) group={:?} tags={:?}",
+                            entry.name,
+                            entry.path.display(),
+                            entry.group_name,
+                            entry.tags
+                        );
+                    }
 
                     let report = CommandReport::ok(
                         "multi.register",
-                        format!("Registered {}", entry.path.display()),
+                        if already_registered {
+                            format!("Already registered {}", entry.path.display())
+                        } else {
+                            format!("Registered {}", entry.path.display())
+                        },
                     );
                     persist_mutation_audit(
                         "multi.register",
@@ -2632,6 +2712,9 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Serve(_) => "serve",
         Commands::Settings(_) => "settings.branch",
         Commands::Policy(PolicyArgs {
+            command: PolicyCommands::List { .. },
+        }) => "policy.list",
+        Commands::Policy(PolicyArgs {
             command: PolicyCommands::Get { .. },
         }) => "policy.get",
         Commands::Policy(PolicyArgs {
@@ -2646,6 +2729,9 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Policy(PolicyArgs {
             command: PolicyCommands::Activate { .. },
         }) => "policy.activate",
+        Commands::Policy(PolicyArgs {
+            command: PolicyCommands::Delete { .. },
+        }) => "policy.delete",
         Commands::Policy(PolicyArgs {
             command: PolicyCommands::Resolve { .. },
         }) => "policy.resolve",
@@ -3330,6 +3416,44 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
     let gov_store = governance::store::GovernanceStore::new(agorg_store.dsn());
 
     match &args.command {
+        PolicyCommands::List {
+            kind,
+            ago_path,
+            limit,
+        } => {
+            let records = gov_store
+                .list_policy_versions(active.id, ago_path.as_deref(), kind, *limit)
+                .await?;
+            let out: Vec<_> = records
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.id,
+                        "agorg_id": r.agorg_id,
+                        "ago_path": r.ago_path,
+                        "policy_kind": r.policy_kind,
+                        "version": r.version,
+                        "status": r.status,
+                        "updated_at": r.updated_at,
+                        "updated_by": r.updated_by
+                    })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "kind": kind,
+                    "ago_path": ago_path,
+                    "count": out.len(),
+                    "items": out
+                }))
+                .into_diagnostic()?
+            );
+            Ok(CommandReport::ok(
+                "policy.list",
+                format!("Listed {} policy version(s)", out.len()),
+            ))
+        }
         PolicyCommands::Get { kind, ago_path } => {
             let record = if let Some(path) = ago_path {
                 gov_store
@@ -3619,6 +3743,33 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
             println!("Activated {} v{}", kind, version);
             let report = CommandReport::ok("policy.activate", format!("Activated v{}", version));
             persist_mutation_audit("policy.activate", false, &report.summary, vec![]);
+            Ok(report)
+        }
+        PolicyCommands::Delete {
+            kind,
+            ago_path,
+            version,
+        } => {
+            let deleted = gov_store
+                .delete_policy_version(active.id, ago_path.as_deref(), kind, *version as i32)
+                .await?;
+            if deleted == 0 {
+                return Err(miette::miette!(
+                    "No {} policy version {} found for ago_path={:?}",
+                    kind,
+                    version,
+                    ago_path
+                ));
+            }
+            println!(
+                "Deleted {} policy version {} (ago_path={:?})",
+                kind, version, ago_path
+            );
+            let report = CommandReport::ok(
+                "policy.delete",
+                format!("Deleted {} v{}", kind, version),
+            );
+            persist_mutation_audit("policy.delete", false, &report.summary, vec![]);
             Ok(report)
         }
         PolicyCommands::Resolve { kind, repo_path } => {
