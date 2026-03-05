@@ -1938,14 +1938,15 @@ async function oracleViewReport() {
 }
 
 async function depRun(action) {
-  const isPreflight = ['policy', 'hook-policy', 'drift', 'gate', 'push'].includes(action);
-  const req = { action: isPreflight ? 'preflight' : action, json: false };
+  const normalizedAction = action === 'gate' ? 'prepush-gate' : action;
+  const isPreflight = ['policy', 'hook-policy', 'drift'].includes(normalizedAction);
+  const req = { action: isPreflight ? 'preflight' : normalizedAction, json: false };
   if (isPreflight) {
-    let step = action;
+    let step = normalizedAction;
     if (step === 'hook-policy') step = 'hook';
     req.preflight_steps = [step];
   }
-  if (action === 'push') {
+  if (normalizedAction === 'push') {
     req.branch = document.getElementById('dash-push-branch').value || 'main';
     req.remote = document.getElementById('dash-push-remote').value || 'origin';
   }
@@ -2009,12 +2010,12 @@ async function depRun(action) {
     }
   }
 
-  if (action.startsWith('bus-')) {
+  if (normalizedAction.startsWith('bus-')) {
     const text = String(inner.stdout || '') + '\n' + String(inner.stderr || '');
     if (text.includes('RUNNING')) setBusStatus(true, 'bus shim reported RUNNING');
     if (text.includes('STOPPED')) setBusStatus(false, 'bus shim reported STOPPED');
   }
-  if (action === 'services-status' || action === 'services-start' || action === 'services-stop' || action === 'services-restart') {
+  if (normalizedAction === 'services-status' || normalizedAction === 'services-start' || normalizedAction === 'services-stop' || normalizedAction === 'services-restart') {
     if (typeof inner.bus_running === 'boolean') {
       setBusStatus(inner.bus_running, inner.bus_running ? 'service manager reported RUNNING' : 'service manager reported STOPPED');
     }
@@ -2024,7 +2025,7 @@ async function depRun(action) {
     depActionOutGlobal.textContent = JSON.stringify(data, null, 2);
   }
   if (!isPreflight) {
-      updateDashChip(action, !!inner.ok, inner);
+      updateDashChip(normalizedAction, !!inner.ok, inner);
   }
   depLoadLogs();
 }
@@ -2059,6 +2060,7 @@ function updateDashChip(action, ok, data) {
     }
   }
   if (action === 'gate') setChip(dashGateChip, 'Gate: ' + suffix, level);
+  if (action === 'prepush-gate') setChip(dashGateChip, 'Gate: ' + suffix, level);
   if (action === 'push') setChip(dashPushChip, 'Push: ' + suffix, level);
   if (!ok && data && data.error) {
     appendLive({ source: 'dashboard', action, error: data.error });
@@ -3010,6 +3012,15 @@ async function agorgReconcileApply() {
      return;
   }
   const dryRunToken = dryRes.dry_run_token;
+  const requestId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `req-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+  const body = {
+    idempotency_key: requestId,
+    agorg: activeId,
+    dry_run: false,
+    dry_run_token: dryRunToken,
+    issue_class: cls
+  };
 
   logActivity("Applying Reconciliation", body);
   const data = await fetchJsonSafe('/api/agorg/reconcile_apply', {
@@ -5108,7 +5119,34 @@ async function settingsGovernanceScan() {
 }
 
 async function settingsExportGovernanceReport() {
-   alert("Export Governance Report not fully wired in UI layer yet, report json is kept in backend state.");
+  const activeId = await getActiveAgorgId();
+  if (!activeId) {
+    logActivity("Export Governance", { ok: false, error: 'No active AGOrg scope selected' });
+    return;
+  }
+  
+  try {
+    const data = await fetchJsonSafe('/api/agorg/policy_report', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify({ agorg: activeId })
+    });
+    
+    if (data && data.ok) {
+      logActivity("Governance Report Exported", { ok: true, artifact_path: data.artifact_path });
+      appendLive({ source: 'agorg_policy', action: 'export', artifact_path: data.artifact_path });
+      
+      // If we have an output region in settings, show it there too
+      const out = document.getElementById('settings-status-out');
+      if (out) {
+        out.textContent = `Governance report successfully persisted to:\n${data.artifact_path}\n\nYou can access this file directly on the host system.`;
+      }
+    } else {
+      logActivity("Export Governance Failed", data);
+    }
+  } catch (err) {
+    logActivity("Export Governance Error", { ok: false, error: err.message });
+  }
 }
 
 // P5: Cross-Tab Command Graph Orchestration State

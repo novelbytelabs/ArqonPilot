@@ -29,6 +29,8 @@ fn skip_if_db_env_denied(
     if stderr.contains("Operation not permitted")
         || (stderr.contains("Permission denied") && stderr.contains("shared memory"))
         || stderr.contains("could not open shared memory segment")
+        || stderr.contains("could not create any Unix-domain sockets")
+        || stderr.contains("could not bind Unix address")
     {
         eprintln!("Skipping test: managed Postgres socket/tcp bind denied by runtime environment.");
         return Ok(true);
@@ -59,6 +61,8 @@ fn setup_agorg(
         if (stderr.contains("Permission denied") && stderr.contains("shared memory"))
             || stderr.contains("could not open shared memory segment")
             || stderr.contains("Operation not permitted")
+            || stderr.contains("could not create any Unix-domain sockets")
+            || stderr.contains("could not bind Unix address")
         {
             eprintln!(
                 "Skipping test: managed Postgres shared-memory denied by runtime environment."
@@ -121,6 +125,7 @@ fn test_policy_parity_round_trip() -> Result<(), Box<dyn std::error::Error>> {
         "security",
         "quality",
         "runtime",
+        "operator_routine",
     ];
 
     for kind in kinds {
@@ -206,6 +211,17 @@ fn test_policy_parity_round_trip() -> Result<(), Box<dyn std::error::Error>> {
                 "require_dockerfile": { "level": "off", "enabled": false },
                 "require_healthcheck": { "level": "off", "enabled": false },
                 "allowed_base_images": { "level": "block", "items": ["alpine"] }
+            }"#
+            }
+            "operator_routine" => {
+                r#"{
+                "kind": "operator_routine",
+                "version": 1,
+                "require_active_scope": { "level": "block", "enabled": true },
+                "require_registered_repo": { "level": "block", "enabled": true },
+                "require_clean_worktree_for_push": { "level": "warn", "enabled": true },
+                "allowed_push_branches": { "level": "block", "items": ["main", "dev"] },
+                "required_prepush_steps": { "level": "warn", "items": ["policy", "hook", "drift", "gate"] }
             }"#
             }
             _ => unreachable!(),

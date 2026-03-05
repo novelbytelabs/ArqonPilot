@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use predicates::str::contains;
 use std::fs;
 
 fn skip_if_db_env_denied(
@@ -32,7 +33,7 @@ fn skip_if_db_env_denied(
         || stderr.contains("could not create any Unix-domain sockets")
         || stderr.contains("could not bind Unix address")
     {
-        eprintln!("Skipping test: managed Postgres socket/tcp bind denied by runtime environment.");
+        eprintln!("Skipping test: managed Postgres denied by runtime environment.");
         return Ok(true);
     }
     Ok(false)
@@ -51,61 +52,60 @@ fn git_init(path: &std::path::Path) {
         .arg("test@example.com")
         .current_dir(path)
         .output()
-        .unwrap();
+        .expect("Failed to set git email");
     std::process::Command::new("git")
         .arg("config")
         .arg("user.name")
         .arg("test")
         .current_dir(path)
         .output()
-        .unwrap();
+        .expect("Failed to set git name");
 
-    fs::write(path.join("README.md"), "test").unwrap();
+    fs::write(path.join("README.md"), "test").expect("write readme");
     std::process::Command::new("git")
         .arg("add")
         .arg(".")
         .current_dir(path)
         .output()
-        .unwrap();
+        .expect("git add");
     std::process::Command::new("git")
         .arg("commit")
         .arg("-m")
         .arg("initial")
         .current_dir(path)
         .output()
-        .unwrap();
+        .expect("git commit");
 }
 
 #[test]
 #[allow(deprecated)]
-fn test_policy_workflow_draft_preview_scan() -> Result<(), Box<dyn std::error::Error>> {
+fn test_operator_routine_policy_set_preview_scan() -> Result<(), Box<dyn std::error::Error>> {
     let temp_root = std::path::Path::new(".pilot_test_tmp");
     fs::create_dir_all(temp_root)?;
     let temp = tempfile::Builder::new()
-        .prefix("policy_e2e_")
+        .prefix("policy_opr_")
         .tempdir_in(temp_root)?;
     let suffix = temp
         .path()
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("x");
-    let org_name = format!("WorkflowOrg-{}", suffix);
+    let org_name = format!("OperatorRoutineOrg-{}", suffix);
     let home = temp.path().join("home");
-    let pilot_home = std::path::PathBuf::from(format!("/tmp/pilotdb_e2e_{}", suffix));
-    let repo_path = temp.path().join("workflow-repo");
+    let pilot_home = std::path::PathBuf::from(format!("/tmp/pilotdb_opr_{}", suffix));
+    let repo_path = temp.path().join("routine-repo");
     fs::create_dir_all(&home)?;
     fs::create_dir_all(&repo_path)?;
-    if skip_if_db_env_denied(&home, &pilot_home, "9342")? {
+    if skip_if_db_env_denied(&home, &pilot_home, "9346")? {
         return Ok(());
     }
 
     git_init(&repo_path);
 
-    // 1. Setup AGOrg
     let create_out = Command::cargo_bin("pilot")?
         .env("HOME", &home)
         .env("PILOT_HOME", &pilot_home)
-        .env("PILOT_DB_PORT", "9342")
+        .env("PILOT_DB_PORT", "9346")
         .env("PILOT_DB_MODE", "unix_socket")
         .arg("agorg")
         .arg("create")
@@ -116,30 +116,27 @@ fn test_policy_workflow_draft_preview_scan() -> Result<(), Box<dyn std::error::E
         .output()?;
     if !create_out.status.success() {
         let stderr = String::from_utf8_lossy(&create_out.stderr);
-        if (stderr.contains("Permission denied") && stderr.contains("shared memory"))
-            || stderr.contains("could not open shared memory segment")
-            || stderr.contains("Operation not permitted")
+        if stderr.contains("Operation not permitted")
+            || stderr.contains("Permission denied")
+            || stderr.contains("shared memory")
             || stderr.contains("could not create any Unix-domain sockets")
             || stderr.contains("could not bind Unix address")
         {
-            eprintln!(
-                "Skipping test: managed Postgres shared-memory denied by runtime environment."
-            );
+            eprintln!("Skipping test: managed Postgres denied by runtime environment.");
             return Ok(());
         }
-        let full = format!(
+        return Err(format!(
             "agorg create failed unexpectedly.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&create_out.stdout),
             stderr
-        );
-        return Err(full.into());
+        )
+        .into());
     }
 
-    let mut use_cmd = Command::cargo_bin("pilot")?;
-    use_cmd
+    Command::cargo_bin("pilot")?
         .env("HOME", &home)
         .env("PILOT_HOME", &pilot_home)
-        .env("PILOT_DB_PORT", "9342")
+        .env("PILOT_DB_PORT", "9346")
         .env("PILOT_DB_MODE", "unix_socket")
         .arg("agorg")
         .arg("use")
@@ -147,108 +144,77 @@ fn test_policy_workflow_draft_preview_scan() -> Result<(), Box<dyn std::error::E
         .assert()
         .success();
 
-    // 2. Register repo
-    let mut reg_cmd = Command::cargo_bin("pilot")?;
-    reg_cmd
+    Command::cargo_bin("pilot")?
         .env("HOME", &home)
         .env("PILOT_HOME", &pilot_home)
-        .env("PILOT_DB_PORT", "9342")
+        .env("PILOT_DB_PORT", "9346")
         .env("PILOT_DB_MODE", "unix_socket")
         .arg("multi")
         .arg("register")
         .arg("--path")
         .arg(repo_path.to_string_lossy().to_string())
         .arg("--name")
-        .arg("workflow-repo")
+        .arg("routine-repo")
         .assert()
         .success();
 
-    // 3. Insert a violation (naked secret)
-    fs::write(
-        repo_path.join("app.js"),
-        "const SECRET = 'AKIA1234567890ABCDEF';",
-    )?;
-
-    // 4. Set Security Policy Draft
-    let policy_file = temp.path().join("security_policy.json");
+    let policy_file = temp.path().join("operator_routine_policy.json");
     fs::write(
         &policy_file,
         r#"{
-        "kind": "security",
+        "kind": "operator_routine",
         "version": 1,
-        "max_cve_severity": "critical",
-        "block_naked_secrets": { "level": "block", "enabled": true }
+        "require_active_scope": { "level": "block", "enabled": true },
+        "require_registered_repo": { "level": "block", "enabled": true },
+        "require_clean_worktree_for_push": { "level": "warn", "enabled": true },
+        "allowed_push_branches": { "level": "warn", "items": ["master"] },
+        "required_prepush_steps": { "level": "warn", "items": ["gate"] }
     }"#,
     )?;
 
-    let mut set_cmd = Command::cargo_bin("pilot")?;
-    set_cmd
+    Command::cargo_bin("pilot")?
         .env("HOME", &home)
         .env("PILOT_HOME", &pilot_home)
-        .env("PILOT_DB_PORT", "9342")
+        .env("PILOT_DB_PORT", "9346")
         .env("PILOT_DB_MODE", "unix_socket")
         .arg("policy")
         .arg("set-draft")
         .arg("--kind")
-        .arg("security")
+        .arg("operator_routine")
         .arg("--file")
         .arg(&policy_file)
         .assert()
         .success()
-        .stdout(predicates::str::contains(
-            "Saved draft policy security version 1",
-        ));
+        .stdout(contains("Saved draft policy operator_routine version 1"));
 
-    // 5. Preview draft v1
-    let mut preview_cmd = Command::cargo_bin("pilot")?;
-    preview_cmd
+    Command::cargo_bin("pilot")?
         .env("HOME", &home)
         .env("PILOT_HOME", &pilot_home)
-        .env("PILOT_DB_PORT", "9342")
+        .env("PILOT_DB_PORT", "9346")
         .env("PILOT_DB_MODE", "unix_socket")
         .arg("policy")
         .arg("preview")
         .arg("--kind")
-        .arg("security")
+        .arg("operator_routine")
         .arg("--version")
         .arg("1")
         .assert()
         .success()
-        .stdout(predicates::str::contains("\"status\": \"blocked\""))
-        .stdout(predicates::str::contains("\"violations\": 1"))
-        .stdout(predicates::str::contains("Artifact: "));
+        .stdout(contains("\"kind\": \"operator_routine\""))
+        .stdout(contains("Artifact: "));
 
-    // 6. Activate policy
-    let mut act_cmd = Command::cargo_bin("pilot")?;
-    act_cmd
+    Command::cargo_bin("pilot")?
         .env("HOME", &home)
         .env("PILOT_HOME", &pilot_home)
-        .env("PILOT_DB_PORT", "9342")
-        .env("PILOT_DB_MODE", "unix_socket")
-        .arg("policy")
-        .arg("activate")
-        .arg("--kind")
-        .arg("security")
-        .arg("--version")
-        .arg("1")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("Activated security v1"));
-
-    // 7. Scan active policy
-    let mut scan_cmd = Command::cargo_bin("pilot")?;
-    scan_cmd
-        .env("HOME", &home)
-        .env("PILOT_HOME", &pilot_home)
-        .env("PILOT_DB_PORT", "9342")
+        .env("PILOT_DB_PORT", "9346")
         .env("PILOT_DB_MODE", "unix_socket")
         .arg("policy")
         .arg("scan")
         .arg("--kind")
-        .arg("security")
+        .arg("operator_routine")
         .assert()
         .success()
-        .stdout(predicates::str::contains("\"violations\": 1"));
+        .stdout(contains("\"kind\": \"operator_routine\""));
 
     Ok(())
 }

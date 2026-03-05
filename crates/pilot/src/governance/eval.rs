@@ -803,6 +803,152 @@ pub fn evaluate_runtime_policy(
     report
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct OperatorRoutineContext {
+    pub action: String,
+    pub has_active_scope: bool,
+    pub repo_registered: bool,
+    pub current_branch: Option<String>,
+    pub repo_clean: Option<bool>,
+    pub completed_steps: Vec<String>,
+}
+
+fn has_completed_step(completed: &[String], step: &str) -> bool {
+    completed
+        .iter()
+        .any(|s| s.trim().eq_ignore_ascii_case(step))
+}
+
+pub fn evaluate_operator_routine_policy(
+    policy: &OperatorRoutinePolicy,
+    context: &OperatorRoutineContext,
+    exceptions: &[PolicyException],
+    current_ago_path: &str,
+    source_name: &str,
+    source_id: Option<Uuid>,
+) -> PolicyEvalReport {
+    let mut report = PolicyEvalReport::default();
+    let action = context.action.trim().to_ascii_lowercase();
+    let is_push = action == "push";
+
+    if policy.require_active_scope.level != EnforcementLevel::Off
+        && policy.require_active_scope.enabled
+        && !is_excepted("operator_routine.ORT-001", exceptions, current_ago_path)
+        && !context.has_active_scope
+    {
+        add_result(
+            &mut report,
+            "ORT-001",
+            &policy.require_active_scope.level,
+            "active_scope=false",
+            "No active AGOrg scope is selected",
+            "Select an active AGOrg before running governance actions",
+            source_name,
+            source_id,
+        );
+    }
+
+    if policy.require_registered_repo.level != EnforcementLevel::Off
+        && policy.require_registered_repo.enabled
+        && !is_excepted("operator_routine.ORT-002", exceptions, current_ago_path)
+        && !context.repo_registered
+    {
+        add_result(
+            &mut report,
+            "ORT-002",
+            &policy.require_registered_repo.level,
+            "repo_registered=false",
+            "Current repository is not registered in active AGOrg scope",
+            "Register the repository under Multi/AGOrg before running this action",
+            source_name,
+            source_id,
+        );
+    }
+
+    if is_push
+        && policy.require_clean_worktree_for_push.level != EnforcementLevel::Off
+        && policy.require_clean_worktree_for_push.enabled
+        && !is_excepted("operator_routine.ORT-003", exceptions, current_ago_path)
+    {
+        let clean = context.repo_clean.unwrap_or(false);
+        if !clean {
+            add_result(
+                &mut report,
+                "ORT-003",
+                &policy.require_clean_worktree_for_push.level,
+                "repo_clean=false",
+                "Push requested from a dirty working tree",
+                "Commit, stash, or discard local changes before push",
+                source_name,
+                source_id,
+            );
+        }
+    }
+
+    if is_push
+        && policy.allowed_push_branches.level != EnforcementLevel::Off
+        && !policy.allowed_push_branches.items.is_empty()
+        && !is_excepted("operator_routine.ORT-004", exceptions, current_ago_path)
+    {
+        let branch = context
+            .current_branch
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let allowed = policy
+            .allowed_push_branches
+            .items
+            .iter()
+            .any(|b| b.eq_ignore_ascii_case(branch.trim()));
+        if !allowed {
+            add_result(
+                &mut report,
+                "ORT-004",
+                &policy.allowed_push_branches.level,
+                &branch,
+                &format!("Push from disallowed branch '{}'", branch),
+                "Switch to an allowed branch or update operator_routine policy",
+                source_name,
+                source_id,
+            );
+        }
+    }
+
+    if is_push
+        && policy.required_prepush_steps.level != EnforcementLevel::Off
+        && !policy.required_prepush_steps.items.is_empty()
+        && !is_excepted("operator_routine.ORT-005", exceptions, current_ago_path)
+    {
+        let missing: Vec<String> = policy
+            .required_prepush_steps
+            .items
+            .iter()
+            .filter(|s| !has_completed_step(&context.completed_steps, s))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            add_result(
+                &mut report,
+                "ORT-005",
+                &policy.required_prepush_steps.level,
+                &missing.join(","),
+                &format!(
+                    "Missing required routine steps before push: {}",
+                    missing.join(", ")
+                ),
+                "Run the required pre-push routine steps first",
+                source_name,
+                source_id,
+            );
+        }
+    }
+
+    report.blocked = report
+        .violations
+        .iter()
+        .any(|v| v.level == EnforcementLevel::Block);
+    report
+}
+
 // -----------------------------------------------------------------------------
 // FLEET SCAN
 // -----------------------------------------------------------------------------
@@ -931,6 +1077,37 @@ pub async fn fleet_governance_scan(
         );
         total_violations += run_eval.violations.len();
 
+        let routine_trace = store
+            .resolve_with_trace(agorg_id, &ago.repo_path, "operator_routine")
+            .await?;
+        let routine_pol: OperatorRoutinePolicy = get_policy_from_trace(store, &routine_trace)
+            .await?
+            .unwrap_or_default();
+        let routine_ex = store
+            .get_effective_exceptions(agorg_id, "operator_routine")
+            .await?;
+        let routine_ctx = OperatorRoutineContext {
+            action: "push".to_string(),
+            has_active_scope: true,
+            repo_registered: true,
+            current_branch: Some(current_branch.clone()),
+            repo_clean: Some(repo_is_clean(&repo_path).unwrap_or(false)),
+            completed_steps: vec![
+                "policy".to_string(),
+                "hook".to_string(),
+                "drift".to_string(),
+            ],
+        };
+        let routine_eval = evaluate_operator_routine_policy(
+            &routine_pol,
+            &routine_ctx,
+            &routine_ex,
+            &ago.repo_path,
+            &routine_trace.resolved_source,
+            Some(routine_trace.resolved_agorg_id),
+        );
+        total_violations += routine_eval.violations.len();
+
         // Include trace contexts
         // No conflict_trace field on PolicyEvalReport, we compute is_overridden directly
         let is_overridden = branch_trace.resolved_source == "ago_override"
@@ -938,7 +1115,8 @@ pub async fn fleet_governance_scan(
             || rel_trace.resolved_source == "ago_override"
             || sec_trace.resolved_source == "ago_override"
             || qual_trace.resolved_source == "ago_override"
-            || run_trace.resolved_source == "ago_override";
+            || run_trace.resolved_source == "ago_override"
+            || routine_trace.resolved_source == "ago_override";
 
         let overall = if branch_eval.blocked
             || dep_eval.blocked
@@ -946,6 +1124,7 @@ pub async fn fleet_governance_scan(
             || sec_eval.blocked
             || qual_eval.blocked
             || run_eval.blocked
+            || routine_eval.blocked
         {
             "violation"
         } else if !branch_eval.warnings.is_empty()
@@ -954,6 +1133,7 @@ pub async fn fleet_governance_scan(
             || !sec_eval.warnings.is_empty()
             || !qual_eval.warnings.is_empty()
             || !run_eval.warnings.is_empty()
+            || !routine_eval.warnings.is_empty()
         {
             "warning"
         } else {
@@ -972,6 +1152,7 @@ pub async fn fleet_governance_scan(
                 ("security".to_string(), sec_eval),
                 ("quality".to_string(), qual_eval),
                 ("runtime".to_string(), run_eval),
+                ("operator_routine".to_string(), routine_eval),
             ]
             .into_iter()
             .collect(),
@@ -1055,6 +1236,20 @@ fn get_current_branch(repo_path: &Path) -> Option<String> {
     } else {
         Some(branch)
     }
+}
+
+fn repo_is_clean(repo_path: &Path) -> Option<bool> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .arg("status")
+        .arg("--porcelain")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(output.stdout.is_empty())
 }
 
 /// Resolve the strongest applicable confirmation requirement for a branch operation.
@@ -1543,6 +1738,64 @@ license = "GPL-3.0"
 
         let report = evaluate_runtime_policy(&p, temp.path(), &e, "/path/to/repo", "Default", None);
         assert!(!report.blocked); // Default is off
+    }
+
+    #[test]
+    fn test_operator_routine_policy_blocks_unregistered_repo() {
+        let policy = OperatorRoutinePolicy::default();
+        let ex = vec![];
+        let ctx = OperatorRoutineContext {
+            action: "push".to_string(),
+            has_active_scope: true,
+            repo_registered: false,
+            current_branch: Some("main".to_string()),
+            repo_clean: Some(true),
+            completed_steps: vec!["gate".to_string()],
+        };
+        let report =
+            evaluate_operator_routine_policy(&policy, &ctx, &ex, "/path/repo", "Default", None);
+        assert!(report.blocked);
+        assert!(report.violations.iter().any(|v| v.rule == "ORT-002"));
+    }
+
+    #[test]
+    fn test_operator_routine_policy_blocks_disallowed_branch_when_configured() {
+        let mut policy = OperatorRoutinePolicy::default();
+        policy.allowed_push_branches.level = EnforcementLevel::Block;
+        policy.allowed_push_branches.items = vec!["main".to_string()];
+        let ex = vec![];
+        let ctx = OperatorRoutineContext {
+            action: "push".to_string(),
+            has_active_scope: true,
+            repo_registered: true,
+            current_branch: Some("feature/x".to_string()),
+            repo_clean: Some(true),
+            completed_steps: vec!["gate".to_string()],
+        };
+        let report =
+            evaluate_operator_routine_policy(&policy, &ctx, &ex, "/path/repo", "Default", None);
+        assert!(report.blocked);
+        assert!(report.violations.iter().any(|v| v.rule == "ORT-004"));
+    }
+
+    #[test]
+    fn test_operator_routine_policy_warns_missing_steps() {
+        let mut policy = OperatorRoutinePolicy::default();
+        policy.required_prepush_steps.level = EnforcementLevel::Warn;
+        policy.required_prepush_steps.items = vec!["policy".to_string(), "gate".to_string()];
+        let ex = vec![];
+        let ctx = OperatorRoutineContext {
+            action: "push".to_string(),
+            has_active_scope: true,
+            repo_registered: true,
+            current_branch: Some("main".to_string()),
+            repo_clean: Some(true),
+            completed_steps: vec!["policy".to_string()],
+        };
+        let report =
+            evaluate_operator_routine_policy(&policy, &ctx, &ex, "/path/repo", "Default", None);
+        assert!(!report.blocked);
+        assert!(report.warnings.iter().any(|v| v.rule == "ORT-005"));
     }
 
     #[test]

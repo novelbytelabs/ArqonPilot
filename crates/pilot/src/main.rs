@@ -3240,9 +3240,12 @@ fn validate_policy_payload(kind: &str, payload: &serde_json::Value) -> Result<()
         "runtime" => {
             let _: governance::model::RuntimePolicy = parse_policy_for_kind(kind, payload)?;
         }
+        "operator_routine" => {
+            let _: governance::model::OperatorRoutinePolicy = parse_policy_for_kind(kind, payload)?;
+        }
         other => {
             return Err(miette!(
-                "Unsupported policy kind '{}'. Supported kinds: branch, dependency, release, security, quality, runtime",
+                "Unsupported policy kind '{}'. Supported kinds: branch, dependency, release, security, quality, runtime, operator_routine",
                 other
             ));
         }
@@ -3370,9 +3373,10 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                 && kind != "security"
                 && kind != "quality"
                 && kind != "runtime"
+                && kind != "operator_routine"
             {
                 return Err(miette::miette!(
-                    "Preview currently supports branch, dependency, release, security, quality, runtime policies"
+                    "Preview currently supports branch, dependency, release, security, quality, runtime, operator_routine policies"
                 ));
             }
             let record = gov_store
@@ -3473,6 +3477,35 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                         governance::eval::evaluate_runtime_policy(
                             &policy,
                             path,
+                            &exceptions,
+                            &ago_path,
+                            source_name,
+                            source_id,
+                        )
+                    }
+                    "operator_routine" => {
+                        let policy: governance::model::OperatorRoutinePolicy =
+                            parse_policy_for_kind(kind, &record.policy_json)?;
+                        let clean = std::process::Command::new("git")
+                            .arg("-C")
+                            .arg(path)
+                            .arg("status")
+                            .arg("--porcelain")
+                            .output()
+                            .ok()
+                            .map(|o| o.status.success() && o.stdout.is_empty())
+                            .unwrap_or(false);
+                        let ctx = governance::eval::OperatorRoutineContext {
+                            action: "push".to_string(),
+                            has_active_scope: true,
+                            repo_registered: true,
+                            current_branch: Some(st.current_branch.clone()),
+                            repo_clean: Some(clean),
+                            completed_steps: vec![],
+                        };
+                        governance::eval::evaluate_operator_routine_policy(
+                            &policy,
+                            &ctx,
                             &exceptions,
                             &ago_path,
                             source_name,
@@ -3618,6 +3651,9 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                             "runtime" => {
                                 serde_json::to_value(governance::model::RuntimePolicy::default())
                             }
+                            "operator_routine" => serde_json::to_value(
+                                governance::model::OperatorRoutinePolicy::default(),
+                            ),
                             _ => serde_json::to_value(governance::model::BranchPolicy::default()),
                         }
                         .unwrap_or(serde_json::json!({}));
@@ -3647,8 +3683,9 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                 && kind != "security"
                 && kind != "quality"
                 && kind != "runtime"
+                && kind != "operator_routine"
             {
-                return Err(miette::miette!("Scan currently supports branch, dependency, release, security, quality, runtime policies"));
+                return Err(miette::miette!("Scan currently supports branch, dependency, release, security, quality, runtime, operator_routine policies"));
             }
             let record = gov_store
                 .get_policy(active.id, kind)
@@ -3673,6 +3710,10 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                     }
                     "runtime" => {
                         serde_json::to_value(governance::model::RuntimePolicy::default()).unwrap()
+                    }
+                    "operator_routine" => {
+                        serde_json::to_value(governance::model::OperatorRoutinePolicy::default())
+                            .unwrap()
                     }
                     _ => serde_json::json!({}),
                 });
@@ -3773,6 +3814,35 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                         governance::eval::evaluate_runtime_policy(
                             &policy,
                             path,
+                            &exceptions,
+                            &ago_path,
+                            source_name,
+                            source_id,
+                        )
+                    }
+                    "operator_routine" => {
+                        let policy: governance::model::OperatorRoutinePolicy =
+                            parse_policy_for_kind(kind, &record)?;
+                        let clean = std::process::Command::new("git")
+                            .arg("-C")
+                            .arg(path)
+                            .arg("status")
+                            .arg("--porcelain")
+                            .output()
+                            .ok()
+                            .map(|o| o.status.success() && o.stdout.is_empty())
+                            .unwrap_or(false);
+                        let ctx = governance::eval::OperatorRoutineContext {
+                            action: "push".to_string(),
+                            has_active_scope: true,
+                            repo_registered: true,
+                            current_branch: Some(st.current_branch.clone()),
+                            repo_clean: Some(clean),
+                            completed_steps: vec![],
+                        };
+                        governance::eval::evaluate_operator_routine_policy(
+                            &policy,
+                            &ctx,
                             &exceptions,
                             &ago_path,
                             source_name,

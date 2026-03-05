@@ -465,6 +465,46 @@ impl Default for RuntimePolicy {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct OperatorRoutinePolicy {
+    pub kind: String,
+    pub version: i32,
+    pub require_active_scope: LevelEnabled,
+    pub require_registered_repo: LevelEnabled,
+    pub require_clean_worktree_for_push: LevelEnabled,
+    pub allowed_push_branches: LevelList,
+    pub required_prepush_steps: LevelList,
+}
+
+impl Default for OperatorRoutinePolicy {
+    fn default() -> Self {
+        Self {
+            kind: "operator_routine".to_string(),
+            version: 1,
+            require_active_scope: LevelEnabled {
+                level: EnforcementLevel::Block,
+                enabled: true,
+            },
+            require_registered_repo: LevelEnabled {
+                level: EnforcementLevel::Block,
+                enabled: true,
+            },
+            require_clean_worktree_for_push: LevelEnabled {
+                level: EnforcementLevel::Warn,
+                enabled: true,
+            },
+            allowed_push_branches: LevelList {
+                level: EnforcementLevel::Warn,
+                items: vec!["main".to_string(), "dev".to_string()],
+            },
+            required_prepush_steps: LevelList {
+                level: EnforcementLevel::Warn,
+                items: vec!["gate".to_string()],
+            },
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PolicyEvalResult {
     pub rule: String,

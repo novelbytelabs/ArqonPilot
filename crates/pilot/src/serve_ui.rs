@@ -26,6 +26,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io::AsyncBufReadExt;
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{broadcast, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
@@ -103,7 +104,9 @@ fn normalize_orchestrate_payload(payload: &mut Value, stage: &str) {
     }
 }
 
-fn command_request_from_orchestrate_payload(payload: Value) -> std::result::Result<UiCommandRequest, String> {
+fn command_request_from_orchestrate_payload(
+    payload: Value,
+) -> std::result::Result<UiCommandRequest, String> {
     if let Ok(req) = serde_json::from_value::<UiCommandRequest>(payload.clone()) {
         return Ok(req);
     }
@@ -132,10 +135,7 @@ fn command_request_from_orchestrate_payload(payload: Value) -> std::result::Resu
     if let Some(stage_size) = payload.get("stage_size").and_then(Value::as_u64) {
         cmd_payload["stage_size"] = json!(stage_size);
     }
-    if let Some(continue_on_failure) = payload
-        .get("continue_on_failure")
-        .and_then(Value::as_bool)
-    {
+    if let Some(continue_on_failure) = payload.get("continue_on_failure").and_then(Value::as_bool) {
         cmd_payload["continue_on_failure"] = json!(continue_on_failure);
     }
 
@@ -204,7 +204,10 @@ struct OrchEnvelope {
 /// Wrap a domain handler's raw JSON response into a canonical OrchEnvelope.
 /// Extracts ok/artifact_path/error from inner response; generates a fresh server-side UUID.
 fn wrap_as_envelope(domain: &str, stage: &str, inner_response: Value) -> OrchEnvelope {
-    let ok = inner_response.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let ok = inner_response
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let artifact_path = inner_response
         .get("artifact_path")
         .and_then(Value::as_str)
@@ -747,7 +750,10 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/branch/timeline", get(api_branch_timeline))
         .route("/api/orchestrate/timeline", get(api_orchestrate_timeline))
         .route("/api/orchestrate/run", post(api_orchestrate_run))
-        .route("/api/orchestrate/graph-status", get(api_orchestrate_graph_status))
+        .route(
+            "/api/orchestrate/graph-status",
+            get(api_orchestrate_graph_status),
+        )
         .route(
             "/api/system/temporary_components",
             get(get_temporary_components),
@@ -918,6 +924,7 @@ fn preflight_steps_from_action(
         "hook-policy" => vec![PreflightStepType::Hook],
         "drift" => vec![PreflightStepType::Drift],
         "gate" => vec![PreflightStepType::Gate],
+        "prepush-gate" => vec![PreflightStepType::Gate],
         "push" => vec![PreflightStepType::Push],
         _ => {
             if let Some(rlist) = req_steps {
@@ -3335,11 +3342,106 @@ pub fn bus_shim_running(stdout: &str, stderr: &str) -> bool {
     combined.contains("RUNNING")
 }
 
+fn git_current_branch(cwd: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .arg("rev-parse")
+        .arg("--abbrev-ref")
+        .arg("HEAD")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        None
+    } else {
+        Some(branch)
+    }
+}
+
+fn git_repo_clean(cwd: &Path) -> Option<bool> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .arg("status")
+        .arg("--porcelain")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(output.stdout.is_empty())
+}
+
+async fn evaluate_operator_routine_guard(
+    state: &Arc<UiState>,
+    active_scope: &agorg::Agorg,
+    action: &str,
+    req: &DependencyActionRequest,
+) -> std::result::Result<PolicyEvalReport, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot resolve current working directory: {e}"))?;
+    let cwd_canon = canonicalize_path_lossy(&cwd);
+    let roots = scope_roots(active_scope);
+
+    let registry =
+        branch_registry().map_err(|_| "Failed to open repository registry".to_string())?;
+    let mut repos = registry
+        .list_repos(&multi::RepoFilter::default())
+        .map_err(|e| format!("Failed to list repos: {e}"))?;
+    repos.retain(|repo| {
+        let path = canonicalize_path_lossy(&repo.path);
+        path_in_any_root(&path, &roots)
+    });
+    let repo_registered = repos
+        .iter()
+        .any(|r| canonicalize_path_lossy(&r.path) == cwd_canon);
+
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    let cwd_for_lookup = cwd_canon.display().to_string();
+    let effective = gov_store
+        .get_effective_policy_record(active_scope.id, cwd_for_lookup.as_str(), "operator_routine")
+        .await
+        .ok()
+        .flatten()
+        .map(|(p, _)| p.policy_json)
+        .unwrap_or_else(|| {
+            serde_json::to_value(OperatorRoutinePolicy::default()).unwrap_or(json!({}))
+        });
+    let policy: OperatorRoutinePolicy =
+        serde_json::from_value(effective).unwrap_or_else(|_| OperatorRoutinePolicy::default());
+    let exceptions = gov_store
+        .get_effective_exceptions(active_scope.id, "operator_routine")
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let routine_context = OperatorRoutineContext {
+        action: action.to_string(),
+        has_active_scope: true,
+        repo_registered,
+        current_branch: git_current_branch(&cwd_canon),
+        repo_clean: git_repo_clean(&cwd_canon),
+        completed_steps: req.preflight_steps.clone().unwrap_or_default(),
+    };
+    Ok(evaluate_operator_routine_policy(
+        &policy,
+        &routine_context,
+        &exceptions,
+        cwd_for_lookup.as_str(),
+        "UI",
+        Some(active_scope.id),
+    ))
+}
+
 async fn run_dependency_action(
     State(state): State<Arc<UiState>>,
     Json(req): Json<DependencyActionRequest>,
 ) -> Response {
     let action = req.action.trim();
+    let mut active_scope_selected: Option<agorg::Agorg> = None;
     if action.is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "action is required");
     }
@@ -3370,6 +3472,7 @@ async fn run_dependency_action(
                 "No active AGOrg scope selected. Set AGOrg scope before running this action.",
             );
         };
+        active_scope_selected = Some(scope.clone());
         if dependency_action_requires_cwd_scope(action) {
             let cwd = match std::env::current_dir() {
                 Ok(v) => canonicalize_path_lossy(&v),
@@ -3391,6 +3494,29 @@ async fn run_dependency_action(
                     ),
                 );
             }
+        }
+    }
+
+    if matches!(action, "prepush-gate" | "push") {
+        let Some(scope) = active_scope_selected.as_ref() else {
+            return error_response(
+                StatusCode::PRECONDITION_FAILED,
+                "No active AGOrg scope selected. Set AGOrg scope before running this action.",
+            );
+        };
+        let guard = match evaluate_operator_routine_guard(&state, scope, action, &req).await {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err),
+        };
+        if guard.blocked {
+            return Json(json!({
+                "ok": false,
+                "action": action,
+                "exit_code": 1,
+                "error": "operator_routine policy blocked action",
+                "policy_report": guard
+            }))
+            .into_response();
         }
     }
     if action == "db-status" {
@@ -3786,6 +3912,10 @@ async fn run_dependency_action(
             }
         }
         ("repair", _) => run_local_script("./scripts/repair_lock_182.sh --no-gate").await,
+        ("prepush-gate", _) => {
+            run_local_script_streamed("./scripts/prepush_gate.sh", "prepush-gate", &state.events)
+                .await
+        }
         ("bus-start", _) => {
             let res = supervised_start(
                 "ArqonBus (Start)",
@@ -3849,7 +3979,12 @@ async fn run_dependency_action(
                     "branch/remote contains unsupported characters",
                 );
             }
-            run_local_script(&format!("./scripts/push_main.sh {branch} {remote}")).await
+            run_local_script_streamed(
+                &format!("./scripts/push_main.sh {branch} {remote}"),
+                "push",
+                &state.events,
+            )
+            .await
         }
         _ => return error_response(StatusCode::BAD_REQUEST, "unsupported action"),
     };
@@ -3857,13 +3992,37 @@ async fn run_dependency_action(
     match result {
         Ok((status, out, err)) => {
             let ok = status == 0;
-            let body = json!({
+            let mut body = json!({
                 "ok": ok,
                 "action": action,
                 "exit_code": status,
                 "stdout": out,
                 "stderr": err
             });
+            if action == "push" {
+                if let Some(summary) = parse_push_main_summary(
+                    body.get("stdout")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    body.get("stderr")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ) {
+                    body["summary"] = summary;
+                }
+            }
+            if action == "prepush-gate" {
+                if let Some(summary) = parse_prepush_summary(
+                    body.get("stdout")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    body.get("stderr")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ) {
+                    body["summary"] = summary;
+                }
+            }
             let _ = state.events.send(json!({
                 "source": "dependency_action",
                 "action": action,
@@ -3947,7 +4106,13 @@ async fn export_evidence_bundle(
     let manifest = pilot_core::EvidenceBundleManifest {
         bundle_id: stamp.clone(),
         created_at: Utc::now().to_rfc3339(),
-        scope_id: state.agorg_store.get_active_agorg().await.ok().flatten().map(|a| a.id.to_string()),
+        scope_id: state
+            .agorg_store
+            .get_active_agorg()
+            .await
+            .ok()
+            .flatten()
+            .map(|a| a.id.to_string()),
         operator: std::env::var("USER").ok(),
         artifacts,
         chain_integrity: json!({
@@ -4024,7 +4189,8 @@ async fn api_evidence_verify(Json(req): Json<EvidenceVerifyRequest>) -> Response
             "reason_code": "missing_file",
             "details": format!("Bundle file not found: {}", req.path),
             "offending_path": req.path
-        })).into_response();
+        }))
+        .into_response();
     }
 
     let result = pilot_core::verify_evidence_bundle(&path);
@@ -4034,7 +4200,8 @@ async fn api_evidence_verify(Json(req): Json<EvidenceVerifyRequest>) -> Response
         "reason_code": result.reason_code,
         "details": result.details,
         "offending_path": result.offending_path
-    })).into_response()
+    }))
+    .into_response()
 }
 
 async fn run_codex_action(
@@ -4526,15 +4693,15 @@ mod tests {
         agorg_conformance_score, agorg_policy_report_response,
         agorg_reconcile_apply_dry_run_response, agorg_reconcile_apply_success_response,
         append_codex_contract_record, canonical_branch_payload, classify_bus_health,
-        classify_db_health, command_requires_cwd_scope, command_requires_multi_selector,
-        command_request_from_orchestrate_payload,
-        command_requires_mutation, command_scope_required, dependency_action_requires_cwd_scope,
-        dependency_action_scope_required, filter_prune_paths_by_class, is_safe_cli_token,
-        load_persisted_codex_contracts, parse_json_from_mixed_output, payload_has_multi_selector,
-        normalize_orchestrate_payload, orchestrate_is_preview,
-        preflight_steps_from_action, prune_expired_branch_previews, resolve_branch_targets,
-        scope_filter_rows, sorted_unique_ids, sorted_unique_tags, with_event_agorg_scope,
-        BranchMatrixRow, BranchPreviewRecord, BranchRunRequest, CodexContractRecord,
+        classify_db_health, command_request_from_orchestrate_payload, command_requires_cwd_scope,
+        command_requires_multi_selector, command_requires_mutation, command_scope_required,
+        dependency_action_requires_cwd_scope, dependency_action_scope_required,
+        filter_prune_paths_by_class, is_safe_cli_token, load_persisted_codex_contracts,
+        normalize_orchestrate_payload, orchestrate_is_preview, parse_json_from_mixed_output,
+        payload_has_multi_selector, preflight_steps_from_action, prune_expired_branch_previews,
+        resolve_branch_targets, scope_filter_rows, sorted_unique_ids, sorted_unique_tags,
+        with_event_agorg_scope, BranchMatrixRow, BranchPreviewRecord, BranchRunRequest,
+        CodexContractRecord,
     };
     use crate::agorg::{AgorgReconcileIssue, AgorgReconcileReport};
     use crate::db_runtime::DbStatus;
@@ -4575,10 +4742,14 @@ mod tests {
 
     #[test]
     fn test_orchestrate_preview_detection() {
-        assert!(orchestrate_is_preview(&json!({"dry_run": true, "action": "sync"})));
+        assert!(orchestrate_is_preview(
+            &json!({"dry_run": true, "action": "sync"})
+        ));
         assert!(orchestrate_is_preview(&json!({"action": "status"})));
         assert!(orchestrate_is_preview(&json!({"action": "hook-policy"})));
-        assert!(!orchestrate_is_preview(&json!({"action": "sync", "dry_run": false})));
+        assert!(!orchestrate_is_preview(
+            &json!({"action": "sync", "dry_run": false})
+        ));
     }
 
     #[test]
@@ -4598,7 +4769,10 @@ mod tests {
         }))
         .expect("multi.status alias should map");
         assert_eq!(req.command, "pilot.multi.status");
-        assert_eq!(req.payload.get("group").and_then(Value::as_str), Some("core"));
+        assert_eq!(
+            req.payload.get("group").and_then(Value::as_str),
+            Some("core")
+        );
 
         let dag_req = command_request_from_orchestrate_payload(json!({
             "action": "dag.evaluate",
@@ -4607,7 +4781,10 @@ mod tests {
         }))
         .expect("dag.evaluate alias should map");
         assert_eq!(dag_req.command, "pilot.multi.dag");
-        assert_eq!(dag_req.payload.get("dry_run").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            dag_req.payload.get("dry_run").and_then(Value::as_bool),
+            Some(true)
+        );
 
         let heal_req = command_request_from_orchestrate_payload(json!({
             "action": "heal.plan"
@@ -4624,6 +4801,7 @@ mod tests {
     fn test_scope_dependency_action_classification() {
         assert!(dependency_action_scope_required("policy"));
         assert!(dependency_action_scope_required("gate"));
+        assert!(dependency_action_scope_required("prepush-gate"));
         assert!(dependency_action_scope_required("push"));
         assert!(!dependency_action_scope_required("db-status"));
         assert!(!dependency_action_scope_required("services-start"));
@@ -5793,6 +5971,137 @@ pub async fn run_local_script(cmd: &str) -> std::io::Result<(i32, String, String
     Ok((code, out, err))
 }
 
+async fn read_stream_lines<R>(
+    reader: R,
+    action: &str,
+    stream: &str,
+    events: &broadcast::Sender<Value>,
+) -> String
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    let mut buf = String::new();
+    while let Ok(Some(line)) = lines.next_line().await {
+        buf.push_str(&line);
+        buf.push('\n');
+        let _ = events.send(json!({
+            "source": "dependency_action_progress",
+            "action": action,
+            "stream": stream,
+            "line": line
+        }));
+    }
+    buf
+}
+
+async fn run_local_script_streamed(
+    cmd: &str,
+    action: &str,
+    events: &broadcast::Sender<Value>,
+) -> std::io::Result<(i32, String, String)> {
+    let mut path = std::env::var("PATH").unwrap_or_default();
+    if path.is_empty() {
+        path = "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin".to_string();
+    }
+    for extra in [
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/local/sbin",
+        "/usr/sbin",
+        "/sbin",
+    ] {
+        let needle = format!("{extra}:");
+        if !path.starts_with(extra) && !path.contains(&needle) && !path.ends_with(extra) {
+            path.push(':');
+            path.push_str(extra);
+        }
+    }
+
+    let mut child = TokioCommand::new("bash")
+        .arg("--noprofile")
+        .arg("--norc")
+        .arg("-lc")
+        .arg(cmd)
+        .env("PATH", path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    let stdout = child.stdout.take().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::Other, "failed to capture stdout")
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::Other, "failed to capture stderr")
+    })?;
+
+    let action_out = action.to_string();
+    let action_err = action.to_string();
+    let events_out = events.clone();
+    let events_err = events.clone();
+    let out_task = tokio::spawn(async move {
+        read_stream_lines(stdout, &action_out, "stdout", &events_out).await
+    });
+    let err_task =
+        tokio::spawn(async move { read_stream_lines(stderr, &action_err, "stderr", &events_err).await });
+
+    let status = child.wait().await?;
+    let out = out_task.await.unwrap_or_default();
+    let err = err_task.await.unwrap_or_default();
+    let code = status.code().unwrap_or(-1);
+    Ok((code, out, err))
+}
+
+fn parse_push_main_summary(stdout: &str, stderr: &str) -> Option<Value> {
+    let combined = format!("{stdout}\n{stderr}");
+    let mut in_block = false;
+    let mut summary = serde_json::Map::new();
+    for raw in combined.lines() {
+        let line = raw.trim();
+        if line == "========== push_main summary ==========" {
+            in_block = true;
+            continue;
+        }
+        if line == "=======================================" {
+            break;
+        }
+        if !in_block {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            summary.insert(k.trim().to_string(), Value::String(v.trim().to_string()));
+        }
+    }
+    if summary.is_empty() {
+        None
+    } else {
+        Some(Value::Object(summary))
+    }
+}
+
+fn parse_prepush_summary(stdout: &str, stderr: &str) -> Option<Value> {
+    let combined = format!("{stdout}\n{stderr}");
+    let mut status = None::<String>;
+    let mut log_file = None::<String>;
+    for raw in combined.lines() {
+        let line = raw.trim();
+        if let Some(rest) = line.strip_prefix("[pre-push] status:") {
+            status = Some(rest.trim().to_string());
+        }
+        if let Some(rest) = line.strip_prefix("[pre-push] log file:") {
+            log_file = Some(rest.trim().to_string());
+        }
+    }
+    if status.is_none() && log_file.is_none() {
+        return None;
+    }
+    Some(json!({
+        "status": status.unwrap_or_else(|| "unknown".to_string()),
+        "log_file": log_file
+    }))
+}
+
 fn read_recent_gate_logs(limit: usize, tail_bytes: usize) -> std::io::Result<Vec<Value>> {
     let mut roots = Vec::new();
     roots.push(reports_root());
@@ -6009,7 +6318,7 @@ fn command_requires_cwd_scope(command: &str) -> bool {
 fn dependency_action_scope_required(action: &str) -> bool {
     matches!(
         action,
-        "policy" | "hook-policy" | "drift" | "gate" | "repair" | "push"
+        "policy" | "hook-policy" | "drift" | "gate" | "prepush-gate" | "repair" | "push"
     )
 }
 
@@ -8085,6 +8394,7 @@ Recommended flow:
           <option value="security">Security & Secrets</option>
           <option value="quality">Code Quality</option>
           <option value="runtime">Runtime Env</option>
+          <option value="operator_routine">Operator Routine</option>
         </select>
 
         <label class="field-label" for="settings-policy-target">Target AGO (Leave blank for AGOrg level)</label>
@@ -8172,6 +8482,7 @@ Recommended flow:
             <option value="security">Security & Secrets</option>
             <option value="quality">Code Quality</option>
             <option value="runtime">Runtime Env</option>
+            <option value="operator_routine">Operator Routine</option>
           </select>
           <button class="btn secondary" onclick="settingsLoadOverrides()">Refresh Overrides</button>
         </div>
@@ -8419,22 +8730,39 @@ async fn api_settings_simulate_policy(
     axum::extract::Path(params): axum::extract::Path<PolicyPathParams>,
     Json(req): Json<SimulatePolicyRequest>,
 ) -> Response {
-    if params.kind != "branch" {
+    if !matches!(
+        params.kind.as_str(),
+        "branch"
+            | "dependency"
+            | "release"
+            | "security"
+            | "quality"
+            | "runtime"
+            | "operator_routine"
+    ) {
         return error_response(
             StatusCode::BAD_REQUEST,
-            "Simulation only supported for branch policy currently",
+            "Simulation supports branch, dependency, release, security, quality, runtime, operator_routine policies",
         );
     }
-
-    let policy: BranchPolicy = match serde_json::from_value(req.policy_json.clone()) {
-        Ok(p) => p,
-        Err(e) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                &format!("Invalid policy JSON: {}", e),
-            )
+    let policy_parse_ok = match params.kind.as_str() {
+        "branch" => serde_json::from_value::<BranchPolicy>(req.policy_json.clone()).is_ok(),
+        "dependency" => serde_json::from_value::<DependencyPolicy>(req.policy_json.clone()).is_ok(),
+        "release" => serde_json::from_value::<ReleasePolicy>(req.policy_json.clone()).is_ok(),
+        "security" => serde_json::from_value::<SecurityPolicy>(req.policy_json.clone()).is_ok(),
+        "quality" => serde_json::from_value::<QualityPolicy>(req.policy_json.clone()).is_ok(),
+        "runtime" => serde_json::from_value::<RuntimePolicy>(req.policy_json.clone()).is_ok(),
+        "operator_routine" => {
+            serde_json::from_value::<OperatorRoutinePolicy>(req.policy_json.clone()).is_ok()
         }
+        _ => false,
     };
+    if !policy_parse_ok {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid policy JSON for selected policy kind",
+        );
+    }
 
     let active_scope = match state.agorg_store.get_active_agorg().await {
         Ok(Some(v)) => v,
@@ -8469,7 +8797,10 @@ async fn api_settings_simulate_policy(
     }
 
     let gov_store = GovernanceStore::new(state.agorg_store.dsn());
-    let exceptions = match gov_store.get_exceptions(active_scope.id, "branch").await {
+    let exceptions = match gov_store
+        .get_exceptions(active_scope.id, &params.kind)
+        .await
+    {
         Ok(v) => v,
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
@@ -8481,15 +8812,106 @@ async fn api_settings_simulate_policy(
     let evaluations: Vec<Value> = statuses
         .iter()
         .map(|st| {
-            let report = evaluate_branch_policy(
-                &policy,
-                "create",
-                &st.current_branch,
-                &exceptions,
-                &st.path,
-                "AGOrg",
-                Some(active_scope.id),
-            );
+            let report = match params.kind.as_str() {
+                "branch" => match serde_json::from_value::<BranchPolicy>(req.policy_json.clone()) {
+                    Ok(policy) => evaluate_branch_policy(
+                        &policy,
+                        "create",
+                        &st.current_branch,
+                        &exceptions,
+                        &st.path,
+                        "AGOrg",
+                        Some(active_scope.id),
+                    ),
+                    Err(_) => PolicyEvalReport::default(),
+                },
+                "dependency" => {
+                    match serde_json::from_value::<DependencyPolicy>(req.policy_json.clone()) {
+                        Ok(policy) => evaluate_dependency_policy(
+                            &policy,
+                            Path::new(&st.path),
+                            &exceptions,
+                            &st.path,
+                            "AGOrg",
+                            Some(active_scope.id),
+                        ),
+                        Err(_) => PolicyEvalReport::default(),
+                    }
+                }
+                "release" => match serde_json::from_value::<ReleasePolicy>(req.policy_json.clone())
+                {
+                    Ok(policy) => evaluate_release_policy(
+                        &policy,
+                        Path::new(&st.path),
+                        &exceptions,
+                        &st.path,
+                        "AGOrg",
+                        Some(active_scope.id),
+                    ),
+                    Err(_) => PolicyEvalReport::default(),
+                },
+                "security" => {
+                    match serde_json::from_value::<SecurityPolicy>(req.policy_json.clone()) {
+                        Ok(policy) => evaluate_security_policy(
+                            &policy,
+                            Path::new(&st.path),
+                            &exceptions,
+                            &st.path,
+                            "AGOrg",
+                            Some(active_scope.id),
+                        ),
+                        Err(_) => PolicyEvalReport::default(),
+                    }
+                }
+                "quality" => match serde_json::from_value::<QualityPolicy>(req.policy_json.clone())
+                {
+                    Ok(policy) => evaluate_quality_policy(
+                        &policy,
+                        Path::new(&st.path),
+                        &exceptions,
+                        &st.path,
+                        "AGOrg",
+                        Some(active_scope.id),
+                    ),
+                    Err(_) => PolicyEvalReport::default(),
+                },
+                "runtime" => match serde_json::from_value::<RuntimePolicy>(req.policy_json.clone())
+                {
+                    Ok(policy) => evaluate_runtime_policy(
+                        &policy,
+                        Path::new(&st.path),
+                        &exceptions,
+                        &st.path,
+                        "AGOrg",
+                        Some(active_scope.id),
+                    ),
+                    Err(_) => PolicyEvalReport::default(),
+                },
+                "operator_routine" => {
+                    match serde_json::from_value::<OperatorRoutinePolicy>(req.policy_json.clone()) {
+                        Ok(policy) => {
+                            let context = OperatorRoutineContext {
+                                action: "push".to_string(),
+                                has_active_scope: true,
+                                repo_registered: true,
+                                current_branch: Some(st.current_branch.clone()),
+                                repo_clean: git_repo_clean(Path::new(&st.path)),
+                                completed_steps: vec![],
+                            };
+                            evaluate_operator_routine_policy(
+                                &policy,
+                                &context,
+                                &exceptions,
+                                &st.path,
+                                "AGOrg",
+                                Some(active_scope.id),
+                            )
+                        }
+                        Err(_) => PolicyEvalReport::default(),
+                    }
+                }
+                _ => PolicyEvalReport::default(),
+            };
             violations += report.violations.len();
             warnings += report.warnings.len();
             if report.blocked {
@@ -8782,10 +9204,11 @@ async fn api_settings_compliance_scan(
         && req.kind != "security"
         && req.kind != "quality"
         && req.kind != "runtime"
+        && req.kind != "operator_routine"
     {
         return error_response(
             StatusCode::BAD_REQUEST,
-            "Compliance scan supports branch, dependency, release, security, quality, runtime policies",
+            "Compliance scan supports branch, dependency, release, security, quality, runtime, operator_routine policies",
         );
     }
 
@@ -8836,6 +9259,7 @@ async fn api_settings_compliance_scan(
         "security" => serde_json::to_value(SecurityPolicy::default()),
         "quality" => serde_json::to_value(QualityPolicy::default()),
         "runtime" => serde_json::to_value(RuntimePolicy::default()),
+        "operator_routine" => serde_json::to_value(OperatorRoutinePolicy::default()),
         _ => serde_json::to_value(BranchPolicy::default()),
     }
     .unwrap_or(json!({}));
@@ -8947,6 +9371,26 @@ async fn api_settings_compliance_scan(
                     source_id,
                 )
             }
+            "operator_routine" => {
+                let policy: OperatorRoutinePolicy =
+                    serde_json::from_value(policy_json).unwrap_or_default();
+                let context = OperatorRoutineContext {
+                    action: "push".to_string(),
+                    has_active_scope: true,
+                    repo_registered: true,
+                    current_branch: Some(st.current_branch.clone()),
+                    repo_clean: git_repo_clean(path),
+                    completed_steps: vec![],
+                };
+                evaluate_operator_routine_policy(
+                    &policy,
+                    &context,
+                    &exceptions,
+                    &repo_path_str,
+                    &source_name,
+                    source_id,
+                )
+            }
             _ => PolicyEvalReport::default(),
         };
 
@@ -9051,6 +9495,7 @@ async fn api_settings_policy_resolve(
                     "security" => serde_json::to_value(SecurityPolicy::default()),
                     "quality" => serde_json::to_value(QualityPolicy::default()),
                     "runtime" => serde_json::to_value(RuntimePolicy::default()),
+                    "operator_routine" => serde_json::to_value(OperatorRoutinePolicy::default()),
                     _ => serde_json::to_value(BranchPolicy::default()),
                 }
                 .unwrap_or(json!({})),
@@ -9103,17 +9548,15 @@ async fn api_orchestrate_run(
                 json!({"ok": false, "error": "Invalid dependency payload format"})
             }
         }
-        "command" => {
-            match command_request_from_orchestrate_payload(payload) {
-                Ok(cmd_req) => {
-                    let resp = run_command(State(state), Json(cmd_req)).await;
-                    extract_json_body(resp).await
-                }
-                Err(err) => {
-                    json!({"ok": false, "error": err})
-                }
+        "command" => match command_request_from_orchestrate_payload(payload) {
+            Ok(cmd_req) => {
+                let resp = run_command(State(state), Json(cmd_req)).await;
+                extract_json_body(resp).await
             }
-        }
+            Err(err) => {
+                json!({"ok": false, "error": err})
+            }
+        },
         other => json!({
             "ok": false,
             "error": format!("Unknown orchestrator domain: {other}")
@@ -9121,7 +9564,11 @@ async fn api_orchestrate_run(
     };
 
     let envelope = wrap_as_envelope(&req.domain, stage, inner_response);
-    (StatusCode::OK, Json(serde_json::to_value(&envelope).unwrap_or_default())).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(&envelope).unwrap_or_default()),
+    )
+        .into_response()
 }
 
 /// P5: Return current orchestration graph step-status (stateless — always returns schema info).
@@ -9142,5 +9589,6 @@ async fn extract_json_body(resp: Response) -> Value {
     let bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
         .await
         .unwrap_or_default();
-    serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({"ok": false, "error": "non-JSON body"}))
+    serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| json!({"ok": false, "error": "non-JSON body"}))
 }
