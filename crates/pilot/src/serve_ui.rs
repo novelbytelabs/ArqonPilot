@@ -740,6 +740,8 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/dependencies/run", post(run_dependency_action))
         .route("/api/dependencies/logs", get(get_dependency_logs))
         .route("/api/branch/matrix", post(api_branch_matrix))
+        .route("/api/multi/selectors", get(api_multi_selectors))
+        .route("/api/multi/registry_stats", get(api_multi_registry_stats))
         .route("/api/branch/run", post(api_branch_run))
         .route(
             "/api/branch/conflict-radar",
@@ -1379,6 +1381,118 @@ fn scope_roots(scope: &agorg::Agorg) -> Vec<PathBuf> {
 
 fn path_in_any_root(path: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| path_is_within(path, root))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct MultiRegistryStatsQuery {
+    group: Option<String>,
+    tags: Option<String>,
+}
+
+async fn api_multi_selectors(State(state): State<Arc<UiState>>) -> Response {
+    let scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let registry = match branch_registry() {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let roots = scope_roots(&scope);
+    let repos = match registry.list_repos(&multi::RepoFilter::default()) {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+
+    let mut groups: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut tags: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for repo in repos {
+        let path = canonicalize_path_lossy(&repo.path);
+        if !path_in_any_root(&path, &roots) {
+            continue;
+        }
+        if let Some(group) = repo.group_name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            groups.insert(group.to_string());
+        }
+        for tag in repo.tags {
+            let t = tag.trim();
+            if !t.is_empty() {
+                tags.insert(t.to_string());
+            }
+        }
+    }
+    Json(json!({
+        "ok": true,
+        "groups": groups.into_iter().collect::<Vec<_>>(),
+        "tags": tags.into_iter().collect::<Vec<_>>()
+    }))
+    .into_response()
+}
+
+async fn api_multi_registry_stats(
+    State(state): State<Arc<UiState>>,
+    Query(query): Query<MultiRegistryStatsQuery>,
+) -> Response {
+    let scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let registry = match branch_registry() {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let roots = scope_roots(&scope);
+    let all = match registry.list_repos(&multi::RepoFilter::default()) {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    let in_scope_total = all
+        .iter()
+        .filter(|repo| {
+            let path = canonicalize_path_lossy(&repo.path);
+            path_in_any_root(&path, &roots)
+        })
+        .count();
+
+    let tags: Vec<String> = query
+        .tags
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    let group = query.group.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    let filtered = if group.is_some() || !tags.is_empty() {
+        let repos = match registry.list_repos(&multi::RepoFilter {
+            group: group.map(ToString::to_string),
+            tags: tags.clone(),
+        }) {
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+        };
+        repos
+            .into_iter()
+            .filter(|repo| {
+                let path = canonicalize_path_lossy(&repo.path);
+                path_in_any_root(&path, &roots)
+            })
+            .count()
+    } else {
+        in_scope_total
+    };
+
+    Json(json!({
+        "ok": true,
+        "total_registered": all.len(),
+        "in_scope_total": in_scope_total,
+        "filtered_count": filtered,
+        "group": group,
+        "tags": tags
+    }))
+    .into_response()
 }
 
 fn collect_agos_from_tree(nodes: &[agorg::AgorgTreeNode], out: &mut Vec<agorg::AgoRecord>) {
@@ -8313,82 +8427,51 @@ Recommended flow:
   <section class="panel" id="multi">
     <div id="multi-empty-state" class="empty-state-notice" aria-live="polite"></div>
     <div class="sequence-strip">
-      <span class="seq-step">Register</span>
-      <span class="seq-step">List -> Status -> Order</span>
+      <button class="seq-step seq-step-btn" onclick="multiMacroListStatusOrder()" title="Run List, then Status, then Order with visible 3-second pauses.">List > Status > Order</button>
       <span class="seq-step">DAG -> PR Plan</span>
       <span class="seq-step">Staged Apply (Dry Run -> Execute)</span>
     </div>
     <div class="grid">
       <div class="card">
-        <h3>Register Repo</h3>
-        <div class="helper">Register each repository once, then target groups/tags for all multi-repo operations below.</div>
-        
-        <div class="form-row">
-          <div class="form-label">Path</div>
-          <div class="form-content">
-            <input id="repo-path" placeholder="/path/to/repo" />
-            <button class="btn secondary" style="padding: 9px 12px;" onclick="browseRepoPath()">Browse</button>
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-label">Name</div>
-          <div class="form-content">
-            <input id="repo-name" placeholder="ArqonContinuum" />
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-label">Group</div>
-          <div class="form-content">
-            <input id="repo-group" placeholder="core" />
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-label">Tags</div>
-          <div class="form-content">
-            <input id="repo-tags" placeholder="apply-pilot,wave7" />
-          </div>
-        </div>
-
-        <button class="btn" onclick="multiRegister()">Register</button>
-        <div id="multi-register-actions" class="row" style="margin-top: 12px; display: none; justify-content: flex-end;">
-          <button class="btn secondary" style="padding: 4px 8px; font-size: 0.65rem;" onclick="copyMultiRegister()">Copy</button>
-          <button class="btn secondary" style="padding: 4px 8px; font-size: 0.65rem;" onclick="clearMultiRegister()">Clear</button>
-        </div>
-        <pre id="multi-register-out" class="term-out" style="display:none;"></pre>
-      </div>
-      <div class="card">
         <h3>List / Status / Order / DAG / PR Plan</h3>
-        <div class="helper" id="multi-list-helper">Run in this order when uncertain: `List` -> `Status` -> `Order` -> `DAG` -> `PR Plan`.</div>
-        <div class="helper">Registry snapshot auto-loads when this tab opens and after successful Register.</div>
-        <pre id="multi-registry-out" class="term-out" style="margin-bottom:12px;">Loading registry...</pre>
+        <div class="helper" id="multi-list-helper"></div>
         <div class="chip-row">
+          <span id="multi-registry-chip" class="chip neutral" tabindex="0" role="status">Registry: --</span>
           <span id="multi-dag-chip" class="chip neutral" tabindex="0" role="status">DAG: idle</span>
         </div>
 
         <div class="form-row">
           <div class="form-label">Group</div>
           <div class="form-content">
-            <input id="multi-group" placeholder="core" />
+            <input id="multi-group" list="multi-group-options" placeholder="core" />
+            <datalist id="multi-group-options"></datalist>
           </div>
         </div>
 
         <div class="form-row">
           <div class="form-label">Tags</div>
           <div class="form-content">
-            <input id="multi-tags" placeholder="apply-pilot,wave7" />
+            <input id="multi-tags" list="multi-tag-options" placeholder="apply-pilot,wave7" />
+            <datalist id="multi-tag-options"></datalist>
           </div>
         </div>
 
         <div class="row">
-          <button class="btn secondary" onclick="multiList()" aria-describedby="multi-list-helper">List</button>
-          <button class="btn secondary" onclick="multiStatus()">Status</button>
-          <button class="btn secondary" onclick="multiOrder()">Order</button>
+          <button id="multi-list-btn" class="btn secondary" onclick="multiList()" aria-describedby="multi-list-helper">List</button>
+          <button id="multi-status-btn" class="btn secondary" onclick="multiStatus()">Status</button>
+          <button id="multi-order-btn" class="btn secondary" onclick="multiOrder()">Order</button>
           <button id="multi-dag-btn" class="btn secondary" onclick="multiDag()">DAG</button>
         </div>
         <button class="btn" onclick="multiPrsCreate()">PR Plan (Dry Run)</button>
+        <div class="pre-wrap" style="margin-top:12px;">
+          <div class="pre-actions">
+            <button id="multi-output-html" class="action-btn" onclick="multiSetOutputMode('html')">HTML</button>
+            <button id="multi-output-json" class="action-btn" onclick="multiSetOutputMode('json')">JSON</button>
+            <button class="action-btn" onclick="copyToClipboard('multi-action-out', this)">COPY</button>
+            <button class="action-btn" onclick="clearElement('multi-action-out')">CLEAR</button>
+          </div>
+          <pre id="multi-action-out" class="term-out">ready</pre>
+        </div>
       </div>
       <div class="card">
         <h3>Staged Apply (Dependency-Aware)</h3>
@@ -8475,6 +8558,7 @@ Recommended flow:
       <div class="sub-tabs" style="margin-top:10px;">
         <button class="sub-tab active" onclick="activateSubPanel('agorg-onboarding-panel', this)">ONBOARDING</button>
         <button class="sub-tab" onclick="activateSubPanel('agorg-governance-panel', this)">GOVERNANCE</button>
+        <button class="sub-tab" onclick="activateSubPanel('agorg-repo-registry-panel', this)">REPO REGISTRY</button>
       </div>
 
       <!-- Sub-Panel: Onboarding -->
@@ -8554,6 +8638,49 @@ Recommended flow:
             <select id="agorg-policy-report-select"></select>
             <button class="btn secondary" onclick="agorgOpenPolicyReport()">Open</button>
           </div>
+        </div>
+      </div>
+
+      <!-- Sub-Panel: Repo Registry -->
+      <div id="agorg-repo-registry-panel" class="sub-panel">
+        <div class="helper">Register repositories once under the active AGOrg, then use Group/Tags in Multi for orchestration.</div>
+        <div class="section-box" style="margin-top:16px;">
+          <h4>REGISTER REPO</h4>
+          <div class="form-row">
+            <div class="form-label">Path</div>
+            <div class="form-content">
+              <input id="repo-path" placeholder="/path/to/repo" />
+              <button class="btn secondary" style="padding: 9px 12px;" onclick="browseRepoPath()">Browse</button>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-label">Name</div>
+            <div class="form-content">
+              <input id="repo-name" placeholder="ArqonPilot" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-label">Group</div>
+            <div class="form-content">
+              <input id="repo-group" placeholder="core" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-label">Tags</div>
+            <div class="form-content">
+              <input id="repo-tags" placeholder="apply-pilot,wave7" />
+            </div>
+          </div>
+
+          <button class="btn" onclick="multiRegister()">Register</button>
+          <div id="multi-register-actions" class="row" style="margin-top: 12px; display: none; justify-content: flex-end;">
+            <button class="btn secondary" style="padding: 4px 8px; font-size: 0.65rem;" onclick="copyMultiRegister()">Copy</button>
+            <button class="btn secondary" style="padding: 4px 8px; font-size: 0.65rem;" onclick="clearMultiRegister()">Clear</button>
+          </div>
+          <pre id="multi-register-out" class="term-out" style="display:none;"></pre>
         </div>
       </div>
 

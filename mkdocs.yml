@@ -43,6 +43,9 @@ nav:
       - PRODUCTIONIZE: "PRODUCTIONIZE.md"
       - Productionize Value: "productionize-value.md"
   - Federated CI Program:
+      - Master Program: "project_plan_pilot_federated_ci_program.md"
+      - Control Plane Detail: "project_plan_ci_cd_control_plane.md"
+      - Orchestrator Detail: "project_plan_pilot_ci_orchestrator.md"
       - Plan: "federated-ci-program-plan.md"
       - Value: "federated-ci-program-value.md"
   - Governance & Policy:
@@ -63,6 +66,10 @@ nav:
   - Integration & Architecture:
       - Arqon Bus Integration: "bus-integration-guide.md"
       - Pilot Oracle Reflex Analysis: "pilot-oracle-reflex-analysis.md"
+  - Vision:
+      - Pilot Vision Alignment: "pilot_vision_alignment.md"
+      - Vision: "vision.md"
+      - Plan: "plan.md"
   - Policies & Standards:
       - Channel Policy: "channel-policy.md"
       - Compatibility Matrix: "compatibility-matrix.md"
@@ -76,7 +83,7 @@ nav:
       - Developer Guide: "developer-guide.md"
   - Tutorials:
       - AGOrg Interface: "tutorial/agorg-interface.md"
-      - Pilot for Pilot Tutorial: "pilot-for-pilot-tutorial.md"
+      - Pilot for Pilot Tutorial: "tutorial/pilot-for-pilot-tutorial.md"
   - FC Artifacts:
       - Context Verification: "fc1_artifacts/context_verification.md"
       - FC2 Hardclose: "fc1_artifacts/fc2_hardclose.md"

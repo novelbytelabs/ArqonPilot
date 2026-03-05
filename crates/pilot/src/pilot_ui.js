@@ -74,7 +74,15 @@ const depDriftStatus = document.getElementById('dep-drift-status');
 const agorgRegistryList = document.getElementById('agorg-registry-list');
 const agorgActiveDetails = document.getElementById('agorg-active-details');
 const agorgActivityLog = document.getElementById('agorg-activity-log');
-const multiRegistryOut = document.getElementById('multi-registry-out');
+const multiRegistryChip = document.getElementById('multi-registry-chip');
+const multiActionOut = document.getElementById('multi-action-out');
+const multiGroupOptions = document.getElementById('multi-group-options');
+const multiTagOptions = document.getElementById('multi-tag-options');
+const multiOutputHtmlBtn = document.getElementById('multi-output-html');
+const multiOutputJsonBtn = document.getElementById('multi-output-json');
+const multiListBtn = document.getElementById('multi-list-btn');
+const multiStatusBtn = document.getElementById('multi-status-btn');
+const multiOrderBtn = document.getElementById('multi-order-btn');
 
 function logActivity(title, data) {
   if (!agorgActivityLog) return;
@@ -269,6 +277,9 @@ let agorgReconcileState = { report: null, dryRunTokenByClass: {} };
 const AGORG_CACHE_TTL_MS = 8000;
 const BRANCH_LOG_LIMIT_KEY = 'pilot.branch.log.limit.v1';
 let agorgDefaultScopeCandidate = null;
+let multiOutputMode = 'html';
+let multiActionLast = null;
+let multiMacroRunning = false;
 
 function activatePanel(tabName, opts = {}) {
   const persist = opts.persist !== false;
@@ -297,6 +308,10 @@ function activatePanel(tabName, opts = {}) {
       settingsReloadPolicyControls();
       settingsLoadExceptions();
     });
+  }
+  if (tabName === 'multi') {
+    multiLoadSelectorOptions();
+    multiRefreshRegistry();
   }
   if (['oracle', 'heal', 'dependencies', 'multi'].includes(tabName)) {
     fetchJsonSafe('/api/agorg/active').then(res => {
@@ -3444,6 +3459,7 @@ async function multiRegister() {
   }, { outputEl: outputEl });
   if (res && res.ok) {
     multiRefreshRegistry();
+    multiLoadSelectorOptions();
   }
 }
 
@@ -3468,57 +3484,177 @@ function clearMultiRegister() {
   }
   if (actionsEl) actionsEl.style.display = 'none';
 }
+
+function multiScopeSelector() {
+  const group = (document.getElementById('multi-group').value || '').trim();
+  const selectedTags = tags(document.getElementById('multi-tags').value);
+  if (!group && selectedTags.length === 0) {
+    const message = {
+      ok: false,
+      error: 'Scope required: set Group or Tags before running Multi actions.',
+      hint: 'Example: group=core OR tags=apply-pilot',
+      source: 'multi_ui_guard'
+    };
+    multiActionLast = { command: 'multi.scope', data: message };
+    multiRenderActionOutput();
+    return null;
+  }
+  return {
+    group: group || null,
+    tags: selectedTags
+  };
+}
+
+function multiSetOutputMode(mode) {
+  multiOutputMode = mode === 'json' ? 'json' : 'html';
+  if (multiOutputHtmlBtn) multiOutputHtmlBtn.classList.toggle('active', multiOutputMode === 'html');
+  if (multiOutputJsonBtn) multiOutputJsonBtn.classList.toggle('active', multiOutputMode === 'json');
+  multiRenderActionOutput();
+}
+
+function multiRenderActionOutput() {
+  if (!multiActionOut) return;
+  if (!multiActionLast) {
+    multiActionOut.textContent = 'ready';
+    return;
+  }
+  const { command, data } = multiActionLast;
+  if (multiOutputMode === 'json') {
+    multiActionOut.textContent = JSON.stringify(data, null, 2);
+    return;
+  }
+  multiActionOut.textContent = formatMultiOutput(command, data);
+}
+
+function formatMultiOutput(command, data) {
+  const envSummary = data?.summary || '';
+  const inner = data?.inner?.response?.response || null;
+  const innerSummary = inner?.summary || '';
+  const ok = !!(data?.ok);
+  const status = ok ? 'SUCCESS' : 'FAILED';
+  const lines = [];
+  lines.push(`Command: ${command}`);
+  lines.push(`Status: ${status}`);
+  if (innerSummary) lines.push(`Summary: ${innerSummary}`);
+  else if (envSummary) lines.push(`Summary: ${envSummary}`);
+  if (!ok) {
+    lines.push(`Error: ${data?.error || data?.inner?.error || 'Unknown error'}`);
+  }
+  return lines.join('\n');
+}
+
+function runMultiCommand(command, payload, opts = {}) {
+  const outputEl = opts.outputEl || multiActionOut || out;
+  return run(command, payload, {
+    ...opts,
+    outputEl
+  }).then((data) => {
+    multiActionLast = { command, data };
+    multiRenderActionOutput();
+    return data;
+  });
+}
+
 function multiList() {
-  run('pilot.multi.list', { group: document.getElementById('multi-group').value || null, tags: tags(document.getElementById('multi-tags').value) });
+  const scope = multiScopeSelector();
+  if (!scope) return;
+  return runMultiCommand('pilot.multi.list', scope, { outputEl: multiActionOut });
 }
 
 function multiRefreshRegistry() {
-  if (!multiRegistryOut) return;
-  run('pilot.multi.list', {
-    group: null,
-    tags: []
-  }, {
-    outputEl: multiRegistryOut,
-    mirrorDashboard: false
+  if (!multiRegistryChip) return;
+  const group = (document.getElementById('multi-group')?.value || '').trim();
+  const selectedTags = tags(document.getElementById('multi-tags')?.value || '');
+  let url = '/api/multi/registry_stats';
+  const params = [];
+  if (group) params.push(`group=${encodeURIComponent(group)}`);
+  if (selectedTags.length > 0) params.push(`tags=${encodeURIComponent(selectedTags.join(','))}`);
+  if (params.length) url += `?${params.join('&')}`;
+  fetchJsonSafe(url).then((data) => {
+    if (!data || data.ok === false) {
+      multiRegistryChip.textContent = 'Registry: error';
+      multiRegistryChip.className = 'chip warn';
+      multiRegistryChip.title = data?.error || 'Failed to load registry stats';
+      return;
+    }
+    const filtered = Number.isFinite(data.filtered_count) ? data.filtered_count : 0;
+    const total = Number.isFinite(data.in_scope_total) ? data.in_scope_total : 0;
+    multiRegistryChip.textContent = `Registry: selected ${filtered} / scope ${total}`;
+    multiRegistryChip.className = filtered > 0 ? 'chip success' : 'chip warn';
+    multiRegistryChip.title = `Filtered in-scope repos: ${filtered} | In-scope total: ${total} | Global total: ${data.total_registered ?? 0}`;
+  }).catch((err) => {
+    multiRegistryChip.textContent = 'Registry: error';
+    multiRegistryChip.className = 'chip warn';
+    multiRegistryChip.title = err?.message || 'Failed to load registry stats';
   });
 }
+
+function multiLoadSelectorOptions() {
+  fetchJsonSafe('/api/multi/selectors').then((data) => {
+    if (!data || data.ok === false) return;
+    if (multiGroupOptions) {
+      multiGroupOptions.innerHTML = '';
+      (Array.isArray(data.groups) ? data.groups : []).forEach((g) => {
+        const opt = document.createElement('option');
+        opt.value = g;
+        multiGroupOptions.appendChild(opt);
+      });
+    }
+    if (multiTagOptions) {
+      multiTagOptions.innerHTML = '';
+      (Array.isArray(data.tags) ? data.tags : []).forEach((t) => {
+        const opt = document.createElement('option');
+        opt.value = t;
+        multiTagOptions.appendChild(opt);
+      });
+    }
+  }).catch(() => {});
+}
 function multiStatus() {
-  run('pilot.multi.status', { group: document.getElementById('multi-group').value || null, tags: tags(document.getElementById('multi-tags').value) });
+  const scope = multiScopeSelector();
+  if (!scope) return;
+  return runMultiCommand('pilot.multi.status', scope, { outputEl: multiActionOut });
 }
 function multiOrder() {
-  run('pilot.multi.order', { group: document.getElementById('multi-group').value || null, tags: tags(document.getElementById('multi-tags').value) });
+  const scope = multiScopeSelector();
+  if (!scope) return;
+  return runMultiCommand('pilot.multi.order', scope, { outputEl: multiActionOut });
 }
 function multiDag() {
-  run('pilot.multi.dag', {
-    group: document.getElementById('multi-group').value || null,
-    tags: tags(document.getElementById('multi-tags').value),
+  const scope = multiScopeSelector();
+  if (!scope) return;
+  return runMultiCommand('pilot.multi.dag', {
+    ...scope,
     dry_run: true
   }, {
     label: 'DAG',
     chip: multiDagChip,
     buttons: [multiDagBtn],
-    runningLabel: 'DAG running...'
+    runningLabel: 'DAG running...',
+    outputEl: multiActionOut
   });
 }
 function multiPrsCreate() {
-  run('pilot.multi.prs.create', {
-    group: document.getElementById('multi-group').value || null,
-    tags: tags(document.getElementById('multi-tags').value),
+  const scope = multiScopeSelector();
+  if (!scope) return;
+  return runMultiCommand('pilot.multi.prs.create', {
+    ...scope,
     dry_run: true,
     head_branch: 'dev',
     base_branch: 'main'
-  });
+  }, { outputEl: multiActionOut });
 }
 
 function multiApplyPayload(apply) {
+  const scope = multiScopeSelector();
+  if (!scope) return null;
   const stageSizeRaw = parseInt(document.getElementById('multi-apply-stage-size').value || '2', 10);
   const stageSize = Number.isFinite(stageSizeRaw) && stageSizeRaw > 0 ? stageSizeRaw : 2;
   return {
     branch: document.getElementById('multi-apply-branch').value || 'feat/pilot-wave13',
     base_branch: document.getElementById('multi-apply-base').value || 'dev',
     pr_base_branch: document.getElementById('multi-apply-pr-base').value || 'main',
-    group: document.getElementById('multi-group').value || null,
-    tags: tags(document.getElementById('multi-tags').value),
+    ...scope,
     stage_size: stageSize,
     continue_on_failure: !!document.getElementById('multi-apply-continue').checked,
     apply: !!apply
@@ -3527,22 +3663,58 @@ function multiApplyPayload(apply) {
 
 function multiApplyDryRun() {
   const payload = multiApplyPayload(false);
-  run('pilot.multi.apply', payload, {
+  if (!payload) return;
+  return runMultiCommand('pilot.multi.apply', payload, {
     label: 'Staged Apply',
     chip: multiApplyChip,
     buttons: [multiApplyDryBtn, multiApplyExecBtn],
-    runningLabel: 'Running...'
+    runningLabel: 'Running...',
+    outputEl: multiActionOut
   });
 }
 
 function multiApplyExecute() {
   const payload = multiApplyPayload(true);
-  run('pilot.multi.apply', payload, {
+  if (!payload) return;
+  return runMultiCommand('pilot.multi.apply', payload, {
     label: 'Staged Apply',
     chip: multiApplyChip,
     buttons: [multiApplyDryBtn, multiApplyExecBtn],
-    runningLabel: 'Running...'
+    runningLabel: 'Running...',
+    outputEl: multiActionOut
   });
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function multiMacroListStatusOrder() {
+  if (multiMacroRunning) return;
+  multiMacroRunning = true;
+  try {
+    const steps = [
+      { btn: multiListBtn, fn: multiList, name: 'List' },
+      { btn: multiStatusBtn, fn: multiStatus, name: 'Status' },
+      { btn: multiOrderBtn, fn: multiOrder, name: 'Order' }
+    ];
+    for (const step of steps) {
+      if (step.btn) {
+        step.btn.focus();
+      }
+      if (multiActionOut) {
+        multiActionOut.textContent = `Macro running: ${step.name}\nWaiting 3s for visibility...`;
+      }
+      await sleepMs(3000);
+      await step.fn();
+      await sleepMs(3000);
+    }
+    if (multiActionOut) {
+      multiActionOut.textContent += '\n\nMacro complete: List > Status > Order';
+    }
+  } finally {
+    multiMacroRunning = false;
+  }
 }
 
 function dashBranchCreate() {
@@ -4110,6 +4282,7 @@ async function restoreUiSession() {
 
 async function bootUi() {
   attachStream();
+  multiSetOutputMode('html');
   restoreBusStatus();
   await restoreUiSession();
   await loadHistory();
@@ -4134,6 +4307,16 @@ async function bootUi() {
         if (currentTab === 'branch') branchLoadMatrix();
       });
     });
+  ['multi-group', 'multi-tags'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      if (currentTab === 'multi') multiRefreshRegistry();
+    });
+    el.addEventListener('input', () => {
+      if (currentTab === 'multi') multiRefreshRegistry();
+    });
+  });
   if (branchMatrixAdvanced) {
     branchMatrixAdvanced.addEventListener('toggle', () => queueUiSessionSave());
   }
