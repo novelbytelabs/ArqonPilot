@@ -3507,15 +3507,13 @@ async function loadRepoAgoOptions() {
   if (!sel) return;
   repoAgoOptionsCache = [];
   renderRepoAgoOptions([]);
-  const active = await fetchJsonSafe('/api/agorg/active');
-  if (!active || !active.ok || !active.agorg || !active.agorg.id) {
+  const res = await fetchJsonSafe('/api/agorg/repo_options');
+  if (!res || !res.ok || !Array.isArray(res.items)) {
     return;
   }
-  const tree = await fetchJsonSafe(`/api/agorg/tree?root=${encodeURIComponent(active.agorg.id)}`);
-  if (!tree || !tree.ok) {
-    return;
-  }
-  const all = collectAgosFromTree(tree.tree, []);
+  const all = res.items
+    .filter((x) => x && x.name && x.path)
+    .map((x) => ({ name: String(x.name), path: String(x.path) }));
   const unique = new Map();
   for (const ago of all) {
     if (!unique.has(ago.path)) unique.set(ago.path, ago);
@@ -3718,6 +3716,59 @@ function multiRenderActionOutput() {
   multiActionOut.textContent = formatMultiOutput(command, data);
 }
 
+async function fetchMultiSnapshot(scope) {
+  const params = new URLSearchParams();
+  const group = (scope?.group || '').trim();
+  const tagList = Array.isArray(scope?.tags) ? scope.tags : [];
+  if (group) params.set('group', group);
+  if (tagList.length > 0) params.set('tags', tagList.join(','));
+  const url = params.toString() ? `/api/multi/snapshot?${params.toString()}` : '/api/multi/snapshot';
+  const snap = await fetchJsonSafe(url);
+  return snap && typeof snap === 'object' ? snap : null;
+}
+
+function renderMultiSnapshot(snapshot) {
+  if (!snapshot || snapshot.ok === false) return '';
+  const repos = Array.isArray(snapshot.repos) ? snapshot.repos : [];
+  const statuses = Array.isArray(snapshot.statuses) ? snapshot.statuses : [];
+  const order = Array.isArray(snapshot.order) ? snapshot.order : [];
+  const dagStages = Array.isArray(snapshot?.dag?.stages) ? snapshot.dag.stages : [];
+
+  const lines = [];
+  lines.push('');
+  lines.push(`Repos (${repos.length}):`);
+  if (repos.length === 0) {
+    lines.push('  - none');
+  } else {
+    repos.forEach((r) => lines.push(`  - ${r.name} | ${r.path}`));
+  }
+  lines.push('');
+  lines.push(`Status (${statuses.length}):`);
+  if (statuses.length === 0) {
+    lines.push('  - none');
+  } else {
+    statuses.forEach((s) => {
+      const clean = s.clean === null || s.clean === undefined ? 'unknown' : String(s.clean);
+      lines.push(`  - ${s.name}: exists=${s.exists} git=${s.git_repo} clean=${clean} pilot=${s.pilot_initialized} oracle=${s.oracle_ready}`);
+    });
+  }
+  lines.push('');
+  lines.push(`Dependency order (${order.length}):`);
+  if (order.length === 0) {
+    lines.push('  - none');
+  } else {
+    order.forEach((r, i) => lines.push(`  ${i + 1}. ${r.name}`));
+  }
+  lines.push('');
+  lines.push(`DAG stages (${dagStages.length}):`);
+  if (dagStages.length === 0) {
+    lines.push('  - none');
+  } else {
+    dagStages.forEach((stage, i) => lines.push(`  Stage ${i + 1}: ${Array.isArray(stage) ? stage.join(', ') : String(stage)}`));
+  }
+  return lines.join('\n');
+}
+
 function formatMultiOutput(command, data) {
   const envSummary = data?.summary || '';
   const inner = data?.inner?.response?.response || null;
@@ -3732,22 +3783,35 @@ function formatMultiOutput(command, data) {
   if (!ok) {
     lines.push(`Error: ${data?.error || data?.inner?.error || 'Unknown error'}`);
   }
+  const snapshotText = renderMultiSnapshot(data?.multi_snapshot);
+  if (snapshotText) lines.push(snapshotText);
   return lines.join('\n');
 }
 
-function runMultiCommand(command, payload, opts = {}) {
+async function runMultiCommand(command, payload, opts = {}) {
   const outputEl = opts.outputEl || multiActionOut || out;
-  return run(command, payload, {
+  const data = await run(command, payload, {
     ...opts,
     outputEl
-  }).then((data) => {
-    multiActionLast = { command, data };
-    multiRenderActionOutput();
-    if (opts.focusResultOnComplete) {
-      focusResultsForA11y(outputEl);
-    }
-    return data;
   });
+  if (data && data.ok && /^pilot\.multi\.(list|status|order|dag|prs\.create)$/.test(command)) {
+    try {
+      const scope = {
+        group: payload?.group || '',
+        tags: Array.isArray(payload?.tags) ? payload.tags : []
+      };
+      const snapshot = await fetchMultiSnapshot(scope);
+      if (snapshot) data.multi_snapshot = snapshot;
+    } catch (_) {
+      // Keep command result even if snapshot enrichment fails.
+    }
+  }
+  multiActionLast = { command, data };
+  multiRenderActionOutput();
+  if (opts.focusResultOnComplete) {
+    focusResultsForA11y(outputEl);
+  }
+  return data;
 }
 
 function multiList() {

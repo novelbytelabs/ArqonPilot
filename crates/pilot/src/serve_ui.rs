@@ -728,6 +728,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
             post(api_agorg_reconcile_apply),
         )
         .route("/api/agorg/tree", get(api_agorg_tree))
+        .route("/api/agorg/repo_options", get(api_agorg_repo_options))
         .route("/api/agorg/link", post(api_agorg_link))
         .route("/api/agorg/scan_master", post(api_agorg_scan_master))
         .route("/api/agorg/upgrade_ago", post(api_agorg_upgrade_ago))
@@ -742,6 +743,7 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/branch/matrix", post(api_branch_matrix))
         .route("/api/multi/selectors", get(api_multi_selectors))
         .route("/api/multi/registry_stats", get(api_multi_registry_stats))
+        .route("/api/multi/snapshot", get(api_multi_snapshot))
         .route("/api/branch/run", post(api_branch_run))
         .route(
             "/api/branch/conflict-radar",
@@ -1420,6 +1422,12 @@ struct MultiRegistryStatsQuery {
     tags: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct MultiSnapshotQuery {
+    group: Option<String>,
+    tags: Option<String>,
+}
+
 async fn api_multi_selectors(State(state): State<Arc<UiState>>) -> Response {
     let scope = match require_active_scope(&state).await {
         Ok(v) => v,
@@ -1456,6 +1464,51 @@ async fn api_multi_selectors(State(state): State<Arc<UiState>>) -> Response {
         "ok": true,
         "groups": groups.into_iter().collect::<Vec<_>>(),
         "tags": tags.into_iter().collect::<Vec<_>>()
+    }))
+    .into_response()
+}
+
+async fn api_agorg_repo_options(State(state): State<Arc<UiState>>) -> Response {
+    let scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let roots = scope_roots(&scope);
+
+    let mut options: Vec<(String, String, String)> = Vec::new();
+    let mut seen_paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+    let tree = match state.agorg_store.tree(Some(scope.id)).await {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    };
+    let mut agos = Vec::new();
+    collect_agos_from_tree(&tree, &mut agos);
+    for ago in agos {
+        let path = canonicalize_path_lossy(Path::new(&ago.repo_path));
+        if !path.exists() || !path_in_any_root(&path, &roots) {
+            continue;
+        }
+        let key = path.display().to_string();
+        if seen_paths.insert(key.clone()) {
+            options.push((ago.name, key, "agorg_tree".to_string()));
+        }
+    }
+
+    // Strict mode: only AGOs currently associated/imported into the active AGOrg
+    // should appear in repo registry dropdown options.
+
+    options.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()).then(a.1.cmp(&b.1)));
+    let items: Vec<Value> = options
+        .into_iter()
+        .map(|(name, path, source)| json!({ "name": name, "path": path, "source": source }))
+        .collect();
+
+    Json(json!({
+        "ok": true,
+        "agorg_id": scope.id.to_string(),
+        "agorg_name": scope.name,
+        "items": items
     }))
     .into_response()
 }
@@ -1522,6 +1575,114 @@ async fn api_multi_registry_stats(
         "filtered_count": filtered,
         "group": group,
         "tags": tags
+    }))
+    .into_response()
+}
+
+fn parse_csv_tags(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+async fn api_multi_snapshot(
+    State(state): State<Arc<UiState>>,
+    Query(query): Query<MultiSnapshotQuery>,
+) -> Response {
+    let scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let registry = match branch_registry() {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let roots = scope_roots(&scope);
+    let filter = multi::RepoFilter {
+        group: query.group.clone().filter(|s| !s.trim().is_empty()),
+        tags: parse_csv_tags(query.tags.as_deref()),
+    };
+
+    let repos = match registry.list_repos(&filter) {
+        Ok(v) => v
+            .into_iter()
+            .filter(|r| path_in_any_root(&canonicalize_path_lossy(&r.path), &roots))
+            .collect::<Vec<_>>(),
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    let statuses = match registry.status_repos(&filter) {
+        Ok(v) => v
+            .into_iter()
+            .filter(|s| path_in_any_root(&canonicalize_path_lossy(&s.repo.path), &roots))
+            .collect::<Vec<_>>(),
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    let order = match registry.dependency_order(&filter) {
+        Ok(v) => v
+            .into_iter()
+            .filter(|r| path_in_any_root(&canonicalize_path_lossy(&r.path), &roots))
+            .map(|r| {
+                json!({
+                    "name": r.name,
+                    "path": r.path.display().to_string(),
+                    "group": r.group_name,
+                    "tags": r.tags
+                })
+            })
+            .collect::<Vec<_>>(),
+        Err(err) => {
+            return Json(json!({
+                "ok": false,
+                "error": format!("Order failed: {}", err),
+                "repos": repos.iter().map(|r| json!({"name": r.name, "path": r.path.display().to_string(), "group": r.group_name, "tags": r.tags})).collect::<Vec<_>>(),
+                "statuses": statuses.iter().map(|s| json!({
+                    "name": s.repo.name,
+                    "path": s.repo.path.display().to_string(),
+                    "exists": s.path_exists,
+                    "git_repo": s.is_git_repo,
+                    "clean": s.git_clean,
+                    "pilot_initialized": s.pilot_initialized,
+                    "oracle_ready": s.oracle_ready
+                })).collect::<Vec<_>>(),
+            }))
+            .into_response();
+        }
+    };
+    let dag = match registry.dependency_dag_report(&filter) {
+        Ok(v) => json!({
+            "repos": v.repos.into_iter().filter(|r| path_in_any_root(&canonicalize_path_lossy(&r.path), &roots)).map(|r| r.name).collect::<Vec<_>>(),
+            "edges": v.edges,
+            "stages": v.stages
+        }),
+        Err(err) => json!({"error": err.to_string()}),
+    };
+
+    Json(json!({
+        "ok": true,
+        "filter": {
+            "group": filter.group,
+            "tags": filter.tags
+        },
+        "repos": repos.iter().map(|r| json!({
+            "name": r.name,
+            "path": r.path.display().to_string(),
+            "group": r.group_name,
+            "tags": r.tags
+        })).collect::<Vec<_>>(),
+        "statuses": statuses.iter().map(|s| json!({
+            "name": s.repo.name,
+            "path": s.repo.path.display().to_string(),
+            "exists": s.path_exists,
+            "git_repo": s.is_git_repo,
+            "clean": s.git_clean,
+            "pilot_initialized": s.pilot_initialized,
+            "oracle_ready": s.oracle_ready
+        })).collect::<Vec<_>>(),
+        "order": order,
+        "dag": dag
     }))
     .into_response()
 }
@@ -8596,8 +8757,8 @@ Recommended flow:
       <h3>AGOrg Management</h3>
       <div class="sub-tabs" style="margin-top:10px;">
         <button class="sub-tab active" onclick="activateSubPanel('agorg-onboarding-panel', this)">ONBOARDING</button>
+        <button class="sub-tab" onclick="activateSubPanel('agorg-repo-registry-panel', this)">AGO REGISTRY</button>
         <button class="sub-tab" onclick="activateSubPanel('agorg-governance-panel', this)">GOVERNANCE</button>
-        <button class="sub-tab" onclick="activateSubPanel('agorg-repo-registry-panel', this)">REPO REGISTRY</button>
       </div>
 
       <!-- Sub-Panel: Onboarding -->
@@ -8680,11 +8841,11 @@ Recommended flow:
         </div>
       </div>
 
-      <!-- Sub-Panel: Repo Registry -->
+      <!-- Sub-Panel: AGO Registry -->
       <div id="agorg-repo-registry-panel" class="sub-panel">
-        <div class="helper">Register repositories once under the active AGOrg, then use Group/Tags in Multi for orchestration.</div>
+        <div class="helper">Register AGOs under the active AGOrg, then use Group/Tags in Multi for orchestration.</div>
         <div class="section-box" style="margin-top:16px;">
-          <h4>REGISTER REPO</h4>
+          <h4>REGISTER AGO</h4>
           <div class="form-row">
             <div class="form-label">Path</div>
             <div class="form-content">
