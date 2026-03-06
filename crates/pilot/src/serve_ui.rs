@@ -8246,7 +8246,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </div>
 
   <section class="panel active" id="dashboard">
-    <div class="card" style="grid-column: 1 / -1;">
+    <div class="grid">
+      <div class="card" style="grid-column: 1 / -1;">
       <h3>Command Graph Orchestration (P5)</h3>
       <div class="helper">Unified cross-tab sequence. Preview operations never mutate. Execution emits lineage.</div>
       <div class="chip-row" id="p5-rail-strip">
@@ -8347,8 +8348,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <pre id="dash-release-out" role="status" aria-live="polite">Release routine ready.</pre>
       </div>
     </div>
-    <div class="grid">
-      <div class="card" style="grid-column: 1 / -1;">
+    <div class="card" style="grid-column: 1 / -1;">
         <h3>Unified Operations Timeline</h3>
         <div class="helper">Stitched chronological log across all domains (Branch, Dependencies, Commands).</div>
         <div class="row">
@@ -8425,8 +8425,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <pre id="dash-status-out">ready</pre>
       </div>
-
-      <div class="card">
+    </div>
+    <div class="card">
         <h3>Temporary Components Inventory</h3>
         <div class="helper">Wave H transparency surface. Lists unavoidable shims/bridges and their runtime state.</div>
         <div class="row">
@@ -8489,10 +8489,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <pre id="dash-agorg-overview-out">No AGOrg overview yet.</pre>
       </div>
-      </div>
-      </div>
+    </div>
 
-      <div class="card">
+    <div class="card">
         <h3>Oracle + Heal Quick Ops</h3>
         <div class="helper">Fast path for day-to-day work: ask Oracle for context, then run Heal in plan mode first before applying.</div>
         <div class="chip-row">
@@ -8603,7 +8602,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <pre id="dash-agorg-contract-out">No AGOrg action contract run yet.</pre>
       </div>
-      </div>
       <div class="pre-wrap">
         <div class="pre-actions">
           <button class="action-btn" onclick="copyToClipboard('dash-agorg-duplicates-out', this)">COPY</button>
@@ -8675,12 +8673,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <pre id="dash-agorg-issue-detail-out">No issue selected.</pre>
       </div>
-      </div>
-
     </div>
 
-    <div class="status">
-      <div class="card">
+    <div class="card">
         <h3>Operations Timeline</h3>
         <div class="row">
           <label style="font-size:0.82rem;color:#a8b9e3;">
@@ -8722,6 +8717,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <button class="action-btn" onclick="clearElement('live-stream')">CLEAR</button>
       </div>
       <pre id="live-stream">[]</pre>
+    </div>
+    </div>
     </div>
     </div>
   </section>
