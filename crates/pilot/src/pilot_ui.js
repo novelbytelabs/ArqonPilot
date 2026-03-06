@@ -4385,10 +4385,14 @@ function routineCiChipLevel(state) {
 }
 
 function routineSetCiJobChips(summary = {}) {
-  const docsState = String(summary.docs_state || 'idle');
-  const rustState = String(summary.rust_state || 'idle');
-  const uiState = String(summary.ui_smoke_state || 'idle');
-  const packagingState = String(summary.packaging_parity_state || 'idle');
+  const normalizeState = (raw) => {
+    const s = String(raw || 'idle').toLowerCase();
+    return (s === 'unknown' || s === 'null' || s === '') ? 'idle' : s;
+  };
+  const docsState = normalizeState(summary.docs_state);
+  const rustState = normalizeState(summary.rust_state);
+  const uiState = normalizeState(summary.ui_smoke_state);
+  const packagingState = normalizeState(summary.packaging_parity_state);
   routineSetChip(dashRoutineCiDocsChip, `Docs: ${docsState}`, routineCiChipLevel(docsState));
   routineSetChip(dashRoutineCiRustChip, `Rust: ${rustState}`, routineCiChipLevel(rustState));
   routineSetChip(dashRoutineCiUiChip, `UI Smoke: ${uiState}`, routineCiChipLevel(uiState));
@@ -4436,7 +4440,27 @@ function routineRenderTimeline() {
     dashRoutineTimeline.innerHTML = '<div class="tl-empty">No routine run yet.</div>';
     return;
   }
-  const rows = dashRoutineTrace.map((e) => {
+  const stageProgressKey = (entry) => {
+    const stage = String(entry.stage || '').trim();
+    const summary = String(entry.summary || '');
+    const m = summary.match(/\((\d+\/\d+)\)/);
+    if (!m) return '';
+    return `${stage}|${m[1]}`;
+  };
+  const resolvedProgressKeys = new Set();
+  for (const entry of dashRoutineTrace) {
+    if (entry.status === 'pass' || entry.status === 'fail') {
+      const key = stageProgressKey(entry);
+      if (key) resolvedProgressKeys.add(key);
+    }
+  }
+  const visible = dashRoutineTrace.filter((entry) => {
+    if (entry.status !== 'running') return true;
+    const key = stageProgressKey(entry);
+    return !key || !resolvedProgressKeys.has(key);
+  });
+
+  const rows = visible.map((e) => {
     const stateClass = e.status === 'pass' ? 'completed' : (e.status === 'fail' ? 'failed' : 'running');
     const stageClass = String(e.stage || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     const duration = e.durationMs > 0 ? `${e.durationMs}ms` : '-';
@@ -4527,7 +4551,16 @@ function isDepStepPass(action, data) {
 
 function routineWriteSummary(lines) {
   if (!dashRoutineOut) return;
-  dashRoutineOut.textContent = lines.join('\n');
+  const text = lines.join('\n');
+  dashRoutineOut.textContent = text;
+  // Guard against rare interrupted async flows leaving the button stuck in RUNNING...
+  if (text.includes('Result: ')) {
+    dashRoutineRunning = false;
+    if (dashRoutineRunBtn) {
+      dashRoutineRunBtn.disabled = false;
+      dashRoutineRunBtn.textContent = 'Run Post-Commit Routine';
+    }
+  }
   focusResultsForA11y(dashRoutineOut);
 }
 
@@ -4723,6 +4756,12 @@ async function dashRunPostCommitRoutine() {
 
       if (stepName === 'ci') {
         routineSetChip(dashRoutineCiChip, 'CI: running', 'warn');
+        routineSetCiJobChips({
+          docs_state: 'running',
+          rust_state: 'running',
+          ui_smoke_state: 'running',
+          packaging_parity_state: 'running'
+        });
         const ciBranch = document.getElementById('dash-push-branch')?.value || 'main';
         let ciPollDone = false;
         let ciPollBusy = false;

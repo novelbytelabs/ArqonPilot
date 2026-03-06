@@ -7897,7 +7897,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .tl-item.failed { border-left: 2px solid rgba(255, 46, 46, 0.7); }
     .tl-item.stage-scope { background: linear-gradient(90deg, rgba(0,245,255,0.06), rgba(0,0,0,0.02)); }
     .tl-item.stage-multi { background: linear-gradient(90deg, rgba(95,111,255,0.08), rgba(0,0,0,0.02)); }
-    .tl-item.stage-gates { background: linear-gradient(90deg, rgba(255,215,0,0.08), rgba(0,0,0,0.02)); }
+    .tl-item.stage-gates { background: linear-gradient(90deg, rgba(255, 56, 196, 0.14), rgba(0,0,0,0.02)); }
     .tl-item.stage-push { background: linear-gradient(90deg, rgba(0,245,255,0.09), rgba(0,0,0,0.02)); }
     .tl-item.stage-ci { background: linear-gradient(90deg, rgba(168,185,227,0.12), rgba(0,0,0,0.02)); }
     .tl-item.stage-evidence { background: linear-gradient(90deg, rgba(120,255,208,0.08), rgba(0,0,0,0.02)); }

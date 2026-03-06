@@ -85,6 +85,10 @@ ci_run_id="unknown"
 docs_run_id="unknown"
 
 run_ids="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch==\"${BRANCH}\") | .databaseId" 2>/dev/null || true)"
+if [[ -z "$run_ids" ]]; then
+  # Compatibility fallback for older gh/jq combos.
+  run_ids="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --template "{{range .}}{{if eq .headBranch \"${BRANCH}\"}}{{.databaseId}}{{\"\\n\"}}{{end}}{{end}}" 2>/dev/null || true)"
+fi
 
 if [[ -n "$run_ids" ]]; then
   while read -r rid; do
@@ -101,9 +105,9 @@ if [[ -n "$run_ids" ]]; then
     fi
 
     if [[ "$ci_run_id" == "unknown" ]]; then
-      rust_job="$(gh run view "$rid" --repo "$REPO_SLUG" --json jobs --jq '.jobs[]? | select((.name|ascii_downcase)=="rust") | "\(.status // "")\t\(.conclusion // "")"' 2>/dev/null || true)"
-      ui_job="$(gh run view "$rid" --repo "$REPO_SLUG" --json jobs --jq '.jobs[]? | select((.name|ascii_downcase)=="ui-smoke") | "\(.status // "")\t\(.conclusion // "")"' 2>/dev/null || true)"
-      pkg_job="$(gh run view "$rid" --repo "$REPO_SLUG" --json jobs --jq '.jobs[]? | select((.name|ascii_downcase)=="packaging-parity") | "\(.status // "")\t\(.conclusion // "")"' 2>/dev/null || true)"
+      rust_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${rid}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="rust") | "\(.status // "")\t\(.conclusion // "")"' 2>/dev/null || true)"
+      ui_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${rid}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="ui-smoke") | "\(.status // "")\t\(.conclusion // "")"' 2>/dev/null || true)"
+      pkg_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${rid}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="packaging-parity") | "\(.status // "")\t\(.conclusion // "")"' 2>/dev/null || true)"
       if [[ -n "$rust_job" || -n "$ui_job" || -n "$pkg_job" ]]; then
         ci_run_id="$rid"
         run_url="$url"
@@ -125,6 +129,15 @@ if [[ -n "$run_ids" ]]; then
       break
     fi
   done <<< "$run_ids"
+fi
+
+# If a CI run is active, default unresolved job chips to "running" instead of "unknown".
+if [[ "$ci_run_id" != "unknown" ]]; then
+  if [[ "$overall_state" == "running" ]]; then
+    [[ "$rust_state" == "unknown" ]] && rust_state="running"
+    [[ "$ui_smoke_state" == "unknown" ]] && ui_smoke_state="running"
+    [[ "$packaging_parity_state" == "unknown" ]] && packaging_parity_state="running"
+  fi
 fi
 
 echo "========== gh_status summary =========="

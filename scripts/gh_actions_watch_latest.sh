@@ -79,7 +79,11 @@ fi
 
 echo "[ci-watch] repo=${REPO_SLUG} branch=${BRANCH} timeout=${TIMEOUT_SEC}s poll=${POLL_SEC}s"
 
-run_id="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch==\"${BRANCH}\") | .databaseId" 2>/dev/null | head -n1 || true)"
+run_id="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --template "{{range .}}{{if eq .headBranch \"${BRANCH}\"}}{{.databaseId}}{{\"\\n\"}}{{end}}{{end}}" 2>/dev/null | head -n1 || true)"
+if [[ -z "$run_id" || "$run_id" == "null" ]]; then
+  # Fallback: if branch filter couldn't be resolved on this gh version, take latest run.
+  run_id="$(gh run list --repo "$REPO_SLUG" --limit 1 --json databaseId --template "{{range .}}{{.databaseId}}{{end}}" 2>/dev/null || true)"
+fi
 if [[ -z "$run_id" || "$run_id" == "null" ]]; then
   echo "ERROR: no workflow run found for branch '${BRANCH}'." >&2
   exit 4
@@ -95,7 +99,7 @@ run_url=""
 while true; do
   status="$(gh run view "$run_id" --repo "$REPO_SLUG" --json status --jq '.status' 2>/dev/null || true)"
   conclusion="$(gh run view "$run_id" --repo "$REPO_SLUG" --json conclusion --jq '.conclusion' 2>/dev/null || true)"
-  workflow="$(gh run view "$run_id" --repo "$REPO_SLUG" --json workflowName --jq '.workflowName' 2>/dev/null || true)"
+  workflow="$(gh run view "$run_id" --repo "$REPO_SLUG" --json name --jq '.name // "unknown"' 2>/dev/null || true)"
   run_url="$(gh run view "$run_id" --repo "$REPO_SLUG" --json url --jq '.url' 2>/dev/null || true)"
   elapsed=$(( "$(date +%s)" - start_ts ))
   echo "[ci-watch] status=${status:-unknown} conclusion=${conclusion:-pending} elapsed=${elapsed}s"
@@ -112,8 +116,8 @@ while true; do
   sleep "$POLL_SEC"
 done
 
-failed_jobs_count="$(gh run view "$run_id" --repo "$REPO_SLUG" --json jobs --jq '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null)] | length' 2>/dev/null || echo "0")"
-failed_jobs_names="$(gh run view "$run_id" --repo "$REPO_SLUG" --json jobs --jq '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null) | .name] | join(\", \")' 2>/dev/null || echo "")"
+failed_jobs_count="$(gh api "repos/${REPO_SLUG}/actions/runs/${run_id}/jobs?per_page=100" --jq '[.jobs[] | select((.conclusion != "success") and (.conclusion != "skipped") and (.conclusion != null))] | length' 2>/dev/null || echo "0")"
+failed_jobs_names="$(gh api "repos/${REPO_SLUG}/actions/runs/${run_id}/jobs?per_page=100" --jq '[.jobs[] | select((.conclusion != "success") and (.conclusion != "skipped") and (.conclusion != null)) | .name] | join(\", \")' 2>/dev/null || echo "")"
 [[ "$failed_jobs_names" == "null" ]] && failed_jobs_names=""
 
 result="FAIL"
