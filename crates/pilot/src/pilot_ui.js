@@ -2024,11 +2024,20 @@ async function depRun(action, options = {}) {
     req.remote = document.getElementById('dash-push-remote').value || 'origin';
   }
   if (options && typeof options === 'object') {
+    if (typeof options.branch === 'string' && options.branch.trim() !== '') {
+      req.branch = options.branch.trim();
+    }
+    if (typeof options.remote === 'string' && options.remote.trim() !== '') {
+      req.remote = options.remote.trim();
+    }
     if (typeof options.label === 'string' && options.label.trim() !== '') {
       req.label = options.label.trim();
     }
     if (typeof options.bundle_path === 'string' && options.bundle_path.trim() !== '') {
       req.bundle_path = options.bundle_path.trim();
+    }
+    if (Number.isFinite(options.ci_timeout_sec)) {
+      req.ci_timeout_sec = Math.max(60, Math.min(7200, Math.floor(options.ci_timeout_sec)));
     }
   }
   const res = await fetch('/api/orchestrate/run', {
@@ -4435,6 +4444,7 @@ function routineRenderActions() {
   if (fail.actionId === 'open_multi') label = 'Open Multi Panel';
   if (fail.actionId === 'open_dashboard_gate') label = 'Open Dashboard Gates';
   if (fail.actionId === 'open_push') label = 'Open Push Controls';
+  if (fail.actionId === 'open_ci') label = 'Open CI Summary';
   dashRoutineActions.innerHTML = `<button class="btn secondary" onclick="routineRunAction('${fail.actionId}')">${label}</button>`;
 }
 
@@ -4459,6 +4469,11 @@ function routineRunAction(actionId) {
     activatePanel('dashboard');
     const btn = document.querySelector('button[onclick="dashRunPush()"]');
     if (btn) btn.focus();
+    return;
+  }
+  if (actionId === 'open_ci') {
+    activatePanel('dashboard');
+    if (dashRoutineOut) dashRoutineOut.focus();
   }
 }
 
@@ -4671,18 +4686,25 @@ async function dashRunPostCommitRoutine() {
 
       if (stepName === 'ci') {
         routineSetChip(dashRoutineCiChip, 'CI: running', 'warn');
-        const ci = await fetchJsonSafe('/api/orchestrate/graph-status');
-        if (!ci || !ci.ok) {
+        const ci = await depRun('ci-watch', {
+          branch: document.getElementById('dash-push-branch')?.value || 'main',
+          ci_timeout_sec: 1800
+        });
+        const ciInner = depEnvelopeInner(ci);
+        if (!ciInner || !ciInner.ok) {
           routineSetChip(dashRoutineCiChip, 'CI: fail', 'fail');
-          lines.push(`CI: FAIL (${ci?.error || 'graph status unavailable'})`);
-          routineRecord('CI', 'fail', 'CI graph status unavailable.', JSON.stringify(ci || {}, null, 2), 'Retry once services are healthy.', 'open_dashboard_gate', stageStart);
+          lines.push(`CI: FAIL (${ciInner?.error || ci?.error || 'watch failed'})`);
+          routineRecord('CI', 'fail', 'GitHub Actions watch failed.', JSON.stringify(ciInner || ci || {}, null, 2), 'Inspect run URL and failing jobs in CI summary.', 'open_ci', stageStart);
           failed = true;
           if (profile.stop_on_fail) break;
           continue;
         }
+        const ciSummary = (ciInner.summary && typeof ciInner.summary === 'object') ? ciInner.summary : {};
+        const runUrl = ciSummary.run_url || '';
         routineSetChip(dashRoutineCiChip, 'CI: pass', 'ok');
-        routineRecord('CI', 'pass', `Graph status schema=${ci.schema_version || 'unknown'}.`, JSON.stringify(ci, null, 2), '', '', stageStart);
-        lines.push(`CI: PASS (schema=${ci.schema_version || 'unknown'})`);
+        routineRecord('CI', 'pass', 'GitHub Actions run completed successfully.', JSON.stringify(ciInner, null, 2), '', '', stageStart);
+        lines.push(`CI: PASS (${ciSummary.workflow || 'workflow'})`);
+        if (runUrl) lines.push(`CI Run: ${runUrl}`);
         continue;
       }
 

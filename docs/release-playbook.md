@@ -92,13 +92,14 @@ After coding and committing in VS Code, run this exact sequence:
 3. **Push Safe**:
    - Execute safe push path (or `./scripts/push_main.sh` equivalent)
 4. **CI monitor + evidence capture**:
-   - Verify workflows and collect evidence bundle.
+   - Watch latest GitHub Actions run to completion and collect evidence bundle.
 
 If GUI action is unavailable/unhealthy, use script equivalents:
 
 ```bash
 ./scripts/run_preflight_graph.sh --json --skip-push
 ./scripts/prepush_gate.sh
+./scripts/gh_actions_watch_latest.sh --branch main --timeout-sec 1800
 ./scripts/push_main.sh
 ./scripts/release_collect_evidence.sh --label <version-or-run-id>
 ```

@@ -138,6 +138,7 @@ Use this when you want release-grade checks directly in UI.
      - Compat
      - Migration
      - Publish Gate (and optional Publish Push)
+     - CI Watch (latest GitHub Actions run for branch)
      - Bundle collect
      - Bundle verify
      - Signed evidence export
@@ -153,6 +154,7 @@ Terminal equivalents:
 ./scripts/compat_matrix_smoke.sh
 ./scripts/migration_smoke_test.sh
 ./scripts/prepush_gate.sh
+./scripts/gh_actions_watch_latest.sh --branch main --timeout-sec 1800
 ./scripts/release_collect_evidence.sh --label <release-label>
 <bundle_path>/verify_bundle.sh
 ```

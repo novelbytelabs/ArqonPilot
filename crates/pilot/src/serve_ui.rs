@@ -446,6 +446,7 @@ struct DependencyActionRequest {
     preflight_steps: Option<Vec<String>>,
     label: Option<String>,
     bundle_path: Option<String>,
+    ci_timeout_sec: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4504,6 +4505,20 @@ async fn run_dependency_action(
             let verify_script = format!("{}/verify_bundle.sh", bundle_path.trim_end_matches('/'));
             run_local_script_streamed(&verify_script, "release-verify-bundle", &state.events).await
         }
+        ("ci-watch", _) => {
+            let branch = req.branch.as_deref().unwrap_or("main");
+            if !is_safe_cli_token(branch) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "branch contains unsupported characters",
+                );
+            }
+            let timeout = req.ci_timeout_sec.unwrap_or(1800).clamp(60, 7200);
+            let cmd = format!(
+                "./scripts/gh_actions_watch_latest.sh --branch {branch} --timeout-sec {timeout}"
+            );
+            run_local_script_streamed(&cmd, "ci-watch", &state.events).await
+        }
         _ => return error_response(StatusCode::BAD_REQUEST, "unsupported action"),
     };
 
@@ -4539,6 +4554,18 @@ async fn run_dependency_action(
                         .unwrap_or_default(),
                 ) {
                     body["artifact_path"] = json!(path);
+                }
+            }
+            if action == "ci-watch" {
+                if let Some(summary) = parse_gh_watch_summary(
+                    body.get("stdout")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    body.get("stderr")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ) {
+                    body["summary"] = summary;
                 }
             }
             if action == "prepush-gate" {
@@ -5228,7 +5255,7 @@ mod tests {
         dependency_action_requires_cwd_scope, dependency_action_scope_required,
         filter_prune_paths_by_class, is_bus_recoverable_error, is_safe_cli_token,
         load_persisted_codex_contracts, normalize_orchestrate_payload, orchestrate_is_preview,
-        parse_json_from_mixed_output, parse_release_collect_evidence_path,
+        parse_gh_watch_summary, parse_json_from_mixed_output, parse_release_collect_evidence_path,
         payload_has_multi_selector, preflight_steps_from_action,
         prune_expired_branch_previews, resolve_branch_targets, scope_filter_rows,
         default_policy_json_for_kind, sanitize_payload_for_local_exec, should_prefer_local_command, should_use_local_command_fallback, sorted_unique_ids, sorted_unique_tags,
@@ -5338,6 +5365,7 @@ mod tests {
         assert!(dependency_action_scope_required("release-readiness"));
         assert!(dependency_action_scope_required("release-collect-evidence"));
         assert!(dependency_action_scope_required("release-verify-bundle"));
+        assert!(dependency_action_scope_required("ci-watch"));
         assert!(!dependency_action_scope_required("db-status"));
         assert!(!dependency_action_scope_required("services-start"));
 
@@ -5357,6 +5385,34 @@ Summary:
         assert_eq!(
             parsed.as_deref(),
             Some("/home/tester/.pilot/release_evidence/release_alpha_20260306T010203Z")
+        );
+    }
+
+    #[test]
+    fn test_parse_gh_watch_summary() {
+        let stdout = r#"
+========== gh_watch summary ==========
+result:                FAIL
+repo:                  novelbytelabs/ArqonPilot
+branch:                main
+run_id:                123456789
+workflow:              ci.yml
+status:                completed
+conclusion:            failure
+failed_jobs:           2
+failed_job_names:      rust, ui-smoke
+run_url:               https://github.com/x/y/actions/runs/123
+likely_cause:          job_failures
+======================================
+"#;
+        let parsed = parse_gh_watch_summary(stdout, "").expect("summary should parse");
+        assert_eq!(
+            parsed.get("result").and_then(Value::as_str),
+            Some("FAIL")
+        );
+        assert_eq!(
+            parsed.get("failed_jobs").and_then(Value::as_str),
+            Some("2")
         );
     }
 
@@ -6714,6 +6770,33 @@ fn parse_release_collect_evidence_path(stdout: &str, stderr: &str) -> Option<Str
     None
 }
 
+fn parse_gh_watch_summary(stdout: &str, stderr: &str) -> Option<Value> {
+    let combined = format!("{stdout}\n{stderr}");
+    let mut in_block = false;
+    let mut summary = serde_json::Map::new();
+    for raw in combined.lines() {
+        let line = raw.trim();
+        if line == "========== gh_watch summary ==========" {
+            in_block = true;
+            continue;
+        }
+        if line == "======================================" {
+            break;
+        }
+        if !in_block {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            summary.insert(k.trim().to_string(), Value::String(v.trim().to_string()));
+        }
+    }
+    if summary.is_empty() {
+        None
+    } else {
+        Some(Value::Object(summary))
+    }
+}
+
 fn parse_prepush_summary(stdout: &str, stderr: &str) -> Option<Value> {
     let combined = format!("{stdout}\n{stderr}");
     let mut status = None::<String>;
@@ -6970,6 +7053,7 @@ fn dependency_action_scope_required(action: &str) -> bool {
             | "release-migration-smoke"
             | "release-collect-evidence"
             | "release-verify-bundle"
+            | "ci-watch"
     )
 }
 

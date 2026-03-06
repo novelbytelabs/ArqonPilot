@@ -621,6 +621,24 @@ Keep this file current whenever a new failure class appears.
      - `release-verify-bundle` (UI) or
      - `<bundle_path>/verify_bundle.sh`
 
+## G-029: CI watch fails because `gh` is unavailable or not authenticated
+
+- Signature:
+  - CI step fails with:
+    - `GitHub CLI (gh) is not installed`
+    - `gh authentication is not configured`
+    - `no workflow run found for branch`
+- Cause:
+  - Local operator environment missing `gh`, missing auth, or monitoring wrong branch.
+- Recovery:
+  1. Install and authenticate:
+     - `gh auth login`
+     - `gh auth status -h github.com`
+  2. Verify latest run exists for target branch:
+     - `gh run list --branch <branch> --limit 5`
+  3. Re-run CI watch:
+     - `./scripts/gh_actions_watch_latest.sh --branch <branch> --timeout-sec 1800`
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`
