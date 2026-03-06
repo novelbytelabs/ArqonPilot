@@ -79,7 +79,7 @@ fi
 
 echo "[ci-watch] repo=${REPO_SLUG} branch=${BRANCH} timeout=${TIMEOUT_SEC}s poll=${POLL_SEC}s"
 
-run_id="$(gh run list --repo "$REPO_SLUG" --branch "$BRANCH" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+run_id="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch==\"${BRANCH}\") | .databaseId" 2>/dev/null | head -n1 || true)"
 if [[ -z "$run_id" || "$run_id" == "null" ]]; then
   echo "ERROR: no workflow run found for branch '${BRANCH}'." >&2
   exit 4

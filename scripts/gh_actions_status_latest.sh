@@ -84,7 +84,7 @@ run_url=""
 ci_run_id="unknown"
 docs_run_id="unknown"
 
-run_ids="$(gh run list --repo "$REPO_SLUG" --branch "$BRANCH" --limit 12 --json databaseId --jq '.[].databaseId' 2>/dev/null || true)"
+run_ids="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch==\"${BRANCH}\") | .databaseId" 2>/dev/null || true)"
 
 if [[ -n "$run_ids" ]]; then
   while read -r rid; do
