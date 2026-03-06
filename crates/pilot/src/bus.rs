@@ -3,6 +3,7 @@ use miette::{IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -504,7 +505,7 @@ fn extract_payload(v: &Value) -> Value {
 
 fn run_pilot_subcommand(command: &str, payload: Value) -> std::result::Result<Value, String> {
     let args = map_bus_command_to_args(command, &payload)?;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = resolve_pilot_executable()?;
 
     let output = Command::new(exe)
         .args(args)
@@ -528,6 +529,26 @@ fn run_pilot_subcommand(command: &str, payload: Value) -> std::result::Result<Va
 
 pub fn run_pilot_subcommand_local(command: &str, payload: Value) -> Result<Value> {
     run_pilot_subcommand(command, payload).map_err(|e| miette::miette!(e))
+}
+
+fn resolve_pilot_executable() -> std::result::Result<PathBuf, String> {
+    // Primary path: the currently running pilot binary.
+    if let Ok(exe) = std::env::current_exe() {
+        if exe.exists() {
+            return Ok(exe);
+        }
+    }
+
+    // Fallback for dev sessions where `cargo clean` invalidated the running path.
+    if let Ok(cwd) = std::env::current_dir() {
+        let debug_pilot = cwd.join("target").join("debug").join("pilot");
+        if debug_pilot.exists() {
+            return Ok(debug_pilot);
+        }
+    }
+
+    // Final fallback: rely on PATH resolution.
+    Ok(PathBuf::from("pilot"))
 }
 
 fn map_bus_command_to_args(

@@ -8246,7 +8246,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
     </div>
     <div class="card" style="grid-column: 1 / -1;">
       <h3>Post-Commit Routine (Pilot for Pilot)</h3>
-      <div class="helper">One-click flow driven by <code>operator_routine.post_commit_profile</code>.</div>
       <div class="chip-row">
         <span id="dash-routine-profile-source-chip" class="chip neutral" tabindex="0" role="status">Profile: loading</span>
         <span id="dash-routine-profile-steps-chip" class="chip neutral" tabindex="0" role="status">Steps: -</span>
@@ -8274,11 +8273,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
       </div>
       <div class="row">
         <label style="font-size:0.82rem;color:#a8b9e3;">
-          <input id="dash-routine-allow-push" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
+          <input id="dash-routine-allow-push" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
           allow push step
         </label>
         <label style="font-size:0.82rem;color:#a8b9e3;">
-          <input id="dash-routine-export-evidence" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+          <input id="dash-routine-export-evidence" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
           export evidence
         </label>
         <button id="dash-routine-run-btn" class="btn" onclick="dashRunPostCommitRoutine()">Run Post-Commit Routine</button>

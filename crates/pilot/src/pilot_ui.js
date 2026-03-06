@@ -319,8 +319,8 @@ let dashRoutineTrace = [];
 const ROUTINE_DEFAULT_PROFILE = Object.freeze({
   step_order: ['scope', 'multi', 'gates', 'push', 'ci', 'evidence'],
   stop_on_fail: true,
-  include_push_step: false,
-  export_evidence_step: true
+  include_push_step: true,
+  export_evidence_step: false
 });
 
 function activatePanel(tabName, opts = {}) {

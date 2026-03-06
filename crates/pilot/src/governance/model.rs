@@ -498,8 +498,8 @@ impl Default for OperatorRoutinePostCommitProfile {
                 "evidence".to_string(),
             ],
             stop_on_fail: true,
-            include_push_step: false,
-            export_evidence_step: true,
+            include_push_step: true,
+            export_evidence_step: false,
         }
     }
 }
