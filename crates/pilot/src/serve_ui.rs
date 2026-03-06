@@ -8646,9 +8646,7 @@ Recommended flow:
   <section class="panel" id="multi">
     <div id="multi-empty-state" class="empty-state-notice" aria-live="polite"></div>
     <div class="sequence-strip">
-      <button class="seq-step seq-step-btn" onclick="multiMacroListStatusOrder()">List > Status > Order</button>
-      <button class="seq-step seq-step-btn" onclick="multiMacroDagPrPlan()">DAG > PR Plan</button>
-      <button class="seq-step seq-step-btn" onclick="multiMacroFleetFlow()">Full Fleet Flow</button>
+      <button class="seq-step seq-step-btn" onclick="multiMacroFleetFlow()">List > Status > Order > DAG > PR Plan</button>
       <span class="seq-step">Staged Apply (Dry Run -> Execute)</span>
     </div>
     <div class="pre-wrap" style="margin-bottom:12px;">

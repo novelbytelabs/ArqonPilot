@@ -4178,9 +4178,6 @@ async function multiMacroFleetFlow() {
   }
   multiMacroRunning = true;
   try {
-    toggleMultiMacroLog(true);
-    let passCount = 0;
-    let failCount = 0;
     const steps = [
       { btn: multiListBtn, fn: multiList, name: 'List' },
       { btn: multiStatusBtn, fn: multiStatus, name: 'Status' },
@@ -4190,14 +4187,7 @@ async function multiMacroFleetFlow() {
     ];
     for (const step of steps) {
       if (step.btn) step.btn.focus();
-      const result = await step.fn();
-      appendMultiMacroTelemetry(step.name, result);
-      if (result && result.ok) passCount += 1;
-      else failCount += 1;
-    }
-    if (multiMacroLogOut) {
-      multiMacroLogOut.textContent += `\nMacro Summary: ${passCount} passed, ${failCount} failed`;
-      focusResultsForA11y(multiMacroLogOut);
+      await step.fn();
     }
   } finally {
     multiMacroRunning = false;
