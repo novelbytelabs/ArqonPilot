@@ -1453,7 +1453,12 @@ async fn api_multi_selectors(State(state): State<Arc<UiState>>) -> Response {
         if !path_in_any_root(&path, &roots) {
             continue;
         }
-        if let Some(group) = repo.group_name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(group) = repo
+            .group_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             groups.insert(group.to_string());
         }
         for tag in repo.tags {
@@ -1501,7 +1506,11 @@ async fn api_agorg_repo_options(State(state): State<Arc<UiState>>) -> Response {
     // Strict mode: only AGOs currently associated/imported into the active AGOrg
     // should appear in repo registry dropdown options.
 
-    options.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()).then(a.1.cmp(&b.1)));
+    options.sort_by(|a, b| {
+        a.0.to_lowercase()
+            .cmp(&b.0.to_lowercase())
+            .then(a.1.cmp(&b.1))
+    });
     let items: Vec<Value> = options
         .into_iter()
         .map(|(name, path, source)| json!({ "name": name, "path": path, "source": source }))
@@ -1550,7 +1559,11 @@ async fn api_multi_registry_stats(
         .filter(|s| !s.is_empty())
         .map(ToString::to_string)
         .collect();
-    let group = query.group.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let group = query
+        .group
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
     let filtered = if group.is_some() || !tags.is_empty() {
         let repos = match registry.list_repos(&multi::RepoFilter {
@@ -5275,15 +5288,16 @@ mod tests {
         append_codex_contract_record, canonical_branch_payload, classify_bus_health,
         classify_db_health, command_request_from_orchestrate_payload, command_requires_cwd_scope,
         command_requires_multi_selector, command_requires_mutation, command_scope_required,
-        dependency_action_requires_cwd_scope, dependency_action_scope_required,
-        filter_prune_paths_by_class, is_bus_recoverable_error, is_safe_cli_token,
-        load_persisted_codex_contracts, normalize_orchestrate_payload, orchestrate_is_preview,
-        parse_gh_status_summary, parse_gh_watch_summary, parse_json_from_mixed_output, parse_release_collect_evidence_path,
-        payload_has_multi_selector, preflight_steps_from_action,
-        prune_expired_branch_previews, resolve_branch_targets, scope_filter_rows,
-        default_policy_json_for_kind, sanitize_payload_for_local_exec, should_prefer_local_command, should_use_local_command_fallback, sorted_unique_ids, sorted_unique_tags,
-        with_event_agorg_scope, BranchMatrixRow, BranchPreviewRecord, BranchRunRequest,
-        CodexContractRecord,
+        default_policy_json_for_kind, dependency_action_requires_cwd_scope,
+        dependency_action_scope_required, filter_prune_paths_by_class, is_bus_recoverable_error,
+        is_safe_cli_token, load_persisted_codex_contracts, normalize_orchestrate_payload,
+        orchestrate_is_preview, parse_gh_status_summary, parse_gh_watch_summary,
+        parse_json_from_mixed_output, parse_release_collect_evidence_path,
+        payload_has_multi_selector, preflight_steps_from_action, prune_expired_branch_previews,
+        resolve_branch_targets, sanitize_payload_for_local_exec, scope_filter_rows,
+        should_prefer_local_command, should_use_local_command_fallback, sorted_unique_ids,
+        sorted_unique_tags, with_event_agorg_scope, BranchMatrixRow, BranchPreviewRecord,
+        BranchRunRequest, CodexContractRecord,
     };
     use crate::agorg::{AgorgReconcileIssue, AgorgReconcileReport};
     use crate::db_runtime::DbStatus;
@@ -5430,14 +5444,8 @@ likely_cause:          job_failures
 ======================================
 "#;
         let parsed = parse_gh_watch_summary(stdout, "").expect("summary should parse");
-        assert_eq!(
-            parsed.get("result").and_then(Value::as_str),
-            Some("FAIL")
-        );
-        assert_eq!(
-            parsed.get("failed_jobs").and_then(Value::as_str),
-            Some("2")
-        );
+        assert_eq!(parsed.get("result").and_then(Value::as_str), Some("FAIL"));
+        assert_eq!(parsed.get("failed_jobs").and_then(Value::as_str), Some("2"));
     }
 
     #[test]
@@ -5466,8 +5474,14 @@ run_url:               https://github.com/novelbytelabs/ArqonPilot/actions/runs/
             parsed.get("overall_state").and_then(Value::as_str),
             Some("running")
         );
-        assert_eq!(parsed.get("docs_state").and_then(Value::as_str), Some("pass"));
-        assert_eq!(parsed.get("rust_state").and_then(Value::as_str), Some("running"));
+        assert_eq!(
+            parsed.get("docs_state").and_then(Value::as_str),
+            Some("pass")
+        );
+        assert_eq!(
+            parsed.get("rust_state").and_then(Value::as_str),
+            Some("running")
+        );
         assert_eq!(
             parsed.get("packaging_parity_state").and_then(Value::as_str),
             Some("fail")
@@ -6766,11 +6780,14 @@ async fn run_local_script_streamed(
     let action_err = action.to_string();
     let events_out = events.clone();
     let events_err = events.clone();
-    let out_task = tokio::spawn(async move {
-        read_stream_lines(stdout, &action_out, "stdout", &events_out).await
-    });
+    let out_task =
+        tokio::spawn(
+            async move { read_stream_lines(stdout, &action_out, "stdout", &events_out).await },
+        );
     let err_task =
-        tokio::spawn(async move { read_stream_lines(stderr, &action_err, "stderr", &events_err).await });
+        tokio::spawn(
+            async move { read_stream_lines(stderr, &action_err, "stderr", &events_err).await },
+        );
 
     let status = child.wait().await?;
     let out = out_task.await.unwrap_or_default();
@@ -9813,7 +9830,10 @@ async fn api_settings_get_policy(
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    let ago_path = query.get("ago_path").map(|s| s.trim()).filter(|s| !s.is_empty());
+    let ago_path = query
+        .get("ago_path")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
     let gov_store = GovernanceStore::new(state.agorg_store.dsn());
     if let Some(path) = ago_path {
         match gov_store

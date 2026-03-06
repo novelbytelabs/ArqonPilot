@@ -6,7 +6,6 @@
 /// 3. stage=preview emitted when dry_run=true or action in preview-class
 /// 4. Preview through each domain must emit status=preview and not mutate
 /// 5. Stitched operation lineage: two sequential previews get distinct operation_ids
-
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -43,10 +42,17 @@ fn test_p5_envelope_contract_shape_ok_response() {
         .map(String::from);
     let stage = "preview";
     let status = stage.to_string(); // preview stage always emits "preview"
-    let summary = if ok { "dependency/preview: completed" } else { "dependency/preview: failed" };
+    let summary = if ok {
+        "dependency/preview: completed"
+    } else {
+        "dependency/preview: failed"
+    };
 
     assert!(ok, "inner ok must propagate");
-    assert_eq!(artifact_path.as_deref(), Some("/home/test/.pilot/reports/preflight_test.json"));
+    assert_eq!(
+        artifact_path.as_deref(),
+        Some("/home/test/.pilot/reports/preflight_test.json")
+    );
     assert_eq!(stage, "preview");
     assert_eq!(status, "preview");
     assert!(!summary.is_empty());
@@ -61,7 +67,10 @@ fn test_p5_envelope_contract_shape_error_response() {
         "exit_code": 128
     });
 
-    let ok = inner_with_stderr.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let ok = inner_with_stderr
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let error_from_stderr = inner_with_stderr
         .get("error")
         .or_else(|| inner_with_stderr.get("stderr"))
@@ -93,7 +102,10 @@ fn test_p5_operation_id_is_server_generated_unique_per_call() {
     assert_valid_uuid(&id2);
 
     // Each call must produce a distinct UUID (collision probability: ~0 for v4)
-    assert_ne!(id1, id2, "each orchestrate call must produce a distinct operation_id");
+    assert_ne!(
+        id1, id2,
+        "each orchestrate call must produce a distinct operation_id"
+    );
 
     // Client-supplied ID must never appear in server output
     let client_supplied = "client-injected-id-12345";
@@ -129,13 +141,26 @@ fn test_p5_client_operation_id_field_does_not_pollute_envelope() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn detect_stage(payload: &Value) -> &'static str {
-    let dry_run = payload.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
+    let dry_run = payload
+        .get("dry_run")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let preview_action = payload
         .get("action")
         .and_then(Value::as_str)
-        .map(|a| a.contains("preview") || a == "status" || a == "policy" || a == "hook-policy" || a == "drift")
+        .map(|a| {
+            a.contains("preview")
+                || a == "status"
+                || a == "policy"
+                || a == "hook-policy"
+                || a == "drift"
+        })
         .unwrap_or(false);
-    if dry_run || preview_action { "preview" } else { "execute" }
+    if dry_run || preview_action {
+        "preview"
+    } else {
+        "execute"
+    }
 }
 
 #[test]
@@ -171,12 +196,18 @@ fn test_p5_stage_detection_execute_action_is_execute() {
 #[test]
 fn test_p5_preview_dependency_domain_emits_preview_status() {
     let domains_and_preview_payloads = vec![
-        ("dependency", json!({"action": "policy", "dry_run": false})),  // action=policy → preview
+        ("dependency", json!({"action": "policy", "dry_run": false})), // action=policy → preview
         ("dependency", json!({"action": "drift", "dry_run": false})),
-        ("dependency", json!({"action": "run-preflight", "dry_run": true})),
-        ("branch",     json!({"dry_run": true, "action": "sync"})),     // dry_run=true → preview
-        ("branch",     json!({"dry_run": true, "action": "create"})),
-        ("command",    json!({"dry_run": true, "command": "multi.status"})),
+        (
+            "dependency",
+            json!({"action": "run-preflight", "dry_run": true}),
+        ),
+        ("branch", json!({"dry_run": true, "action": "sync"})), // dry_run=true → preview
+        ("branch", json!({"dry_run": true, "action": "create"})),
+        (
+            "command",
+            json!({"dry_run": true, "command": "multi.status"}),
+        ),
     ];
 
     for (domain, payload) in &domains_and_preview_payloads {
@@ -229,7 +260,8 @@ fn test_p5_sequential_envelopes_have_distinct_operation_ids() {
     // All IDs must be distinct
     let unique: std::collections::HashSet<_> = ids.iter().collect();
     assert_eq!(
-        unique.len(), ids.len(),
+        unique.len(),
+        ids.len(),
         "all sequential operation_ids must be distinct"
     );
 }
@@ -245,7 +277,13 @@ fn test_p5_envelope_summary_contains_domain_and_stage() {
     } else {
         format!("{domain}/{stage}: failed")
     };
-    assert!(summary.contains("dependency"), "summary must include domain");
+    assert!(
+        summary.contains("dependency"),
+        "summary must include domain"
+    );
     assert!(summary.contains("preview"), "summary must include stage");
-    assert!(summary.contains("completed"), "ok=true must yield 'completed'");
+    assert!(
+        summary.contains("completed"),
+        "ok=true must yield 'completed'"
+    );
 }

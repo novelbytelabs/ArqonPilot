@@ -7,7 +7,6 @@
 /// 4. Preview payload cannot produce stage=execute (no bypass path)
 /// 5. AGOrg scope switch invalidates active operation context (rail state contract)
 /// 6. Envelope fields are all present even for error responses
-
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -16,13 +15,26 @@ use uuid::Uuid;
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn detect_stage(payload: &Value) -> &'static str {
-    let dry_run = payload.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
+    let dry_run = payload
+        .get("dry_run")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let preview_action = payload
         .get("action")
         .and_then(Value::as_str)
-        .map(|a| a.contains("preview") || a == "status" || a == "policy" || a == "hook-policy" || a == "drift")
+        .map(|a| {
+            a.contains("preview")
+                || a == "status"
+                || a == "policy"
+                || a == "hook-policy"
+                || a == "drift"
+        })
         .unwrap_or(false);
-    if dry_run || preview_action { "preview" } else { "execute" }
+    if dry_run || preview_action {
+        "preview"
+    } else {
+        "execute"
+    }
 }
 
 /// Simulate the envelope output for an unknown domain request.
@@ -46,12 +58,22 @@ fn unknown_domain_envelope(domain: &str) -> Value {
 
 #[test]
 fn test_p5_unknown_domain_returns_error_envelope_not_panic() {
-    for bad_domain in &["heal", "multi", "telemetry", "", "xss<script>", "../../etc/passwd"] {
+    for bad_domain in &[
+        "heal",
+        "multi",
+        "telemetry",
+        "",
+        "xss<script>",
+        "../../etc/passwd",
+    ] {
         let envelope = unknown_domain_envelope(bad_domain);
         // Must not panic
         assert_eq!(envelope["ok"], false, "unknown domain must return ok=false");
         assert!(
-            envelope.get("operation_id").and_then(Value::as_str).is_some(),
+            envelope
+                .get("operation_id")
+                .and_then(Value::as_str)
+                .is_some(),
             "operation_id must still be present for error envelopes"
         );
         assert_eq!(
@@ -78,7 +100,10 @@ fn test_p5_malformed_payload_produces_safe_error() {
         "error": "Invalid branch payload format"
     });
 
-    let ok = malformed_inner.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let ok = malformed_inner
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let error_msg = malformed_inner.get("error").and_then(Value::as_str);
 
     assert!(!ok, "malformed payload must produce ok=false");
@@ -108,8 +133,9 @@ fn test_p5_client_operation_id_ignored_server_always_generates_fresh() {
     for client_id in &client_ids {
         let server_id = Uuid::new_v4().to_string();
         // Server ID must be a valid UUID
-        Uuid::parse_str(&server_id)
-            .expect(&format!("server operation_id must be valid UUID v4, got: '{server_id}'"));
+        Uuid::parse_str(&server_id).expect(&format!(
+            "server operation_id must be valid UUID v4, got: '{server_id}'"
+        ));
         // Server ID must never equal the client-supplied value
         assert_ne!(
             server_id, *client_id,
@@ -125,7 +151,8 @@ fn test_p5_server_operation_ids_are_unpredictable() {
     let ids: Vec<String> = (0..10).map(|_| Uuid::new_v4().to_string()).collect();
     let unique: std::collections::HashSet<_> = ids.iter().collect();
     assert_eq!(
-        unique.len(), ids.len(),
+        unique.len(),
+        ids.len(),
         "all server-generated operation_ids must be distinct (no replay risk)"
     );
 }
@@ -139,13 +166,13 @@ fn test_p5_server_operation_ids_are_unpredictable() {
 #[test]
 fn test_p5_preview_payloads_cannot_produce_execute_stage() {
     let preview_payloads = vec![
-        json!({"action": "policy", "dry_run": false}),    // action-class preview
+        json!({"action": "policy", "dry_run": false}), // action-class preview
         json!({"action": "hook-policy"}),
         json!({"action": "drift"}),
         json!({"action": "status"}),
-        json!({"dry_run": true}),                          // dry_run flag
-        json!({"dry_run": true, "action": "sync"}),        // both set: dry_run wins
-        json!({"action": "branch-preview"}),               // contains "preview"
+        json!({"dry_run": true}),                   // dry_run flag
+        json!({"dry_run": true, "action": "sync"}), // both set: dry_run wins
+        json!({"action": "branch-preview"}),        // contains "preview"
     ];
 
     for payload in &preview_payloads {
@@ -237,7 +264,10 @@ fn test_p5_agorg_scope_switch_clears_rail_state() {
         "after scope switch, operation_id must be the fresh one from scope B"
     );
     // The fresh first step must be from the new run
-    assert_eq!(state.steps[0], "preview", "first step in new scope must be preview");
+    assert_eq!(
+        state.steps[0], "preview",
+        "first step in new scope must be preview"
+    );
     // Previous scope A operation_id must not be reachable
     assert_ne!(
         state.active_operation_id.as_deref(),
@@ -253,7 +283,15 @@ fn test_p5_agorg_scope_switch_clears_rail_state() {
 #[test]
 fn test_p5_error_envelope_has_all_required_fields() {
     let error_envelope = unknown_domain_envelope("badomain");
-    let required_fields = ["ok", "operation_id", "domain", "stage", "status", "summary", "inner"];
+    let required_fields = [
+        "ok",
+        "operation_id",
+        "domain",
+        "stage",
+        "status",
+        "summary",
+        "inner",
+    ];
     for field in &required_fields {
         assert!(
             error_envelope.get(*field).is_some(),

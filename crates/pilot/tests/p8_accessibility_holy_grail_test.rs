@@ -52,7 +52,7 @@ fn test_p8_holy_grail_operator_flow() {
         ui_content.contains("Unified cross-tab sequence. Preview operations never mutate."),
         "Zero-doc hint for P5 orchestration missing"
     );
-    
+
     // Check js for zero-doc hints in failure states
     let ui_js_path = Path::new("src/pilot_ui.js");
     let js_content = fs::read_to_string(ui_js_path).expect("Failed to read pilot_ui.js");

@@ -14,7 +14,8 @@ fn test_p8_adversarial_ui_contracts() {
     // "On failure paths, assert presence of: role="alert" OR aria-live="assertive",
     // actionable remediation text..."
     assert!(
-        js_content.contains("setAttribute('role', 'alert')") || js_content.contains("role=\"alert\""),
+        js_content.contains("setAttribute('role', 'alert')")
+            || js_content.contains("role=\"alert\""),
         "Adversarial failure: pilot_ui.js does not inject role='alert' on failure paths"
     );
 

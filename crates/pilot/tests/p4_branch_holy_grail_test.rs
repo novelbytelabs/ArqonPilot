@@ -8,13 +8,12 @@
 ///
 /// Behavior-first: tests call pilot-branch lib functions directly for logic,
 /// and CLI serve surface for route registration (avoids full DB dependency).
-
 use assert_cmd::Command;
-use pilot_branch::{
-    conflict_radar, execute_undo, list_undo_journal, parse_merge_tree_conflicts,
-    BranchUndoEntry, ConflictRadarResult,
-};
 use chrono::Utc;
+use pilot_branch::{
+    conflict_radar, execute_undo, list_undo_journal, parse_merge_tree_conflicts, BranchUndoEntry,
+    ConflictRadarResult,
+};
 use serde_json::Value;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,7 +44,10 @@ fn make_undo_entry(undone: bool) -> BranchUndoEntry {
 #[test]
 fn test_branch_conflict_radar_empty_repo_list_is_safe() {
     let results = conflict_radar(&[], "feat/p4-test", "main");
-    assert!(results.is_empty(), "expected empty results for empty repo list");
+    assert!(
+        results.is_empty(),
+        "expected empty results for empty repo list"
+    );
 }
 
 /// conflict_radar result serializes to the expected JSON contract shape.
@@ -89,10 +91,10 @@ fn test_branch_conflict_radar_merge_tree_fallback_empty_output_is_safe() {
 #[test]
 fn test_branch_conflict_radar_merge_tree_fallback_adversarial_inputs() {
     let cases = [
-        "",                                     // Completely empty
-        "\n\n\n",                               // Whitespace only
-        "not a sha\nnot a file entry\n",        // Random garbage
-        "100644 aabbccdd 1\t",                  // Truncated entry (no filename)
+        "",                              // Completely empty
+        "\n\n\n",                        // Whitespace only
+        "not a sha\nnot a file entry\n", // Random garbage
+        "100644 aabbccdd 1\t",           // Truncated entry (no filename)
     ];
     for input in cases {
         let files = parse_merge_tree_conflicts(input);
@@ -118,10 +120,15 @@ fn test_branch_undo_journal_empty_scope_is_safe() {
 fn test_branch_undo_dry_run_valid_entry_succeeds() {
     let entry = make_undo_entry(false);
     let outcome = execute_undo(&entry, true);
-    assert!(outcome.success, "dry-run undo of valid entry should succeed: {}", outcome.message);
+    assert!(
+        outcome.success,
+        "dry-run undo of valid entry should succeed: {}",
+        outcome.message
+    );
     assert!(
         outcome.message.contains("DRY RUN") || outcome.message.contains("Would restore"),
-        "dry-run message should describe what would happen: {}", outcome.message
+        "dry-run message should describe what would happen: {}",
+        outcome.message
     );
 }
 
@@ -139,7 +146,8 @@ fn test_branch_undo_null_ref_is_rejected() {
     );
     assert!(
         outcome.message.contains("Cannot undo"),
-        "expected CannotUndo message, got: {}", outcome.message
+        "expected CannotUndo message, got: {}",
+        outcome.message
     );
 }
 
@@ -147,8 +155,8 @@ fn test_branch_undo_null_ref_is_rejected() {
 #[test]
 fn test_branch_undo_already_undone_entry_is_rejected() {
     let entry = make_undo_entry(true); // undone = true
-    // execute_undo itself does not check undone flag — that's the API handler.
-    // The lib just executes the ref restore. Verify it doesn't panic.
+                                       // execute_undo itself does not check undone flag — that's the API handler.
+                                       // The lib just executes the ref restore. Verify it doesn't panic.
     let outcome = execute_undo(&entry, true);
     // dry_run=true with real refs must produce a deterministic result
     let _ = outcome.success;
@@ -167,7 +175,8 @@ fn pilot_cmd() -> Result<Command, Box<dyn std::error::Error>> {
 /// the router, the binary still compiles, but the route would 404 at runtime.
 /// The actual route binding is tested by the unit test test_branch_timeline_handler_ok.
 #[test]
-fn test_branch_timeline_route_registration_compile_guard() -> Result<(), Box<dyn std::error::Error>> {
+fn test_branch_timeline_route_registration_compile_guard() -> Result<(), Box<dyn std::error::Error>>
+{
     let out = pilot_cmd()?.args(["serve", "--help"]).output()?;
     assert!(
         out.status.success() || String::from_utf8_lossy(&out.stderr).contains("Usage"),
@@ -179,7 +188,8 @@ fn test_branch_timeline_route_registration_compile_guard() -> Result<(), Box<dyn
 
 /// /api/branch/undo-journal GET route is registered (regression guard).
 #[test]
-fn test_branch_undo_journal_route_registration_compile_guard() -> Result<(), Box<dyn std::error::Error>> {
+fn test_branch_undo_journal_route_registration_compile_guard(
+) -> Result<(), Box<dyn std::error::Error>> {
     let out = pilot_cmd()?.args(["branch", "--help"]).output()?;
     assert!(
         out.status.success() || String::from_utf8_lossy(&out.stderr).contains("Usage"),

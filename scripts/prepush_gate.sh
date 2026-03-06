@@ -25,10 +25,10 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 echo "[pre-push] log file: $LOG_FILE"
 
 if [[ "${CI:-}" != "true" && "${PILOT_ENFORCE_AGORG_DISCIPLINE:-1}" == "1" ]]; then
-  echo "[0/4] Pilot-for-Pilot discipline gate"
+  echo "[0/6] Pilot-for-Pilot discipline gate"
   ./scripts/pilot_discipline_gate.sh
 else
-  echo "[0/4] Pilot-for-Pilot discipline gate (skipped; CI or disabled)"
+  echo "[0/6] Pilot-for-Pilot discipline gate (skipped; CI or disabled)"
 fi
 
 TRANSIENT_NET_PATTERN='Could not resolve host|Temporary failure in name resolution|error sending request for url|failed to download from|spurious network error|operation timed out|failed to query replaced source registry'
@@ -98,13 +98,16 @@ finish() {
 }
 trap 'finish $?' EXIT
 
-echo "[1/4] Toolchain policy"
+echo "[1/6] Toolchain policy"
 ./scripts/verify_toolchain_policy.sh
 
-echo "[2/4] Locked compile gate (mandatory)"
+echo "[2/6] Format parity gate (mandatory)"
+run_with_retry "cargo-fmt" 1 core_cargo fmt --all -- --check
+
+echo "[3/6] Locked compile gate (mandatory)"
 run_with_retry "cargo-check" 3 core_cargo check -p pilot --locked
 
-echo "[3/4] Targeted locked CLI tests"
+echo "[4/6] Targeted locked CLI tests"
 run_with_retry "cargo-test" 3 core_cargo test -p pilot --locked \
   --test branch_cli_test \
   --test multi_cli_test \
@@ -117,7 +120,10 @@ run_with_retry "cargo-test" 3 core_cargo test -p pilot --locked \
   --test oracle_cli_test \
   --test report_cli_test
 
-echo "[4/4] Help surface smoke check"
+echo "[5/6] Packaging lane parity gate (mandatory)"
+run_with_retry "packaging-lane" 3 ./scripts/packaging_lane_check.sh
+
+echo "[6/6] Help surface smoke check"
 run_with_retry "cargo-help" 3 core_cargo run -q -p pilot -- --help >/tmp/pilot_help.txt
 if command -v rg >/dev/null 2>&1; then
   rg -n "oracle|heal|navigate|branch|multi|secure|plan|create|know|init|serve" /tmp/pilot_help.txt >/dev/null

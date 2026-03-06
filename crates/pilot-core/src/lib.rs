@@ -302,7 +302,7 @@ impl EvidenceBundleManifest {
         // First, ensure artifacts are sorted by path
         let mut clone = self.clone();
         clone.artifacts.sort_by(|a, b| a.path.cmp(&b.path));
-        
+
         let canon = serde_json::to_string(&clone).unwrap_or_default();
         let mut hasher = Sha256::new();
         hasher.update(canon.as_bytes());
@@ -327,7 +327,7 @@ impl BundleVerificationResult {
             offending_path: None,
         }
     }
-    
+
     pub fn schema_error(msg: impl Into<String>) -> Self {
         Self {
             is_valid: false,
@@ -363,7 +363,7 @@ impl BundleVerificationResult {
             offending_path: Some(path),
         }
     }
-    
+
     pub fn chain_mismatch(msg: impl Into<String>) -> Self {
         Self {
             is_valid: false,
@@ -377,20 +377,26 @@ impl BundleVerificationResult {
 pub fn verify_evidence_bundle(bundle_path: &std::path::PathBuf) -> BundleVerificationResult {
     let content = match std::fs::read_to_string(bundle_path) {
         Ok(c) => c,
-        Err(e) => return BundleVerificationResult::missing_file(
-            bundle_path.to_string_lossy().to_string(), 
-            format!("Failed to read bundle file: {}", e)
-        ),
+        Err(e) => {
+            return BundleVerificationResult::missing_file(
+                bundle_path.to_string_lossy().to_string(),
+                format!("Failed to read bundle file: {}", e),
+            )
+        }
     };
 
     let bundle: serde_json::Value = match serde_json::from_str(&content) {
         Ok(v) => v,
-        Err(e) => return BundleVerificationResult::parse_error(format!("Failed to parse JSON: {}", e)),
+        Err(e) => {
+            return BundleVerificationResult::parse_error(format!("Failed to parse JSON: {}", e))
+        }
     };
 
     let stated_hash = match bundle.get("bundle_hash").and_then(|h| h.as_str()) {
         Some(h) => h,
-        None => return BundleVerificationResult::schema_error("Missing 'bundle_hash' in bundle root"),
+        None => {
+            return BundleVerificationResult::schema_error("Missing 'bundle_hash' in bundle root")
+        }
     };
 
     let manifest_val = match bundle.get("manifest") {
@@ -400,7 +406,12 @@ pub fn verify_evidence_bundle(bundle_path: &std::path::PathBuf) -> BundleVerific
 
     let manifest: EvidenceBundleManifest = match serde_json::from_value(manifest_val.clone()) {
         Ok(m) => m,
-        Err(e) => return BundleVerificationResult::schema_error(format!("Manifest does not match canonical schema: {}", e)),
+        Err(e) => {
+            return BundleVerificationResult::schema_error(format!(
+                "Manifest does not match canonical schema: {}",
+                e
+            ))
+        }
     };
 
     if manifest.artifacts.is_empty() {
@@ -411,7 +422,10 @@ pub fn verify_evidence_bundle(bundle_path: &std::path::PathBuf) -> BundleVerific
     if computed_hash != stated_hash {
         return BundleVerificationResult::hash_mismatch(
             None,
-            format!("Manifest hash mismatch. Expected {}, got {}", stated_hash, computed_hash)
+            format!(
+                "Manifest hash mismatch. Expected {}, got {}",
+                stated_hash, computed_hash
+            ),
         );
     }
 
@@ -422,42 +436,59 @@ pub fn verify_evidence_bundle(bundle_path: &std::path::PathBuf) -> BundleVerific
 
     for artifact in &manifest.artifacts {
         let abs_path = bundle_dir.join(&artifact.path);
-        
+
         let metadata = match std::fs::metadata(&abs_path) {
             Ok(m) => m,
-            Err(_) => return BundleVerificationResult::missing_file(
-                artifact.path.clone(), 
-                "Referenced artifact file is missing on disk"
-            ),
+            Err(_) => {
+                return BundleVerificationResult::missing_file(
+                    artifact.path.clone(),
+                    "Referenced artifact file is missing on disk",
+                )
+            }
         };
 
         if metadata.len() != artifact.size_bytes {
             return BundleVerificationResult::hash_mismatch(
                 Some(artifact.path.clone()),
-                format!("Artifact size mismatch. Expected {}, got {}", artifact.size_bytes, metadata.len())
+                format!(
+                    "Artifact size mismatch. Expected {}, got {}",
+                    artifact.size_bytes,
+                    metadata.len()
+                ),
             );
         }
 
         let actual_hash = match compute_file_hash(&abs_path) {
             Ok(h) => h,
-            Err(e) => return BundleVerificationResult::missing_file(
-                artifact.path.clone(),
-                format!("Failed to read artifact for hashing: {}", e)
-            ),
+            Err(e) => {
+                return BundleVerificationResult::missing_file(
+                    artifact.path.clone(),
+                    format!("Failed to read artifact for hashing: {}", e),
+                )
+            }
         };
 
         if actual_hash != artifact.sha256 {
             return BundleVerificationResult::hash_mismatch(
                 Some(artifact.path.clone()),
-                format!("Artifact SHA-256 mismatch. Expected {}, got {}", artifact.sha256, actual_hash)
+                format!(
+                    "Artifact SHA-256 mismatch. Expected {}, got {}",
+                    artifact.sha256, actual_hash
+                ),
             );
         }
     }
 
     // Optional: verify internal chain_integrity boolean matches expectations
-    if let Some(valid) = manifest.chain_integrity.get("is_valid").and_then(|v| v.as_bool()) {
+    if let Some(valid) = manifest
+        .chain_integrity
+        .get("is_valid")
+        .and_then(|v| v.as_bool())
+    {
         if !valid {
-            return BundleVerificationResult::chain_mismatch("Internal chain_integrity status is invalid/broken");
+            return BundleVerificationResult::chain_mismatch(
+                "Internal chain_integrity status is invalid/broken",
+            );
         }
     }
 

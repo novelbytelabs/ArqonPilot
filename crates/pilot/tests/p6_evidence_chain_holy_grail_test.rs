@@ -8,14 +8,14 @@ fn test_p6_bundle_export_and_verify_holy_grail() {
     // 1. Setup a valid bundle structure
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    
+
     // Create two dummy artifacts
     let art1_path = root.join("art1.json");
     let art2_path = root.join("art2.json");
-    
+
     fs::write(&art1_path, b"dummy content 1").unwrap();
     fs::write(&art2_path, b"dummy content 2").unwrap();
-    
+
     let sha1 = pilot_core::compute_file_hash(&art1_path).unwrap();
     let sha2 = pilot_core::compute_file_hash(&art2_path).unwrap();
 
@@ -53,7 +53,7 @@ fn test_p6_bundle_export_and_verify_holy_grail() {
         "bundle_hash": bundle_hash,
         "manifest": manifest
     });
-    
+
     let bundle_path = root.join("evidence_bundle.json");
     fs::write(&bundle_path, serde_json::to_string_pretty(&bundle).unwrap()).unwrap();
 

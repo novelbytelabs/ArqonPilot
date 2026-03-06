@@ -1,3 +1,4 @@
+use chrono::Utc;
 /// P4: Branch Holy-Grail Completion — Adversarial tier
 ///
 /// Tests probe failure edges and safety contracts:
@@ -7,12 +8,10 @@
 /// 4. Timeline offset/limit bounds: large offset doesn't panic, 0-count is valid
 ///
 /// All tests run without a live DB (DB-guarded paths use skip_if_db_env_denied).
-
 use pilot_branch::{
-    conflict_radar, execute_undo, list_undo_journal, parse_merge_tree_conflicts,
-    BranchUndoEntry, ConfirmationType,
+    conflict_radar, execute_undo, list_undo_journal, parse_merge_tree_conflicts, BranchUndoEntry,
+    ConfirmationType,
 };
-use chrono::Utc;
 use serde_json::Value;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,12 +86,23 @@ fn test_branch_typed_confirmation_preview_response_contract() {
         }
     });
 
-    let cr = preview_response.get("confirmation_required").expect("missing confirmation_required");
-    let ctype = cr.get("type").and_then(Value::as_str).expect("missing type");
-    let phrase = cr.get("phrase").and_then(Value::as_str).expect("missing phrase");
+    let cr = preview_response
+        .get("confirmation_required")
+        .expect("missing confirmation_required");
+    let ctype = cr
+        .get("type")
+        .and_then(Value::as_str)
+        .expect("missing type");
+    let phrase = cr
+        .get("phrase")
+        .and_then(Value::as_str)
+        .expect("missing phrase");
 
     assert_eq!(ctype, "typed_phrase");
-    assert!(!phrase.is_empty(), "phrase must not be empty for TypedPhrase");
+    assert!(
+        !phrase.is_empty(),
+        "phrase must not be empty for TypedPhrase"
+    );
     assert!(
         phrase.contains("CONFIRM") || phrase.contains("DELETE") || phrase.len() >= 5,
         "phrase should be informative for the operator: '{phrase}'"
@@ -178,12 +188,18 @@ fn test_branch_conflict_radar_nonexistent_repo_returns_error_not_panic() {
     let repo = RepoEntry {
         id: 0,
         name: "NonExistentRepo".to_string(),
-        path: "/tmp/p4adv/nonexistent/path/that/does/not/exist".to_string().into(),
+        path: "/tmp/p4adv/nonexistent/path/that/does/not/exist"
+            .to_string()
+            .into(),
         group_name: None,
         tags: vec![],
     };
     let results = conflict_radar(&[repo], "feat/missing-branch", "main");
-    assert_eq!(results.len(), 1, "should return one result even for bad path");
+    assert_eq!(
+        results.len(),
+        1,
+        "should return one result even for bad path"
+    );
     let r = &results[0];
     // Must either have error set OR has_conflicts=false — must not panic
     assert!(
@@ -207,7 +223,8 @@ fn test_branch_undo_null_prior_ref_is_rejected_cleanly() {
     );
     assert!(
         outcome.message.contains("Cannot undo"),
-        "expected CannotUndo message, got: '{}'", outcome.message
+        "expected CannotUndo message, got: '{}'",
+        outcome.message
     );
 }
 

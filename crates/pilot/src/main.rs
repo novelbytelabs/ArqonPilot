@@ -3765,10 +3765,8 @@ async fn run_policy(args: &PolicyArgs) -> Result<CommandReport> {
                 "Deleted {} policy version {} (ago_path={:?})",
                 kind, version, ago_path
             );
-            let report = CommandReport::ok(
-                "policy.delete",
-                format!("Deleted {} v{}", kind, version),
-            );
+            let report =
+                CommandReport::ok("policy.delete", format!("Deleted {} v{}", kind, version));
             persist_mutation_audit("policy.delete", false, &report.summary, vec![]);
             Ok(report)
         }

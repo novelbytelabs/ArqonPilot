@@ -9,7 +9,7 @@ fn test_p6_verify_tampered_artifact_yields_hash_mismatch() {
     let root = dir.path();
     let art_path = root.join("art1.json");
     fs::write(&art_path, b"original content").unwrap();
-    
+
     let original_hash = pilot_core::compute_file_hash(&art_path).unwrap();
 
     let manifest = EvidenceBundleManifest {
@@ -29,7 +29,7 @@ fn test_p6_verify_tampered_artifact_yields_hash_mismatch() {
         "bundle_hash": manifest.compute_hash(),
         "manifest": manifest
     });
-    
+
     let bundle_path = root.join("bundle.json");
     fs::write(&bundle_path, serde_json::to_string(&bundle).unwrap()).unwrap();
 
@@ -64,7 +64,7 @@ fn test_p6_verify_missing_artifact_yields_missing_file() {
         "bundle_hash": manifest.compute_hash(),
         "manifest": manifest
     });
-    
+
     let bundle_path = root.join("bundle.json");
     fs::write(&bundle_path, serde_json::to_string(&bundle).unwrap()).unwrap();
 
@@ -101,7 +101,7 @@ fn test_p6_verify_bad_schema_yields_schema_error() {
 fn test_p6_verify_empty_artifacts_yields_schema_error() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    
+
     let manifest = EvidenceBundleManifest {
         bundle_id: "test".to_string(),
         created_at: "now".to_string(),
@@ -115,7 +115,7 @@ fn test_p6_verify_empty_artifacts_yields_schema_error() {
         "bundle_hash": manifest.compute_hash(),
         "manifest": manifest
     });
-    
+
     let bundle_path = root.join("bundle.json");
     fs::write(&bundle_path, serde_json::to_string(&bundle).unwrap()).unwrap();
 
@@ -150,7 +150,7 @@ fn test_p6_verify_chain_mismatch() {
         "bundle_hash": manifest.compute_hash(),
         "manifest": manifest
     });
-    
+
     let bundle_path = root.join("bundle.json");
     fs::write(&bundle_path, serde_json::to_string(&bundle).unwrap()).unwrap();
 
