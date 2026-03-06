@@ -474,6 +474,34 @@ pub struct OperatorRoutinePolicy {
     pub require_clean_worktree_for_push: LevelEnabled,
     pub allowed_push_branches: LevelList,
     pub required_prepush_steps: LevelList,
+    #[serde(default)]
+    pub post_commit_profile: OperatorRoutinePostCommitProfile,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct OperatorRoutinePostCommitProfile {
+    pub step_order: Vec<String>,
+    pub stop_on_fail: bool,
+    pub include_push_step: bool,
+    pub export_evidence_step: bool,
+}
+
+impl Default for OperatorRoutinePostCommitProfile {
+    fn default() -> Self {
+        Self {
+            step_order: vec![
+                "scope".to_string(),
+                "multi".to_string(),
+                "gates".to_string(),
+                "push".to_string(),
+                "ci".to_string(),
+                "evidence".to_string(),
+            ],
+            stop_on_fail: true,
+            include_push_step: false,
+            export_evidence_step: true,
+        }
+    }
 }
 
 impl Default for OperatorRoutinePolicy {
@@ -501,6 +529,7 @@ impl Default for OperatorRoutinePolicy {
                 level: EnforcementLevel::Warn,
                 items: vec!["gate".to_string()],
             },
+            post_commit_profile: OperatorRoutinePostCommitProfile::default(),
         }
     }
 }

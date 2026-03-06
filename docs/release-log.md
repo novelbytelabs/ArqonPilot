@@ -98,3 +98,34 @@ Use this structure for every new release:
 1. Compatibility matrix probe now uses explicit toolchain resolution (`rustup run`) to avoid false version reads.
 2. Migration smoke now isolates Pilot runtime state in temporary HOME while preserving cargo/rustup cache locations.
 3. Policy DB test harness now uses short unique `/tmp/pilotdb_*` paths and runtime-denial skips for deterministic CI/sandbox behavior.
+
+---
+
+## Pilot-for-Pilot Phase D Implementation (2026-03-05)
+
+- Scope: Dashboard **Release Routine (Phase D)** hardening for UI-first release execution.
+- Backend actions added:
+  - `release-readiness`
+  - `release-compat-matrix`
+  - `release-migration-smoke`
+  - `release-collect-evidence`
+  - `release-verify-bundle`
+- UI added:
+  - Release routine card with per-step chips, checklist output, and readiness score.
+  - Manual step buttons and one-click full routine.
+  - Bundle path auto-fill from collect-evidence output.
+- Verification:
+  - `node -c crates/pilot/src/pilot_ui.js` ✅
+  - `cargo check -p pilot --locked` ✅
+  - targeted tests:
+    - `test_scope_dependency_action_classification` ✅
+    - `test_parse_release_collect_evidence_path` ✅
+
+### Hard-Close Re-Verification (2026-03-06)
+
+- `./scripts/prepush_gate.sh` ✅ PASS
+- `./scripts/release_readiness_check.sh` ✅ PASS
+- `./scripts/compat_matrix_smoke.sh` ✅ PASS
+- `./scripts/migration_smoke_test.sh` ✅ PASS
+- `./scripts/check_duplicate_consts.py` ✅ PASS
+- Placeholder/stub scan on touched files: no code TODO/stub placeholders introduced ✅

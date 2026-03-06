@@ -444,6 +444,8 @@ struct DependencyActionRequest {
     branch: Option<String>,
     remote: Option<String>,
     preflight_steps: Option<Vec<String>>,
+    label: Option<String>,
+    bundle_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4437,6 +4439,71 @@ async fn run_dependency_action(
             )
             .await
         }
+        ("release-readiness", _) => {
+            run_local_script_streamed(
+                "./scripts/release_readiness_check.sh",
+                "release-readiness",
+                &state.events,
+            )
+            .await
+        }
+        ("release-compat-matrix", _) => {
+            run_local_script_streamed(
+                "./scripts/compat_matrix_smoke.sh",
+                "release-compat-matrix",
+                &state.events,
+            )
+            .await
+        }
+        ("release-migration-smoke", _) => {
+            run_local_script_streamed(
+                "./scripts/migration_smoke_test.sh",
+                "release-migration-smoke",
+                &state.events,
+            )
+            .await
+        }
+        ("release-collect-evidence", _) => {
+            let label = req
+                .label
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("release-ui");
+            if !is_safe_cli_token(label) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "label contains unsupported characters",
+                );
+            }
+            run_local_script_streamed(
+                &format!("./scripts/release_collect_evidence.sh --label {label}"),
+                "release-collect-evidence",
+                &state.events,
+            )
+            .await
+        }
+        ("release-verify-bundle", _) => {
+            let Some(bundle_path) = req
+                .bundle_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "bundle_path is required for release-verify-bundle",
+                );
+            };
+            if !is_safe_cli_token(bundle_path) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "bundle_path contains unsupported characters",
+                );
+            }
+            let verify_script = format!("{}/verify_bundle.sh", bundle_path.trim_end_matches('/'));
+            run_local_script_streamed(&verify_script, "release-verify-bundle", &state.events).await
+        }
         _ => return error_response(StatusCode::BAD_REQUEST, "unsupported action"),
     };
 
@@ -4460,6 +4527,18 @@ async fn run_dependency_action(
                         .unwrap_or_default(),
                 ) {
                     body["summary"] = summary;
+                }
+            }
+            if action == "release-collect-evidence" {
+                if let Some(path) = parse_release_collect_evidence_path(
+                    body.get("stdout")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    body.get("stderr")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ) {
+                    body["artifact_path"] = json!(path);
                 }
             }
             if action == "prepush-gate" {
@@ -5149,7 +5228,8 @@ mod tests {
         dependency_action_requires_cwd_scope, dependency_action_scope_required,
         filter_prune_paths_by_class, is_bus_recoverable_error, is_safe_cli_token,
         load_persisted_codex_contracts, normalize_orchestrate_payload, orchestrate_is_preview,
-        parse_json_from_mixed_output, payload_has_multi_selector, preflight_steps_from_action,
+        parse_json_from_mixed_output, parse_release_collect_evidence_path,
+        payload_has_multi_selector, preflight_steps_from_action,
         prune_expired_branch_previews, resolve_branch_targets, scope_filter_rows,
         default_policy_json_for_kind, sanitize_payload_for_local_exec, should_prefer_local_command, should_use_local_command_fallback, sorted_unique_ids, sorted_unique_tags,
         with_event_agorg_scope, BranchMatrixRow, BranchPreviewRecord, BranchRunRequest,
@@ -5255,11 +5335,29 @@ mod tests {
         assert!(dependency_action_scope_required("gate"));
         assert!(dependency_action_scope_required("prepush-gate"));
         assert!(dependency_action_scope_required("push"));
+        assert!(dependency_action_scope_required("release-readiness"));
+        assert!(dependency_action_scope_required("release-collect-evidence"));
+        assert!(dependency_action_scope_required("release-verify-bundle"));
         assert!(!dependency_action_scope_required("db-status"));
         assert!(!dependency_action_scope_required("services-start"));
 
         assert!(!dependency_action_requires_cwd_scope("repair"));
         assert!(!dependency_action_requires_cwd_scope("db-start"));
+    }
+
+    #[test]
+    fn test_parse_release_collect_evidence_path() {
+        let stdout = r#"
+Release evidence collected and manifest generated at:
+  /home/tester/.pilot/release_evidence/release_alpha_20260306T010203Z
+Summary:
+  /home/tester/.pilot/release_evidence/release_alpha_20260306T010203Z/SUMMARY.md
+"#;
+        let parsed = parse_release_collect_evidence_path(stdout, "");
+        assert_eq!(
+            parsed.as_deref(),
+            Some("/home/tester/.pilot/release_evidence/release_alpha_20260306T010203Z")
+        );
     }
 
     #[test]
@@ -6594,6 +6692,28 @@ fn parse_push_main_summary(stdout: &str, stderr: &str) -> Option<Value> {
     }
 }
 
+fn parse_release_collect_evidence_path(stdout: &str, stderr: &str) -> Option<String> {
+    let combined = format!("{stdout}\n{stderr}");
+    let mut next_path = false;
+    for raw in combined.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with("/home/") && line.contains("/.pilot/release_evidence/") {
+            return Some(line.to_string());
+        }
+        if line.starts_with("Release evidence collected and manifest generated at:") {
+            next_path = true;
+            continue;
+        }
+        if next_path && line.starts_with('/') {
+            return Some(line.to_string());
+        }
+    }
+    None
+}
+
 fn parse_prepush_summary(stdout: &str, stderr: &str) -> Option<Value> {
     let combined = format!("{stdout}\n{stderr}");
     let mut status = None::<String>;
@@ -6838,7 +6958,18 @@ fn command_requires_cwd_scope(command: &str) -> bool {
 fn dependency_action_scope_required(action: &str) -> bool {
     matches!(
         action,
-        "policy" | "hook-policy" | "drift" | "gate" | "prepush-gate" | "repair" | "push"
+        "policy"
+            | "hook-policy"
+            | "drift"
+            | "gate"
+            | "prepush-gate"
+            | "repair"
+            | "push"
+            | "release-readiness"
+            | "release-compat-matrix"
+            | "release-migration-smoke"
+            | "release-collect-evidence"
+            | "release-verify-bundle"
     )
 }
 
@@ -7912,7 +8043,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
     </div>
     <div class="card" style="grid-column: 1 / -1;">
       <h3>Post-Commit Routine (Pilot for Pilot)</h3>
-      <div class="helper">One-click flow: Scope -> Multi Preview -> Gates -> Push -> CI -> Evidence. Stops on first hard failure.</div>
+      <div class="helper">One-click flow driven by <code>operator_routine.post_commit_profile</code>.</div>
+      <div class="chip-row">
+        <span id="dash-routine-profile-source-chip" class="chip neutral" tabindex="0" role="status">Profile: loading</span>
+        <span id="dash-routine-profile-steps-chip" class="chip neutral" tabindex="0" role="status">Steps: -</span>
+      </div>
       <div class="chip-row">
         <span id="dash-routine-scope-chip" class="chip neutral" tabindex="0" role="status">Scope: idle</span>
         <span id="dash-routine-multi-chip" class="chip neutral" tabindex="0" role="status">Multi: idle</span>
@@ -7936,12 +8071,52 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </label>
         <button id="dash-routine-run-btn" class="btn" onclick="dashRunPostCommitRoutine()">Run Post-Commit Routine</button>
       </div>
+      <div id="dash-routine-timeline" class="timeline" role="status" aria-live="polite">
+        <div class="tl-empty">No routine run yet.</div>
+      </div>
+      <div id="dash-routine-actions" class="row"></div>
       <div class="pre-wrap">
         <div class="pre-actions">
           <button class="action-btn" onclick="copyToClipboard('dash-routine-out', this)">COPY</button>
           <button class="action-btn" onclick="clearElement('dash-routine-out')">CLEAR</button>
         </div>
         <pre id="dash-routine-out" role="status" aria-live="polite">Routine ready.</pre>
+      </div>
+    </div>
+    <div class="card" style="grid-column: 1 / -1;">
+      <h3>Release Routine (Phase D)</h3>
+      <div class="helper">Release mode runs readiness, compatibility, migration smoke, gate/push, bundle verify, and signed evidence export.</div>
+      <div class="chip-row">
+        <span id="dash-release-readiness-chip" class="chip neutral" tabindex="0" role="status">Readiness: idle</span>
+        <span id="dash-release-compat-chip" class="chip neutral" tabindex="0" role="status">Compat: idle</span>
+        <span id="dash-release-migration-chip" class="chip neutral" tabindex="0" role="status">Migration: idle</span>
+        <span id="dash-release-push-chip" class="chip neutral" tabindex="0" role="status">Publish: idle</span>
+        <span id="dash-release-bundle-chip" class="chip neutral" tabindex="0" role="status">Bundle: idle</span>
+        <span id="dash-release-verify-chip" class="chip neutral" tabindex="0" role="status">Verify: idle</span>
+        <span id="dash-release-score-chip" class="chip neutral" tabindex="0" role="status">Score: -</span>
+      </div>
+      <div class="row">
+        <input id="dash-release-label" placeholder="release label (e.g. 0.2.0a1)" value="alpha-local" />
+        <input id="dash-release-bundle-path" placeholder="release bundle path (auto-filled after collect)" />
+      </div>
+      <div class="row">
+        <label style="font-size:0.82rem;color:#a8b9e3;">
+          <input id="dash-release-allow-push" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
+          allow publish push step
+        </label>
+        <button id="dash-release-run-btn" class="btn" onclick="dashRunReleaseRoutine()">Run Release Routine</button>
+        <button class="btn secondary" onclick="dashReleaseRunStep('release-readiness')">Readiness</button>
+        <button class="btn secondary" onclick="dashReleaseRunStep('release-compat-matrix')">Compat</button>
+        <button class="btn secondary" onclick="dashReleaseRunStep('release-migration-smoke')">Migration</button>
+        <button class="btn secondary" onclick="dashReleaseRunStep('release-collect-evidence')">Collect Evidence</button>
+        <button class="btn secondary" onclick="dashReleaseRunStep('release-verify-bundle')">Verify Bundle</button>
+      </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-release-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-release-out')">CLEAR</button>
+        </div>
+        <pre id="dash-release-out" role="status" aria-live="polite">Release routine ready.</pre>
       </div>
     </div>
     <div class="grid">

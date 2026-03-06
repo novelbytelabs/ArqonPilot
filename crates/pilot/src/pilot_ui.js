@@ -201,8 +201,21 @@ const dashRoutineGatesChip = document.getElementById('dash-routine-gates-chip');
 const dashRoutinePushChip = document.getElementById('dash-routine-push-chip');
 const dashRoutineCiChip = document.getElementById('dash-routine-ci-chip');
 const dashRoutineEvidenceChip = document.getElementById('dash-routine-evidence-chip');
+const dashRoutineProfileSourceChip = document.getElementById('dash-routine-profile-source-chip');
+const dashRoutineProfileStepsChip = document.getElementById('dash-routine-profile-steps-chip');
 const dashRoutineOut = document.getElementById('dash-routine-out');
 const dashRoutineRunBtn = document.getElementById('dash-routine-run-btn');
+const dashRoutineTimeline = document.getElementById('dash-routine-timeline');
+const dashRoutineActions = document.getElementById('dash-routine-actions');
+const dashReleaseReadinessChip = document.getElementById('dash-release-readiness-chip');
+const dashReleaseCompatChip = document.getElementById('dash-release-compat-chip');
+const dashReleaseMigrationChip = document.getElementById('dash-release-migration-chip');
+const dashReleasePushChip = document.getElementById('dash-release-push-chip');
+const dashReleaseBundleChip = document.getElementById('dash-release-bundle-chip');
+const dashReleaseVerifyChip = document.getElementById('dash-release-verify-chip');
+const dashReleaseScoreChip = document.getElementById('dash-release-score-chip');
+const dashReleaseOut = document.getElementById('dash-release-out');
+const dashReleaseRunBtn = document.getElementById('dash-release-run-btn');
 const dashOracleChip = document.getElementById('dash-oracle-chip');
 const dashHealChip = document.getElementById('dash-heal-chip');
 const dashAgorgScoreChip = document.getElementById('dash-agorg-score-chip');
@@ -298,6 +311,13 @@ let multiActionLast = null;
 let multiMacroRunning = false;
 let multiMacroExpanded = false;
 let dashRoutineRunning = false;
+let dashRoutineTrace = [];
+const ROUTINE_DEFAULT_PROFILE = Object.freeze({
+  step_order: ['scope', 'multi', 'gates', 'push', 'ci', 'evidence'],
+  stop_on_fail: true,
+  include_push_step: false,
+  export_evidence_step: true
+});
 
 function activatePanel(tabName, opts = {}) {
   const persist = opts.persist !== false;
@@ -1990,7 +2010,7 @@ async function oracleViewReport() {
   oracleReportContent.textContent = data.content || '';
 }
 
-async function depRun(action) {
+async function depRun(action, options = {}) {
   const normalizedAction = action === 'gate' ? 'prepush-gate' : action;
   const isPreflight = ['policy', 'hook-policy', 'drift'].includes(normalizedAction);
   const req = { action: isPreflight ? 'preflight' : normalizedAction, json: false };
@@ -2002,6 +2022,14 @@ async function depRun(action) {
   if (normalizedAction === 'push') {
     req.branch = document.getElementById('dash-push-branch').value || 'main';
     req.remote = document.getElementById('dash-push-remote').value || 'origin';
+  }
+  if (options && typeof options === 'object') {
+    if (typeof options.label === 'string' && options.label.trim() !== '') {
+      req.label = options.label.trim();
+    }
+    if (typeof options.bundle_path === 'string' && options.bundle_path.trim() !== '') {
+      req.bundle_path = options.bundle_path.trim();
+    }
   }
   const res = await fetch('/api/orchestrate/run', {
     method: 'POST',
@@ -4253,6 +4281,82 @@ function dashServicesStop() { depRun('services-stop'); }
 function dashServicesRestart() { depRun('services-restart'); }
 function dashRunPush() { depRun('push'); }
 
+function normalizeRoutineProfile(profile) {
+  const fallback = { ...ROUTINE_DEFAULT_PROFILE };
+  if (!profile || typeof profile !== 'object') return fallback;
+  const validSteps = new Set(['scope', 'multi', 'gates', 'push', 'ci', 'evidence']);
+  const incoming = Array.isArray(profile.step_order) ? profile.step_order : [];
+  const seen = new Set();
+  const ordered = [];
+  incoming.forEach((step) => {
+    const normalized = String(step || '').trim().toLowerCase();
+    if (!validSteps.has(normalized) || seen.has(normalized)) return;
+    seen.add(normalized);
+    ordered.push(normalized);
+  });
+  if (!ordered.length) ordered.push(...fallback.step_order);
+  return {
+    step_order: ordered,
+    stop_on_fail: profile.stop_on_fail !== false,
+    include_push_step: !!profile.include_push_step,
+    export_evidence_step: profile.export_evidence_step !== false
+  };
+}
+
+function routineProfileDiff(profile) {
+  const diffs = [];
+  const fallback = ROUTINE_DEFAULT_PROFILE;
+  if (JSON.stringify(profile.step_order) !== JSON.stringify(fallback.step_order)) {
+    diffs.push(`step_order=${profile.step_order.join('>')}`);
+  }
+  if (profile.stop_on_fail !== fallback.stop_on_fail) {
+    diffs.push(`stop_on_fail=${profile.stop_on_fail}`);
+  }
+  if (profile.include_push_step !== fallback.include_push_step) {
+    diffs.push(`include_push_step=${profile.include_push_step}`);
+  }
+  if (profile.export_evidence_step !== fallback.export_evidence_step) {
+    diffs.push(`export_evidence_step=${profile.export_evidence_step}`);
+  }
+  return diffs;
+}
+
+async function loadRoutinePolicyProfile() {
+  const res = await fetchJsonSafe('/api/settings/policy/operator_routine');
+  if (!res || res.ok === false || !res.policy_json || typeof res.policy_json !== 'object') {
+    return {
+      ok: false,
+      source: 'Built-in default',
+      version: 0,
+      status: 'fallback',
+      profile: { ...ROUTINE_DEFAULT_PROFILE },
+      diff: []
+    };
+  }
+  const profile = normalizeRoutineProfile(res.policy_json.post_commit_profile);
+  return {
+    ok: true,
+    source: String(res.source || 'Unknown'),
+    version: Number.isFinite(res.version) ? res.version : 0,
+    status: String(res.status || 'unknown'),
+    profile,
+    diff: routineProfileDiff(profile)
+  };
+}
+
+function routineApplyPolicyProfile(loaded) {
+  const profile = loaded?.profile ? loaded.profile : { ...ROUTINE_DEFAULT_PROFILE };
+  const pushToggle = document.getElementById('dash-routine-allow-push');
+  const evidenceToggle = document.getElementById('dash-routine-export-evidence');
+  if (pushToggle) pushToggle.checked = !!profile.include_push_step;
+  if (evidenceToggle) evidenceToggle.checked = !!profile.export_evidence_step;
+  const sourceText = `${loaded?.source || 'Built-in default'} v${loaded?.version ?? 0} [${loaded?.status || 'fallback'}]`;
+  const stepsText = profile.step_order.join(' -> ');
+  const sourceLevel = loaded?.ok ? 'ok' : 'warn';
+  routineSetChip(dashRoutineProfileSourceChip, `Profile: ${sourceText}`, sourceLevel);
+  routineSetChip(dashRoutineProfileStepsChip, `Steps: ${stepsText}`, 'neutral');
+}
+
 function routineSetChip(chip, label, level) {
   if (!chip) return;
   chip.textContent = label;
@@ -4266,6 +4370,96 @@ function routineResetChips() {
   routineSetChip(dashRoutinePushChip, 'Push: idle', 'neutral');
   routineSetChip(dashRoutineCiChip, 'CI: idle', 'neutral');
   routineSetChip(dashRoutineEvidenceChip, 'Evidence: idle', 'neutral');
+  routineSetChip(dashRoutineProfileSourceChip, 'Profile: loading', 'neutral');
+  routineSetChip(dashRoutineProfileStepsChip, 'Steps: -', 'neutral');
+}
+
+function routineResetTimeline() {
+  dashRoutineTrace = [];
+  routineRenderTimeline();
+  routineRenderActions();
+}
+
+function routineRecord(stage, status, summary, detail = '', remediation = '', actionId = '', startedAt = 0) {
+  const finishedAt = Date.now();
+  const durationMs = startedAt > 0 ? Math.max(0, finishedAt - startedAt) : 0;
+  dashRoutineTrace.push({
+    ts: new Date(finishedAt).toISOString(),
+    stage,
+    status,
+    summary,
+    detail,
+    remediation,
+    actionId,
+    durationMs
+  });
+  routineRenderTimeline();
+  routineRenderActions();
+}
+
+function routineRenderTimeline() {
+  if (!dashRoutineTimeline) return;
+  if (!dashRoutineTrace.length) {
+    dashRoutineTimeline.innerHTML = '<div class="tl-empty">No routine run yet.</div>';
+    return;
+  }
+  const rows = dashRoutineTrace.map((e) => {
+    const stateClass = e.status === 'pass' ? 'completed' : (e.status === 'fail' ? 'failed' : 'running');
+    const duration = e.durationMs > 0 ? `${e.durationMs}ms` : '-';
+    const safeDetail = String(e.detail || '').replaceAll('<', '&lt;');
+    const safeRemediation = String(e.remediation || '').replaceAll('<', '&lt;');
+    return `
+      <div class="tl-item ${stateClass}">
+        <div class="tl-head">
+          <span><b>${e.stage}</b> (${duration})</span>
+          <span class="chip ${e.status === 'pass' ? 'ok' : (e.status === 'fail' ? 'fail' : 'warn')}">${String(e.status || '').toUpperCase()}</span>
+        </div>
+        <div class="tl-body">${e.summary || ''}</div>
+        ${safeRemediation ? `<div class="muted" style="margin-top:6px;">Remediation: ${safeRemediation}</div>` : ''}
+        ${safeDetail ? `<details style="margin-top:6px;"><summary>Step details</summary><pre style="margin-top:6px;">${safeDetail}</pre></details>` : ''}
+      </div>
+    `;
+  });
+  dashRoutineTimeline.innerHTML = rows.join('\n');
+}
+
+function routineRenderActions() {
+  if (!dashRoutineActions) return;
+  const fail = [...dashRoutineTrace].reverse().find((e) => e.status === 'fail' && e.actionId);
+  if (!fail) {
+    dashRoutineActions.innerHTML = '';
+    return;
+  }
+  let label = 'Open Relevant Panel';
+  if (fail.actionId === 'open_agorg') label = 'Open AGOrg Panel';
+  if (fail.actionId === 'open_multi') label = 'Open Multi Panel';
+  if (fail.actionId === 'open_dashboard_gate') label = 'Open Dashboard Gates';
+  if (fail.actionId === 'open_push') label = 'Open Push Controls';
+  dashRoutineActions.innerHTML = `<button class="btn secondary" onclick="routineRunAction('${fail.actionId}')">${label}</button>`;
+}
+
+function routineRunAction(actionId) {
+  if (actionId === 'open_agorg') {
+    activatePanel('agorg');
+    return;
+  }
+  if (actionId === 'open_multi') {
+    activatePanel('multi');
+    const groupInput = document.getElementById('multi-group');
+    if (groupInput) groupInput.focus();
+    return;
+  }
+  if (actionId === 'open_dashboard_gate') {
+    activatePanel('dashboard');
+    const btn = document.querySelector('button[onclick="dashRunGate()"]');
+    if (btn) btn.focus();
+    return;
+  }
+  if (actionId === 'open_push') {
+    activatePanel('dashboard');
+    const btn = document.querySelector('button[onclick="dashRunPush()"]');
+    if (btn) btn.focus();
+  }
 }
 
 function parseMultiScopeFromRoutine() {
@@ -4305,131 +4499,225 @@ async function dashRunPostCommitRoutine() {
     dashRoutineRunBtn.textContent = 'Running...';
   }
   routineResetChips();
+  routineResetTimeline();
   const lines = [];
   lines.push('Post-Commit Routine');
   lines.push(`Started: ${new Date().toISOString()}`);
   try {
-    routineSetChip(dashRoutineScopeChip, 'Scope: running', 'warn');
-    const active = await fetchJsonSafe('/api/agorg/active');
-    if (!active || !active.ok || !active.active || !active.active.id) {
-      routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
-      lines.push('Scope: FAIL (no active AGOrg)');
-      lines.push('Remediation: open AGOrg tab and select active scope.');
-      routineWriteSummary(lines);
-      return;
+    const loaded = await loadRoutinePolicyProfile();
+    routineApplyPolicyProfile(loaded);
+    const profile = loaded.profile;
+    const profileDiff = routineProfileDiff(profile);
+    lines.push(`Profile: ${loaded.source} v${loaded.version} [${loaded.status}]`);
+    lines.push(`Step Order: ${profile.step_order.join(' -> ')}`);
+    if (profileDiff.length) {
+      lines.push(`Profile Diff: ${profileDiff.join(', ')}`);
     }
-    const scope = parseMultiScopeFromRoutine();
-    if (!scope.group && (!Array.isArray(scope.tags) || scope.tags.length === 0)) {
-      routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
-      lines.push('Scope: FAIL (Group/Tags required)');
-      lines.push('Remediation: set Group or Tags in the Post-Commit Routine card.');
-      routineWriteSummary(lines);
-      return;
-    }
-    const multiGroupInput = document.getElementById('multi-group');
-    const multiTagsInput = document.getElementById('multi-tags');
-    if (multiGroupInput) multiGroupInput.value = scope.group || '';
-    if (multiTagsInput) multiTagsInput.value = (scope.tags || []).join(',');
-    const stats = await multiSelectorStats();
-    if (!stats.ok || stats.filtered <= 0) {
-      routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
-      lines.push(`Scope: FAIL (${stats.error || 'no repos matched selector'})`);
-      lines.push('Remediation: register AGO(s), then adjust Group/Tags selector.');
-      routineWriteSummary(lines);
-      return;
-    }
-    routineSetChip(dashRoutineScopeChip, `Scope: pass (${stats.filtered})`, 'ok');
-    lines.push(`Scope: PASS (AGOrg=${active.active.name}, matched=${stats.filtered}/${stats.inScope})`);
 
-    routineSetChip(dashRoutineMultiChip, 'Multi: running', 'warn');
-    const multiSteps = [
-      { cmd: 'pilot.multi.list', payload: scope },
-      { cmd: 'pilot.multi.status', payload: scope },
-      { cmd: 'pilot.multi.order', payload: scope },
-      { cmd: 'pilot.multi.dag', payload: { ...scope, dry_run: true } },
-      { cmd: 'pilot.multi.prs.create', payload: { ...scope, dry_run: true, head_branch: 'dev', base_branch: 'main' } }
-    ];
-    let multiOk = true;
-    for (const step of multiSteps) {
-      const result = await runMultiCommand(step.cmd, step.payload, { outputEl: multiActionOut });
-      if (!result || !result.ok) {
-        multiOk = false;
-        lines.push(`Multi: FAIL (${step.cmd})`);
-        lines.push(`Reason: ${result?.error || result?.inner?.error || 'unknown'}`);
-        break;
+    const stepsToRun = profile.step_order.slice();
+    const includeSet = new Set(stepsToRun);
+    if (!includeSet.has('scope')) routineSetChip(dashRoutineScopeChip, 'Scope: off', 'neutral');
+    if (!includeSet.has('multi')) routineSetChip(dashRoutineMultiChip, 'Multi: off', 'neutral');
+    if (!includeSet.has('gates')) routineSetChip(dashRoutineGatesChip, 'Gates: off', 'neutral');
+    if (!includeSet.has('push')) routineSetChip(dashRoutinePushChip, 'Push: off', 'neutral');
+    if (!includeSet.has('ci')) routineSetChip(dashRoutineCiChip, 'CI: off', 'neutral');
+    if (!includeSet.has('evidence')) routineSetChip(dashRoutineEvidenceChip, 'Evidence: off', 'neutral');
+
+    const context = {
+      active: null,
+      scope: null,
+      stats: null
+    };
+    let failed = false;
+
+    for (const stepName of stepsToRun) {
+      const stageStart = Date.now();
+      if (stepName === 'scope') {
+        routineSetChip(dashRoutineScopeChip, 'Scope: running', 'warn');
+        const active = await fetchJsonSafe('/api/agorg/active');
+        if (!active || !active.ok || !active.active || !active.active.id) {
+          routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
+          lines.push('Scope: FAIL (no active AGOrg)');
+          lines.push('Remediation: open AGOrg tab and select active scope.');
+          routineRecord('Scope', 'fail', 'No active AGOrg scope selected.', JSON.stringify(active || {}, null, 2), 'Open AGOrg tab and select active scope.', 'open_agorg', stageStart);
+          failed = true;
+          if (profile.stop_on_fail) break;
+          continue;
+        }
+        const scope = parseMultiScopeFromRoutine();
+        if (!scope.group && (!Array.isArray(scope.tags) || scope.tags.length === 0)) {
+          routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
+          lines.push('Scope: FAIL (Group/Tags required)');
+          lines.push('Remediation: set Group or Tags in the Post-Commit Routine card.');
+          routineRecord('Scope', 'fail', 'Group/Tags selector missing.', JSON.stringify(scope, null, 2), 'Set Group or Tags in routine selector.', 'open_multi', stageStart);
+          failed = true;
+          if (profile.stop_on_fail) break;
+          continue;
+        }
+        const multiGroupInput = document.getElementById('multi-group');
+        const multiTagsInput = document.getElementById('multi-tags');
+        if (multiGroupInput) multiGroupInput.value = scope.group || '';
+        if (multiTagsInput) multiTagsInput.value = (scope.tags || []).join(',');
+        const stats = await multiSelectorStats();
+        if (!stats.ok || stats.filtered <= 0) {
+          routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
+          lines.push(`Scope: FAIL (${stats.error || 'no repos matched selector'})`);
+          lines.push('Remediation: register AGO(s), then adjust Group/Tags selector.');
+          routineRecord('Scope', 'fail', 'No repos matched scope selector.', JSON.stringify(stats, null, 2), 'Adjust Group/Tags to match registered AGOs.', 'open_multi', stageStart);
+          failed = true;
+          if (profile.stop_on_fail) break;
+          continue;
+        }
+        context.active = active.active;
+        context.scope = scope;
+        context.stats = stats;
+        routineSetChip(dashRoutineScopeChip, `Scope: pass (${stats.filtered})`, 'ok');
+        routineRecord('Scope', 'pass', `Matched ${stats.filtered}/${stats.inScope} repos in active AGOrg.`, JSON.stringify({ scope, stats, agorg: active.active }, null, 2), '', '', stageStart);
+        lines.push(`Scope: PASS (AGOrg=${active.active.name}, matched=${stats.filtered}/${stats.inScope})`);
+        continue;
+      }
+
+      if (stepName === 'multi') {
+        routineSetChip(dashRoutineMultiChip, 'Multi: running', 'warn');
+        if (!context.scope) {
+          routineSetChip(dashRoutineMultiChip, 'Multi: fail', 'fail');
+          lines.push('Multi: FAIL (scope stage not satisfied)');
+          routineRecord('Multi', 'fail', 'Scope step must pass before multi flow.', '', 'Run Scope stage first or keep default step order.', 'open_multi', stageStart);
+          failed = true;
+          if (profile.stop_on_fail) break;
+          continue;
+        }
+        const multiSteps = [
+          { cmd: 'pilot.multi.list', payload: context.scope },
+          { cmd: 'pilot.multi.status', payload: context.scope },
+          { cmd: 'pilot.multi.order', payload: context.scope },
+          { cmd: 'pilot.multi.dag', payload: { ...context.scope, dry_run: true } },
+          { cmd: 'pilot.multi.prs.create', payload: { ...context.scope, dry_run: true, head_branch: 'dev', base_branch: 'main' } }
+        ];
+        let multiOk = true;
+        for (const step of multiSteps) {
+          const result = await runMultiCommand(step.cmd, step.payload, { outputEl: multiActionOut });
+          if (!result || !result.ok) {
+            multiOk = false;
+            lines.push(`Multi: FAIL (${step.cmd})`);
+            lines.push(`Reason: ${result?.error || result?.inner?.error || 'unknown'}`);
+            routineRecord('Multi', 'fail', `Step failed: ${step.cmd}`, JSON.stringify(result || {}, null, 2), 'Open Multi tab and verify selector + registry.', 'open_multi', stageStart);
+            break;
+          }
+        }
+        if (!multiOk) {
+          routineSetChip(dashRoutineMultiChip, 'Multi: fail', 'fail');
+          failed = true;
+          if (profile.stop_on_fail) break;
+          continue;
+        }
+        const snap = multiActionLast && multiActionLast.data ? multiActionLast.data.multi_snapshot : null;
+        const repoCount = Array.isArray(snap?.repos) ? snap.repos.length : 0;
+        routineSetChip(dashRoutineMultiChip, `Multi: pass (${repoCount})`, 'ok');
+        routineRecord('Multi', 'pass', `Multi preview flow completed for ${repoCount} repos.`, JSON.stringify(snap || {}, null, 2), '', '', stageStart);
+        lines.push(`Multi: PASS (repos=${repoCount})`);
+        continue;
+      }
+
+      if (stepName === 'gates') {
+        routineSetChip(dashRoutineGatesChip, 'Gates: running', 'warn');
+        const gateActions = ['policy', 'hook-policy', 'drift', 'gate'];
+        let gatesOk = true;
+        for (const action of gateActions) {
+          const data = await depRun(action);
+          if (!isDepStepPass(action, data)) {
+            gatesOk = false;
+            routineSetChip(dashRoutineGatesChip, `Gates: fail (${action})`, 'fail');
+            lines.push(`Gates: FAIL at ${action}`);
+            lines.push('Remediation: inspect Dashboard gate output and retry.');
+            routineRecord('Gates', 'fail', `Gate failed at ${action}.`, JSON.stringify(data || {}, null, 2), 'Open Dashboard and run gate controls individually.', 'open_dashboard_gate', stageStart);
+            break;
+          }
+        }
+        if (!gatesOk) {
+          failed = true;
+          if (profile.stop_on_fail) break;
+          continue;
+        }
+        routineSetChip(dashRoutineGatesChip, 'Gates: pass', 'ok');
+        routineRecord('Gates', 'pass', 'Policy/Hook/Drift/Gate all passed.', '', '', '', stageStart);
+        lines.push('Gates: PASS');
+        continue;
+      }
+
+      if (stepName === 'push') {
+        const allowPush = !!document.getElementById('dash-routine-allow-push')?.checked;
+        if (!allowPush) {
+          routineSetChip(dashRoutinePushChip, 'Push: blocked', 'warn');
+          routineRecord('Push', 'warn', 'Push step skipped by toggle.', '', '', '', stageStart);
+          lines.push('Push: BLOCKED (allow push step is disabled)');
+          continue;
+        }
+        routineSetChip(dashRoutinePushChip, 'Push: running', 'warn');
+        const pushRes = await depRun('push');
+        if (!isDepStepPass('push', pushRes)) {
+          routineSetChip(dashRoutinePushChip, 'Push: fail', 'fail');
+          lines.push(`Push: FAIL (${pushRes?.error || pushRes?.inner?.error || 'unknown'})`);
+          routineRecord('Push', 'fail', 'Push safe failed.', JSON.stringify(pushRes || {}, null, 2), 'Open push controls and inspect gate/push diagnostics.', 'open_push', stageStart);
+          failed = true;
+          if (profile.stop_on_fail) break;
+          continue;
+        }
+        routineSetChip(dashRoutinePushChip, 'Push: pass', 'ok');
+        routineRecord('Push', 'pass', 'Push safe passed.', JSON.stringify(pushRes || {}, null, 2), '', '', stageStart);
+        lines.push('Push: PASS');
+        continue;
+      }
+
+      if (stepName === 'ci') {
+        routineSetChip(dashRoutineCiChip, 'CI: running', 'warn');
+        const ci = await fetchJsonSafe('/api/orchestrate/graph-status');
+        if (!ci || !ci.ok) {
+          routineSetChip(dashRoutineCiChip, 'CI: fail', 'fail');
+          lines.push(`CI: FAIL (${ci?.error || 'graph status unavailable'})`);
+          routineRecord('CI', 'fail', 'CI graph status unavailable.', JSON.stringify(ci || {}, null, 2), 'Retry once services are healthy.', 'open_dashboard_gate', stageStart);
+          failed = true;
+          if (profile.stop_on_fail) break;
+          continue;
+        }
+        routineSetChip(dashRoutineCiChip, 'CI: pass', 'ok');
+        routineRecord('CI', 'pass', `Graph status schema=${ci.schema_version || 'unknown'}.`, JSON.stringify(ci, null, 2), '', '', stageStart);
+        lines.push(`CI: PASS (schema=${ci.schema_version || 'unknown'})`);
+        continue;
+      }
+
+      if (stepName === 'evidence') {
+        const exportEvidence = !!document.getElementById('dash-routine-export-evidence')?.checked;
+        if (!exportEvidence) {
+          routineSetChip(dashRoutineEvidenceChip, 'Evidence: skipped', 'warn');
+          routineRecord('Evidence', 'warn', 'Evidence export skipped by toggle.', '', '', '', stageStart);
+          lines.push('Evidence: SKIPPED (toggle disabled)');
+          continue;
+        }
+        routineSetChip(dashRoutineEvidenceChip, 'Evidence: running', 'warn');
+        const ev = await dashExportEvidence();
+        if (!ev || !ev.ok) {
+          routineSetChip(dashRoutineEvidenceChip, 'Evidence: fail', 'fail');
+          lines.push(`Evidence: FAIL (${ev?.error || 'export failed'})`);
+          routineRecord('Evidence', 'fail', 'Evidence export failed.', JSON.stringify(ev || {}, null, 2), 'Use Export Evidence button directly and inspect output.', 'open_dashboard_gate', stageStart);
+          failed = true;
+          if (profile.stop_on_fail) break;
+          continue;
+        }
+        routineSetChip(dashRoutineEvidenceChip, 'Evidence: pass', 'ok');
+        routineRecord('Evidence', 'pass', `Evidence exported: ${ev.path || 'artifact generated'}.`, JSON.stringify(ev, null, 2), '', '', stageStart);
+        lines.push(`Evidence: PASS (${ev.path || 'artifact exported'})`);
       }
     }
-    if (!multiOk) {
-      routineSetChip(dashRoutineMultiChip, 'Multi: fail', 'fail');
-      routineWriteSummary(lines);
-      return;
-    }
-    const snap = multiActionLast && multiActionLast.data ? multiActionLast.data.multi_snapshot : null;
-    const repoCount = Array.isArray(snap?.repos) ? snap.repos.length : 0;
-    routineSetChip(dashRoutineMultiChip, `Multi: pass (${repoCount})`, 'ok');
-    lines.push(`Multi: PASS (repos=${repoCount})`);
 
-    routineSetChip(dashRoutineGatesChip, 'Gates: running', 'warn');
-    const gateActions = ['policy', 'hook-policy', 'drift', 'gate'];
-    for (const action of gateActions) {
-      const data = await depRun(action);
-      if (!isDepStepPass(action, data)) {
-        routineSetChip(dashRoutineGatesChip, `Gates: fail (${action})`, 'fail');
-        lines.push(`Gates: FAIL at ${action}`);
-        lines.push('Remediation: inspect Dashboard gate output and retry.');
-        routineWriteSummary(lines);
-        return;
+    if (failed) {
+      lines.push('Result: FAILED');
+      if (!profile.stop_on_fail) {
+        lines.push('Mode: Continue-on-fail (profile stop_on_fail=false)');
       }
-    }
-    routineSetChip(dashRoutineGatesChip, 'Gates: pass', 'ok');
-    lines.push('Gates: PASS');
-
-    const allowPush = !!document.getElementById('dash-routine-allow-push')?.checked;
-    if (!allowPush) {
-      routineSetChip(dashRoutinePushChip, 'Push: blocked', 'warn');
-      lines.push('Push: BLOCKED (allow push step is disabled)');
     } else {
-      routineSetChip(dashRoutinePushChip, 'Push: running', 'warn');
-      const pushRes = await depRun('push');
-      if (!isDepStepPass('push', pushRes)) {
-        routineSetChip(dashRoutinePushChip, 'Push: fail', 'fail');
-        lines.push(`Push: FAIL (${pushRes?.error || pushRes?.inner?.error || 'unknown'})`);
-        routineWriteSummary(lines);
-        return;
-      }
-      routineSetChip(dashRoutinePushChip, 'Push: pass', 'ok');
-      lines.push('Push: PASS');
+      lines.push('Result: SUCCESS');
     }
-
-    routineSetChip(dashRoutineCiChip, 'CI: running', 'warn');
-    const ci = await fetchJsonSafe('/api/orchestrate/graph-status');
-    if (!ci || !ci.ok) {
-      routineSetChip(dashRoutineCiChip, 'CI: fail', 'fail');
-      lines.push(`CI: FAIL (${ci?.error || 'graph status unavailable'})`);
-      routineWriteSummary(lines);
-      return;
-    }
-    routineSetChip(dashRoutineCiChip, 'CI: pass', 'ok');
-    lines.push(`CI: PASS (schema=${ci.schema_version || 'unknown'})`);
-
-    const exportEvidence = !!document.getElementById('dash-routine-export-evidence')?.checked;
-    if (!exportEvidence) {
-      routineSetChip(dashRoutineEvidenceChip, 'Evidence: skipped', 'warn');
-      lines.push('Evidence: SKIPPED (toggle disabled)');
-    } else {
-      routineSetChip(dashRoutineEvidenceChip, 'Evidence: running', 'warn');
-      const ev = await dashExportEvidence();
-      if (!ev || !ev.ok) {
-        routineSetChip(dashRoutineEvidenceChip, 'Evidence: fail', 'fail');
-        lines.push(`Evidence: FAIL (${ev?.error || 'export failed'})`);
-        routineWriteSummary(lines);
-        return;
-      }
-      routineSetChip(dashRoutineEvidenceChip, 'Evidence: pass', 'ok');
-      lines.push(`Evidence: PASS (${ev.path || 'artifact exported'})`);
-    }
-
-    lines.push('Result: SUCCESS');
     routineWriteSummary(lines);
   } finally {
     dashRoutineRunning = false;
@@ -4437,6 +4725,166 @@ async function dashRunPostCommitRoutine() {
       dashRoutineRunBtn.disabled = false;
       dashRoutineRunBtn.textContent = 'Run Post-Commit Routine';
     }
+  }
+}
+
+function dashReleaseSetChip(chip, label, level) {
+  if (!chip) return;
+  chip.textContent = label;
+  chip.className = `chip ${level}`;
+}
+
+function dashReleaseResetChips() {
+  dashReleaseSetChip(dashReleaseReadinessChip, 'Readiness: idle', 'neutral');
+  dashReleaseSetChip(dashReleaseCompatChip, 'Compat: idle', 'neutral');
+  dashReleaseSetChip(dashReleaseMigrationChip, 'Migration: idle', 'neutral');
+  dashReleaseSetChip(dashReleasePushChip, 'Publish: idle', 'neutral');
+  dashReleaseSetChip(dashReleaseBundleChip, 'Bundle: idle', 'neutral');
+  dashReleaseSetChip(dashReleaseVerifyChip, 'Verify: idle', 'neutral');
+  dashReleaseSetChip(dashReleaseScoreChip, 'Score: -', 'neutral');
+}
+
+function dashReleaseActionToChip(action) {
+  if (action === 'release-readiness') return dashReleaseReadinessChip;
+  if (action === 'release-compat-matrix') return dashReleaseCompatChip;
+  if (action === 'release-migration-smoke') return dashReleaseMigrationChip;
+  if (action === 'push') return dashReleasePushChip;
+  if (action === 'release-collect-evidence') return dashReleaseBundleChip;
+  if (action === 'release-verify-bundle') return dashReleaseVerifyChip;
+  return null;
+}
+
+function dashReleaseActionLabel(action) {
+  if (action === 'release-readiness') return 'Readiness';
+  if (action === 'release-compat-matrix') return 'Compat';
+  if (action === 'release-migration-smoke') return 'Migration';
+  if (action === 'push') return 'Publish';
+  if (action === 'release-collect-evidence') return 'Bundle';
+  if (action === 'release-verify-bundle') return 'Verify';
+  return action;
+}
+
+function depEnvelopeInner(data) {
+  return (data && data.inner && typeof data.inner === 'object') ? data.inner : data;
+}
+
+function dashReleaseWrite(lines) {
+  if (!dashReleaseOut) return;
+  dashReleaseOut.textContent = lines.join('\n');
+  focusResultsForA11y(dashReleaseOut);
+}
+
+async function dashReleaseRunStep(action) {
+  const line = [`Release Step: ${dashReleaseActionLabel(action)}`];
+  const chip = dashReleaseActionToChip(action);
+  if (chip) dashReleaseSetChip(chip, `${dashReleaseActionLabel(action)}: running`, 'warn');
+  const label = (document.getElementById('dash-release-label')?.value || 'alpha-local').trim();
+  const bundlePath = (document.getElementById('dash-release-bundle-path')?.value || '').trim();
+  const opts = {};
+  if (action === 'release-collect-evidence') opts.label = label;
+  if (action === 'release-verify-bundle') opts.bundle_path = bundlePath;
+  const data = await depRun(action, opts);
+  const inner = depEnvelopeInner(data);
+  const ok = !!inner?.ok;
+  if (chip) dashReleaseSetChip(chip, `${dashReleaseActionLabel(action)}: ${ok ? 'pass' : 'fail'}`, ok ? 'ok' : 'fail');
+  if (action === 'release-collect-evidence' && inner?.artifact_path) {
+    const bundleInput = document.getElementById('dash-release-bundle-path');
+    if (bundleInput) bundleInput.value = inner.artifact_path;
+  }
+  line.push(`Status: ${ok ? 'PASS' : 'FAIL'}`);
+  line.push(`Summary: ${inner?.summary?.result || inner?.summary || inner?.error || 'n/a'}`);
+  if (inner?.artifact_path) line.push(`Artifact: ${inner.artifact_path}`);
+  dashReleaseWrite(line);
+}
+
+async function dashRunReleaseRoutine() {
+  dashReleaseResetChips();
+  if (dashReleaseRunBtn) {
+    dashReleaseRunBtn.disabled = true;
+    dashReleaseRunBtn.textContent = 'Running...';
+  }
+  try {
+  const lines = [];
+  lines.push('Release Routine');
+  lines.push(`Started: ${new Date().toISOString()}`);
+  const allowPush = !!document.getElementById('dash-release-allow-push')?.checked;
+  const label = (document.getElementById('dash-release-label')?.value || 'alpha-local').trim();
+  const steps = [
+    { action: 'release-readiness', required: true },
+    { action: 'release-compat-matrix', required: true },
+    { action: 'release-migration-smoke', required: true },
+    { action: 'prepush-gate', required: true, chip: dashReleasePushChip, label: 'Publish Gate' },
+    { action: 'push', required: allowPush, chip: dashReleasePushChip, label: 'Publish Push' },
+    { action: 'release-collect-evidence', required: true },
+    { action: 'release-verify-bundle', required: true }
+  ];
+  let passed = 0;
+  let requiredTotal = steps.filter((s) => s.required).length;
+  let failed = false;
+
+  for (const step of steps) {
+    const action = step.action;
+    const labelText = step.label || dashReleaseActionLabel(action);
+    const chip = step.chip || dashReleaseActionToChip(action);
+    if (!step.required) {
+      if (chip) dashReleaseSetChip(chip, `${labelText}: skipped`, 'neutral');
+      lines.push(`- ${labelText}: SKIPPED (toggle disabled)`);
+      continue;
+    }
+    if (chip) dashReleaseSetChip(chip, `${labelText}: running`, 'warn');
+    const opts = {};
+    if (action === 'release-collect-evidence') opts.label = label;
+    if (action === 'release-verify-bundle') {
+      const bundlePath = (document.getElementById('dash-release-bundle-path')?.value || '').trim();
+      opts.bundle_path = bundlePath;
+    }
+    const data = await depRun(action, opts);
+    const inner = depEnvelopeInner(data);
+    const ok = !!inner?.ok;
+    if (action === 'release-collect-evidence' && inner?.artifact_path) {
+      const bundleInput = document.getElementById('dash-release-bundle-path');
+      if (bundleInput) bundleInput.value = inner.artifact_path;
+    }
+    if (!ok) {
+      failed = true;
+      if (chip) dashReleaseSetChip(chip, `${labelText}: fail`, 'fail');
+      lines.push(`- ${labelText}: FAIL`);
+      lines.push(`  reason: ${inner?.error || data?.error || 'unknown error'}`);
+      break;
+    }
+    passed += 1;
+    if (chip) dashReleaseSetChip(chip, `${labelText}: pass`, 'ok');
+    lines.push(`- ${labelText}: PASS`);
+    if (inner?.artifact_path) lines.push(`  artifact: ${inner.artifact_path}`);
+  }
+
+  if (!failed) {
+    const signed = await dashExportEvidence();
+    const signedOk = !!signed?.ok;
+    if (signedOk) {
+      passed += 1;
+      requiredTotal += 1;
+      lines.push(`- Signed Evidence Export: PASS`);
+      lines.push(`  artifact: ${signed.path || 'generated'}`);
+    } else {
+      requiredTotal += 1;
+      failed = true;
+      lines.push(`- Signed Evidence Export: FAIL`);
+      lines.push(`  reason: ${signed?.error || 'export failed'}`);
+    }
+  }
+
+  const score = requiredTotal > 0 ? Math.round((passed / requiredTotal) * 100) : 0;
+  dashReleaseSetChip(dashReleaseScoreChip, `Score: ${score}%`, failed ? 'fail' : 'ok');
+  lines.push(``);
+  lines.push(`Release Readiness Score: ${score}% (${passed}/${requiredTotal})`);
+  lines.push(`Result: ${failed ? 'FAILED' : 'SUCCESS'}`);
+  dashReleaseWrite(lines);
+  } finally {
+  if (dashReleaseRunBtn) {
+    dashReleaseRunBtn.disabled = false;
+    dashReleaseRunBtn.textContent = 'Run Release Routine';
+  }
   }
 }
 

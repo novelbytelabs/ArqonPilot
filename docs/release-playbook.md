@@ -103,6 +103,39 @@ If GUI action is unavailable/unhealthy, use script equivalents:
 ./scripts/release_collect_evidence.sh --label <version-or-run-id>
 ```
 
+## Pilot-for-Pilot Release Routine (Phase D)
+
+Use Dashboard -> **Release Routine (Phase D)** for release-grade validation from UI.
+
+Step order:
+
+1. `release-readiness`
+2. `release-compat-matrix`
+3. `release-migration-smoke`
+4. `prepush-gate`
+5. optional `push` (enable **allow publish push step**)
+6. `release-collect-evidence` (uses the release label)
+7. `release-verify-bundle` (auto-uses bundle path from collect step)
+8. signed evidence export (`/api/evidence/export`)
+
+Outputs:
+
+1. Per-step PASS/FAIL checklist (human-readable, no JSON parsing required)
+2. Bundle path + verify result
+3. Readiness score chip (`passed_required_steps / total_required_steps`)
+
+Script-equivalent release path:
+
+```bash
+./scripts/release_readiness_check.sh
+./scripts/compat_matrix_smoke.sh
+./scripts/migration_smoke_test.sh
+./scripts/prepush_gate.sh
+./scripts/push_main.sh main origin
+./scripts/release_collect_evidence.sh --label <release-label>
+<bundle_path>/verify_bundle.sh
+```
+
 ---
 
 ## 1) Preflight and Gate Checks

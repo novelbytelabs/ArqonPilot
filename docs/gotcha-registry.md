@@ -600,6 +600,27 @@ Keep this file current whenever a new failure class appears.
      - `cargo test -p pilot --locked --test policy_parity_integration_test -- --nocapture`
      - `cargo test -p pilot --locked --test policy_workflow_e2e_test -- --nocapture`
 
+## G-028: Release bundle verify fails from missing/invalid bundle path
+
+- Signature:
+  - Release routine verify step fails with:
+    - `bundle_path is required for release-verify-bundle`
+    - `bundle_path contains unsupported characters`
+    - `verify_bundle.sh: No such file or directory`
+- Cause:
+  - Verify step ran before collect-evidence filled bundle path.
+  - Manual path value used unsupported shell characters.
+  - Bundle directory does not contain generated `verify_bundle.sh`.
+- Recovery:
+  1. Run collect step first:
+     - `release-collect-evidence` (UI) or
+     - `./scripts/release_collect_evidence.sh --label <label>`
+  2. Confirm bundle path and script:
+     - `<bundle_path>/verify_bundle.sh`
+  3. Re-run verify:
+     - `release-verify-bundle` (UI) or
+     - `<bundle_path>/verify_bundle.sh`
+
 ## Frozen Policy (Do Not Change)
 
 - Core Rust lane: `1.82.0`

@@ -6,6 +6,17 @@ Scope: **post-commit flow** (after coding + git commit), executed primarily from
 
 ---
 
+## Implementation Status
+
+1. Phase A: Complete (Dashboard one-click Post-Commit routine with remediation actions).
+2. Phase B: Complete (timeline/log visual execution with human-readable summaries).
+3. Phase C: Complete (policy-driven routine via `operator_routine.post_commit_profile`).
+4. Phase D: Complete (Release Routine card: readiness/compat/migration/publish/evidence/verify + readiness score).
+
+Hard-close evidence for this contract must be linked in `docs/release-log.md`.
+
+---
+
 ## 1) Product Intent
 
 Build an operator experience where the user can:
@@ -221,6 +232,20 @@ Definition of done (A):
 2. Release checklist view with required artifacts.
 3. Final release readiness score + signed evidence summary.
 
+Implemented:
+
+1. Dashboard **Release Routine (Phase D)** card executes:
+   - `release-readiness`
+   - `release-compat-matrix`
+   - `release-migration-smoke`
+   - `prepush-gate`
+   - optional `push` (publish toggle)
+   - `release-collect-evidence`
+   - `release-verify-bundle`
+   - signed evidence export (`/api/evidence/export`)
+2. Checklist output is human-readable by default (JSON remains secondary in existing action panels).
+3. Readiness score is computed from required step pass ratio and displayed as a chip.
+
 ---
 
 ## 9) Hard-Close Test Matrix
@@ -260,4 +285,3 @@ Must actively defend against:
 2. Implement structured stage summaries (default view), JSON as secondary.
 3. Add stage-stop + remediation actions.
 4. Add tests + update runbook/tutorial with exact usage.
-

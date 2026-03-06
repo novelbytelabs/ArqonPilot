@@ -123,6 +123,40 @@ Use this mapping:
 - `Gate: FAIL`
     - upstream check failed; open gate output and follow remediation lines in order.
 
+## Step 6: Run Release Routine (Phase D)
+
+Use this when you want release-grade checks directly in UI.
+
+1. Go to **Dashboard**.
+2. Find **Release Routine (Phase D)**.
+3. Set:
+     - **release label** (example: `0.2.0a1` or `alpha-local`)
+     - keep **allow publish push step** unchecked unless you explicitly want push from UI
+4. Click **Run Release Routine**.
+5. Wait for checklist output:
+     - Readiness
+     - Compat
+     - Migration
+     - Publish Gate (and optional Publish Push)
+     - Bundle collect
+     - Bundle verify
+     - Signed evidence export
+6. Confirm:
+     - every required step is `PASS`
+     - readiness score is high/green
+     - bundle path is present
+
+Terminal equivalents:
+
+```bash
+./scripts/release_readiness_check.sh
+./scripts/compat_matrix_smoke.sh
+./scripts/migration_smoke_test.sh
+./scripts/prepush_gate.sh
+./scripts/release_collect_evidence.sh --label <release-label>
+<bundle_path>/verify_bundle.sh
+```
+
 ## One-Command Verification (Terminal)
 
 After UI setup, confirm with:
