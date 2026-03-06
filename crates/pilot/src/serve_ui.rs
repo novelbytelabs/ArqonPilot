@@ -7629,6 +7629,33 @@ const INDEX_HTML: &str = r#"<!doctype html>
       font-family: 'JetBrains Mono', monospace;
       margin: 0;
     }
+    .multi-dag-visual-wrap {
+      margin-top: 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: radial-gradient(circle at 15% 10%, rgba(0,245,255,0.09), transparent 50%),
+                  radial-gradient(circle at 90% 90%, rgba(106,125,255,0.09), transparent 55%),
+                  rgba(0, 0, 0, 0.28);
+      padding: 10px;
+      min-height: 180px;
+    }
+    .multi-dag-visual-empty {
+      color: var(--dim);
+      font-size: 0.78rem;
+      font-family: 'JetBrains Mono', monospace;
+      text-align: center;
+      padding: 22px 8px;
+    }
+    .multi-dag-visual-scroll {
+      width: 100%;
+      overflow: auto;
+      border-radius: 8px;
+    }
+    #multi-dag-visual {
+      display: block;
+      min-width: 100%;
+      height: auto;
+    }
     .branch-log-entry {
       border: 1px solid var(--border);
       border-left: 3px solid transparent;
@@ -8621,6 +8648,7 @@ Recommended flow:
     <div class="sequence-strip">
       <button class="seq-step seq-step-btn" onclick="multiMacroListStatusOrder()">List > Status > Order</button>
       <button class="seq-step seq-step-btn" onclick="multiMacroDagPrPlan()">DAG > PR Plan</button>
+      <button class="seq-step seq-step-btn" onclick="multiMacroFleetFlow()">Full Fleet Flow</button>
       <span class="seq-step">Staged Apply (Dry Run -> Execute)</span>
     </div>
     <div class="pre-wrap" style="margin-bottom:12px;">
@@ -8671,6 +8699,13 @@ Recommended flow:
             <button class="action-btn" onclick="clearElement('multi-action-out')">CLEAR</button>
           </div>
           <pre id="multi-action-out" class="term-out" tabindex="-1">ready</pre>
+        </div>
+        <div class="multi-dag-visual-wrap" aria-live="polite">
+          <div class="helper" style="margin-bottom:8px;">Dependency map (stages and edges)</div>
+          <div id="multi-dag-visual-empty" class="multi-dag-visual-empty">Run `DAG` or a Multi macro to render the dependency map.</div>
+          <div id="multi-dag-visual-scroll" class="multi-dag-visual-scroll" style="display:none;">
+            <svg id="multi-dag-visual" role="img" aria-label="Multi dependency DAG visual"></svg>
+          </div>
         </div>
       </div>
       <div class="card">

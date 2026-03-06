@@ -87,6 +87,9 @@ const multiPrPlanBtn = document.getElementById('multi-pr-plan-btn');
 const multiMacroLogOut = document.getElementById('multi-macro-log-out');
 const multiMacroToggleBtn = document.getElementById('multi-macro-toggle-btn');
 const multiScopeModal = document.getElementById('multi-scope-modal');
+const multiDagVisual = document.getElementById('multi-dag-visual');
+const multiDagVisualScroll = document.getElementById('multi-dag-visual-scroll');
+const multiDagVisualEmpty = document.getElementById('multi-dag-visual-empty');
 let repoAgoOptionsCache = [];
 
 function logActivity(title, data) {
@@ -3679,10 +3682,19 @@ function appendMultiMacroTelemetry(label, data) {
     .find((line) => line.startsWith('Summary: '))
     ?.replace('Summary: ', '') || 'No summary available';
   const error = data?.error || data?.inner?.error || '';
+  const snap = data?.multi_snapshot || null;
+  const repoCount = Array.isArray(snap?.repos) ? snap.repos.length : null;
+  const statusCount = Array.isArray(snap?.statuses) ? snap.statuses.length : null;
+  const orderCount = Array.isArray(snap?.order) ? snap.order.length : null;
+  const stageCount = Array.isArray(snap?.dag?.stages) ? snap.dag.stages.length : null;
   const block = [
     `=== ${label} @ ${now} ===`,
     `Result: ${status}`,
     `Summary: ${summary}`,
+    repoCount !== null ? `Repos: ${repoCount}` : null,
+    statusCount !== null ? `Statuses: ${statusCount}` : null,
+    orderCount !== null ? `Order length: ${orderCount}` : null,
+    stageCount !== null ? `DAG stages: ${stageCount}` : null,
     error ? `Error: ${error}` : null,
     ''
   ].filter(Boolean).join('\n');
@@ -3702,6 +3714,153 @@ function focusResultsForA11y(el) {
   }
 }
 
+function renderMultiDagVisual(snapshot) {
+  if (!multiDagVisual || !multiDagVisualEmpty || !multiDagVisualScroll) return;
+  const stages = Array.isArray(snapshot?.dag?.stages) ? snapshot.dag.stages : [];
+  const rawEdges = Array.isArray(snapshot?.dag?.edges) ? snapshot.dag.edges : [];
+  if (stages.length === 0) {
+    multiDagVisual.innerHTML = '';
+    multiDagVisualScroll.style.display = 'none';
+    multiDagVisualEmpty.style.display = 'block';
+    multiDagVisualEmpty.textContent = 'No DAG stages available for current selector.';
+    return;
+  }
+
+  const stageGapX = 270;
+  const nodeW = 190;
+  const nodeH = 52;
+  const nodeGapY = 74;
+  const marginX = 48;
+  const marginY = 38;
+  const maxRows = Math.max(...stages.map((s) => (Array.isArray(s) ? s.length : 0)));
+  const width = Math.max(980, marginX * 2 + stageGapX * Math.max(1, stages.length - 1) + nodeW);
+  const height = Math.max(280, marginY * 2 + nodeGapY * Math.max(1, maxRows - 1) + nodeH);
+
+  multiDagVisual.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  multiDagVisual.setAttribute('width', String(width));
+  multiDagVisual.setAttribute('height', String(height));
+  multiDagVisual.innerHTML = '';
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (name, attrs = {}) => {
+    const el = document.createElementNS(NS, name);
+    Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, String(v)));
+    return el;
+  };
+
+  const defs = mk('defs');
+  const edgeGrad = mk('linearGradient', { id: 'multiEdgeGrad', x1: '0%', y1: '0%', x2: '100%', y2: '0%' });
+  edgeGrad.appendChild(mk('stop', { offset: '0%', 'stop-color': '#00f5ff', 'stop-opacity': '0.8' }));
+  edgeGrad.appendChild(mk('stop', { offset: '100%', 'stop-color': '#6a7dff', 'stop-opacity': '0.85' }));
+  const nodeGrad = mk('linearGradient', { id: 'multiNodeGrad', x1: '0%', y1: '0%', x2: '100%', y2: '100%' });
+  nodeGrad.appendChild(mk('stop', { offset: '0%', 'stop-color': '#0c2230' }));
+  nodeGrad.appendChild(mk('stop', { offset: '100%', 'stop-color': '#171d36' }));
+  const glow = mk('filter', { id: 'multiGlow', x: '-50%', y: '-50%', width: '200%', height: '200%' });
+  glow.appendChild(mk('feGaussianBlur', { stdDeviation: '2.2', result: 'coloredBlur' }));
+  const merge = mk('feMerge');
+  merge.appendChild(mk('feMergeNode', { in: 'coloredBlur' }));
+  merge.appendChild(mk('feMergeNode', { in: 'SourceGraphic' }));
+  glow.appendChild(merge);
+  defs.appendChild(edgeGrad);
+  defs.appendChild(nodeGrad);
+  defs.appendChild(glow);
+  multiDagVisual.appendChild(defs);
+
+  const bg = mk('rect', { x: 0, y: 0, width, height, rx: 14, fill: 'rgba(5,8,14,0.95)' });
+  multiDagVisual.appendChild(bg);
+
+  // stage lanes
+  stages.forEach((_, stageIdx) => {
+    const x = marginX + stageIdx * stageGapX - 14;
+    const lane = mk('rect', {
+      x,
+      y: 12,
+      width: nodeW + 28,
+      height: height - 24,
+      rx: 12,
+      fill: stageIdx % 2 === 0 ? 'rgba(0,245,255,0.05)' : 'rgba(106,125,255,0.05)',
+      stroke: 'rgba(255,255,255,0.06)',
+      'stroke-width': 1
+    });
+    multiDagVisual.appendChild(lane);
+    const title = mk('text', {
+      x: x + 12,
+      y: 28,
+      fill: '#8be9ff',
+      'font-size': 12,
+      'font-family': 'JetBrains Mono, monospace',
+      'letter-spacing': '0.06em'
+    });
+    title.textContent = `STAGE ${stageIdx + 1}`;
+    multiDagVisual.appendChild(title);
+  });
+
+  const nodePos = new Map();
+  stages.forEach((stage, stageIdx) => {
+    const stageNodes = Array.isArray(stage) ? stage : [];
+    stageNodes.forEach((name, rowIdx) => {
+      const x = marginX + stageIdx * stageGapX;
+      const y = marginY + rowIdx * nodeGapY;
+      nodePos.set(String(name), { x, y });
+    });
+  });
+
+  const edges = rawEdges
+    .map((e) => ({ from: String(e.depends_on || ''), to: String(e.repo || '') }))
+    .filter((e) => nodePos.has(e.from) && nodePos.has(e.to));
+  edges.forEach((e) => {
+    const from = nodePos.get(e.from);
+    const to = nodePos.get(e.to);
+    const x1 = from.x + nodeW;
+    const y1 = from.y + nodeH / 2;
+    const x2 = to.x;
+    const y2 = to.y + nodeH / 2;
+    const c1x = x1 + 56;
+    const c2x = x2 - 56;
+    const path = mk('path', {
+      d: `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`,
+      fill: 'none',
+      stroke: 'url(#multiEdgeGrad)',
+      'stroke-width': 2.2,
+      opacity: 0.94,
+      filter: 'url(#multiGlow)'
+    });
+    multiDagVisual.appendChild(path);
+  });
+
+  stages.forEach((stage, stageIdx) => {
+    const stageNodes = Array.isArray(stage) ? stage : [];
+    stageNodes.forEach((name, rowIdx) => {
+      const x = marginX + stageIdx * stageGapX;
+      const y = marginY + rowIdx * nodeGapY;
+      const card = mk('rect', {
+        x, y, width: nodeW, height: nodeH, rx: 10,
+        fill: 'url(#multiNodeGrad)',
+        stroke: 'rgba(0,245,255,0.72)',
+        'stroke-width': 1.3,
+        filter: 'url(#multiGlow)'
+      });
+      multiDagVisual.appendChild(card);
+      const txt = mk('text', {
+        x: x + 12, y: y + 22, fill: '#d7edff',
+        'font-size': 13, 'font-family': 'JetBrains Mono, monospace'
+      });
+      txt.textContent = String(name);
+      multiDagVisual.appendChild(txt);
+      const tag = mk('text', {
+        x: x + 12, y: y + 40, fill: '#85b4ff',
+        'font-size': 10, 'font-family': 'JetBrains Mono, monospace',
+        'letter-spacing': '0.05em'
+      });
+      tag.textContent = `LAYER ${stageIdx + 1}`;
+      multiDagVisual.appendChild(tag);
+    });
+  });
+
+  multiDagVisualEmpty.style.display = 'none';
+  multiDagVisualScroll.style.display = 'block';
+}
+
 function multiRenderActionOutput() {
   if (!multiActionOut) return;
   if (!multiActionLast) {
@@ -3711,9 +3870,11 @@ function multiRenderActionOutput() {
   const { command, data } = multiActionLast;
   if (multiOutputMode === 'json') {
     multiActionOut.textContent = JSON.stringify(data, null, 2);
+    renderMultiDagVisual(data?.multi_snapshot || null);
     return;
   }
   multiActionOut.textContent = formatMultiOutput(command, data);
+  renderMultiDagVisual(data?.multi_snapshot || null);
 }
 
 async function fetchMultiSnapshot(scope) {
@@ -3990,6 +4151,40 @@ async function multiMacroDagPrPlan() {
     let passCount = 0;
     let failCount = 0;
     const steps = [
+      { btn: multiDagBtn, fn: multiDag, name: 'DAG' },
+      { btn: multiPrPlanBtn, fn: multiPrsCreate, name: 'PR Plan' }
+    ];
+    for (const step of steps) {
+      if (step.btn) step.btn.focus();
+      const result = await step.fn();
+      appendMultiMacroTelemetry(step.name, result);
+      if (result && result.ok) passCount += 1;
+      else failCount += 1;
+    }
+    if (multiMacroLogOut) {
+      multiMacroLogOut.textContent += `\nMacro Summary: ${passCount} passed, ${failCount} failed`;
+      focusResultsForA11y(multiMacroLogOut);
+    }
+  } finally {
+    multiMacroRunning = false;
+  }
+}
+
+async function multiMacroFleetFlow() {
+  if (multiMacroRunning) return;
+  if (!multiHasScope()) {
+    openMultiScopeModal();
+    return;
+  }
+  multiMacroRunning = true;
+  try {
+    toggleMultiMacroLog(true);
+    let passCount = 0;
+    let failCount = 0;
+    const steps = [
+      { btn: multiListBtn, fn: multiList, name: 'List' },
+      { btn: multiStatusBtn, fn: multiStatus, name: 'Status' },
+      { btn: multiOrderBtn, fn: multiOrder, name: 'Order' },
       { btn: multiDagBtn, fn: multiDag, name: 'DAG' },
       { btn: multiPrPlanBtn, fn: multiPrsCreate, name: 'PR Plan' }
     ];
