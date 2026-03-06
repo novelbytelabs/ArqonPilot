@@ -79,9 +79,30 @@ fi
 
 echo "[ci-watch] repo=${REPO_SLUG} branch=${BRANCH} timeout=${TIMEOUT_SEC}s poll=${POLL_SEC}s"
 
-run_id="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --template "{{range .}}{{if eq .headBranch \"${BRANCH}\"}}{{.databaseId}}{{\"\\n\"}}{{end}}{{end}}" 2>/dev/null | head -n1 || true)"
+run_ids="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch==\"${BRANCH}\") | .databaseId" 2>/dev/null || true)"
+if [[ -z "$run_ids" ]]; then
+  # Compatibility fallback for older gh/jq combos.
+  run_ids="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --template "{{range .}}{{if eq .headBranch \"${BRANCH}\"}}{{.databaseId}}{{\"\\n\"}}{{end}}{{end}}" 2>/dev/null || true)"
+fi
+
+run_id=""
+if [[ -n "$run_ids" ]]; then
+  while read -r rid; do
+    [[ -z "$rid" ]] && continue
+    ci_job_count="$(gh api "repos/${REPO_SLUG}/actions/runs/${rid}/jobs?per_page=100" --jq '[.jobs[]? | select(((.name // "")|ascii_downcase)=="rust" or ((.name // "")|ascii_downcase)=="ui-smoke" or ((.name // "")|ascii_downcase)=="packaging-parity")] | length' 2>/dev/null || echo "0")"
+    if [[ "${ci_job_count:-0}" != "0" ]]; then
+      run_id="$rid"
+      break
+    fi
+  done <<< "$run_ids"
+fi
+
 if [[ -z "$run_id" || "$run_id" == "null" ]]; then
-  # Fallback: if branch filter couldn't be resolved on this gh version, take latest run.
+  # Fallback: if no CI-typed run found, take latest branch run.
+  run_id="$(echo "$run_ids" | head -n1)"
+fi
+if [[ -z "$run_id" || "$run_id" == "null" ]]; then
+  # Last resort: latest run in repo.
   run_id="$(gh run list --repo "$REPO_SLUG" --limit 1 --json databaseId --template "{{range .}}{{.databaseId}}{{end}}" 2>/dev/null || true)"
 fi
 if [[ -z "$run_id" || "$run_id" == "null" ]]; then
