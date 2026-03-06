@@ -4637,17 +4637,29 @@ async function dashRunPostCommitRoutine() {
       if (stepName === 'gates') {
         routineSetChip(dashRoutineGatesChip, 'Gates: running', 'warn');
         const gateActions = ['policy', 'hook-policy', 'drift', 'gate'];
+        const gateLabelMap = {
+          'policy': 'Policy',
+          'hook-policy': 'Hook Policy',
+          'drift': 'Drift',
+          'gate': 'Gate'
+        };
         let gatesOk = true;
-        for (const action of gateActions) {
+        for (let i = 0; i < gateActions.length; i += 1) {
+          const action = gateActions[i];
+          const stepNo = i + 1;
+          const gateLabel = gateLabelMap[action] || action;
+          routineSetChip(dashRoutineGatesChip, `Gates: ${stepNo}/${gateActions.length} (${gateLabel})`, 'warn');
+          routineRecord('Gates', 'running', `Running ${gateLabel} (${stepNo}/${gateActions.length})...`, '', '', '', stageStart);
           const data = await depRun(action);
           if (!isDepStepPass(action, data)) {
             gatesOk = false;
-            routineSetChip(dashRoutineGatesChip, `Gates: fail (${action})`, 'fail');
+            routineSetChip(dashRoutineGatesChip, `Gates: fail (${gateLabel})`, 'fail');
             lines.push(`Gates: FAIL at ${action}`);
             lines.push('Remediation: inspect Dashboard gate output and retry.');
-            routineRecord('Gates', 'fail', `Gate failed at ${action}.`, JSON.stringify(data || {}, null, 2), 'Open Dashboard and run gate controls individually.', 'open_dashboard_gate', stageStart);
+            routineRecord('Gates', 'fail', `${gateLabel} failed (${stepNo}/${gateActions.length}).`, JSON.stringify(data || {}, null, 2), 'Open Dashboard and run gate controls individually.', 'open_dashboard_gate', stageStart);
             break;
           }
+          routineRecord('Gates', 'pass', `${gateLabel} passed (${stepNo}/${gateActions.length}).`, '', '', '', stageStart);
         }
         if (!gatesOk) {
           failed = true;
