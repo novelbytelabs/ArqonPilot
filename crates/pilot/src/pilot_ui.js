@@ -201,6 +201,10 @@ const dashRoutineGatesChip = document.getElementById('dash-routine-gates-chip');
 const dashRoutinePushChip = document.getElementById('dash-routine-push-chip');
 const dashRoutineCiChip = document.getElementById('dash-routine-ci-chip');
 const dashRoutineEvidenceChip = document.getElementById('dash-routine-evidence-chip');
+const dashRoutineCiDocsChip = document.getElementById('dash-routine-ci-docs-chip');
+const dashRoutineCiRustChip = document.getElementById('dash-routine-ci-rust-chip');
+const dashRoutineCiUiChip = document.getElementById('dash-routine-ci-ui-chip');
+const dashRoutineCiPackagingChip = document.getElementById('dash-routine-ci-packaging-chip');
 const dashRoutineProfileSourceChip = document.getElementById('dash-routine-profile-source-chip');
 const dashRoutineProfileStepsChip = document.getElementById('dash-routine-profile-steps-chip');
 const dashRoutineOut = document.getElementById('dash-routine-out');
@@ -4372,6 +4376,25 @@ function routineSetChip(chip, label, level) {
   chip.className = `chip ${level}`;
 }
 
+function routineCiChipLevel(state) {
+  const normalized = String(state || '').toLowerCase();
+  if (normalized === 'pass' || normalized === 'success' || normalized === 'completed') return 'ok';
+  if (normalized === 'running' || normalized === 'in_progress' || normalized === 'queued') return 'warn';
+  if (normalized === 'fail' || normalized === 'failure' || normalized === 'timed_out' || normalized === 'cancelled') return 'fail';
+  return 'neutral';
+}
+
+function routineSetCiJobChips(summary = {}) {
+  const docsState = String(summary.docs_state || 'idle');
+  const rustState = String(summary.rust_state || 'idle');
+  const uiState = String(summary.ui_smoke_state || 'idle');
+  const packagingState = String(summary.packaging_parity_state || 'idle');
+  routineSetChip(dashRoutineCiDocsChip, `Docs: ${docsState}`, routineCiChipLevel(docsState));
+  routineSetChip(dashRoutineCiRustChip, `Rust: ${rustState}`, routineCiChipLevel(rustState));
+  routineSetChip(dashRoutineCiUiChip, `UI Smoke: ${uiState}`, routineCiChipLevel(uiState));
+  routineSetChip(dashRoutineCiPackagingChip, `Packaging: ${packagingState}`, routineCiChipLevel(packagingState));
+}
+
 function routineResetChips() {
   routineSetChip(dashRoutineScopeChip, 'Scope: idle', 'neutral');
   routineSetChip(dashRoutineMultiChip, 'Multi: idle', 'neutral');
@@ -4379,6 +4402,7 @@ function routineResetChips() {
   routineSetChip(dashRoutinePushChip, 'Push: idle', 'neutral');
   routineSetChip(dashRoutineCiChip, 'CI: idle', 'neutral');
   routineSetChip(dashRoutineEvidenceChip, 'Evidence: idle', 'neutral');
+  routineSetCiJobChips();
   routineSetChip(dashRoutineProfileSourceChip, 'Profile: loading', 'neutral');
   routineSetChip(dashRoutineProfileStepsChip, 'Steps: -', 'neutral');
 }
@@ -4414,11 +4438,12 @@ function routineRenderTimeline() {
   }
   const rows = dashRoutineTrace.map((e) => {
     const stateClass = e.status === 'pass' ? 'completed' : (e.status === 'fail' ? 'failed' : 'running');
+    const stageClass = String(e.stage || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     const duration = e.durationMs > 0 ? `${e.durationMs}ms` : '-';
     const safeDetail = String(e.detail || '').replaceAll('<', '&lt;');
     const safeRemediation = String(e.remediation || '').replaceAll('<', '&lt;');
     return `
-      <div class="tl-item ${stateClass}">
+      <div class="tl-item ${stateClass} ${stageClass ? `stage-${stageClass}` : ''}">
         <div class="tl-head">
           <span><b>${e.stage}</b> (${duration})</span>
           <span class="chip ${e.status === 'pass' ? 'ok' : (e.status === 'fail' ? 'fail' : 'warn')}">${String(e.status || '').toUpperCase()}</span>
@@ -4698,10 +4723,41 @@ async function dashRunPostCommitRoutine() {
 
       if (stepName === 'ci') {
         routineSetChip(dashRoutineCiChip, 'CI: running', 'warn');
+        const ciBranch = document.getElementById('dash-push-branch')?.value || 'main';
+        let ciPollDone = false;
+        let ciPollBusy = false;
+        let ciLastSummary = null;
+        const pullCiStatus = async () => {
+          if (ciPollDone || ciPollBusy) return;
+          ciPollBusy = true;
+          try {
+            const statusRes = await depRun('ci-status', { branch: ciBranch });
+            const statusInner = depEnvelopeInner(statusRes);
+            const statusSummary = statusInner && statusInner.summary && typeof statusInner.summary === 'object'
+              ? statusInner.summary
+              : null;
+            if (statusSummary) {
+              ciLastSummary = statusSummary;
+              routineSetCiJobChips(statusSummary);
+              const overall = String(statusSummary.overall_state || '').toLowerCase();
+              if (overall === 'running') {
+                routineSetChip(dashRoutineCiChip, 'CI: running', 'warn');
+              } else if (overall === 'fail') {
+                routineSetChip(dashRoutineCiChip, 'CI: degraded', 'fail');
+              }
+            }
+          } finally {
+            ciPollBusy = false;
+          }
+        };
+        await pullCiStatus();
+        const ciPollTimer = setInterval(pullCiStatus, 7000);
         const ci = await depRun('ci-watch', {
-          branch: document.getElementById('dash-push-branch')?.value || 'main',
+          branch: ciBranch,
           ci_timeout_sec: 1800
         });
+        ciPollDone = true;
+        clearInterval(ciPollTimer);
         const ciInner = depEnvelopeInner(ci);
         if (!ciInner || !ciInner.ok) {
           routineSetChip(dashRoutineCiChip, 'CI: fail', 'fail');
@@ -4712,6 +4768,9 @@ async function dashRunPostCommitRoutine() {
           continue;
         }
         const ciSummary = (ciInner.summary && typeof ciInner.summary === 'object') ? ciInner.summary : {};
+        if (ciLastSummary && typeof ciLastSummary === 'object') {
+          routineSetCiJobChips(ciLastSummary);
+        }
         const runUrl = ciSummary.run_url || '';
         routineSetChip(dashRoutineCiChip, 'CI: pass', 'ok');
         routineRecord('CI', 'pass', 'GitHub Actions run completed successfully.', JSON.stringify(ciInner, null, 2), '', '', stageStart);

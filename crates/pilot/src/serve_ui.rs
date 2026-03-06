@@ -4519,6 +4519,17 @@ async fn run_dependency_action(
             );
             run_local_script_streamed(&cmd, "ci-watch", &state.events).await
         }
+        ("ci-status", _) => {
+            let branch = req.branch.as_deref().unwrap_or("main");
+            if !is_safe_cli_token(branch) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "branch contains unsupported characters",
+                );
+            }
+            let cmd = format!("./scripts/gh_actions_status_latest.sh --branch {branch}");
+            run_local_script_streamed(&cmd, "ci-status", &state.events).await
+        }
         _ => return error_response(StatusCode::BAD_REQUEST, "unsupported action"),
     };
 
@@ -4558,6 +4569,18 @@ async fn run_dependency_action(
             }
             if action == "ci-watch" {
                 if let Some(summary) = parse_gh_watch_summary(
+                    body.get("stdout")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    body.get("stderr")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ) {
+                    body["summary"] = summary;
+                }
+            }
+            if action == "ci-status" {
+                if let Some(summary) = parse_gh_status_summary(
                     body.get("stdout")
                         .and_then(Value::as_str)
                         .unwrap_or_default(),
@@ -5255,7 +5278,7 @@ mod tests {
         dependency_action_requires_cwd_scope, dependency_action_scope_required,
         filter_prune_paths_by_class, is_bus_recoverable_error, is_safe_cli_token,
         load_persisted_codex_contracts, normalize_orchestrate_payload, orchestrate_is_preview,
-        parse_gh_watch_summary, parse_json_from_mixed_output, parse_release_collect_evidence_path,
+        parse_gh_status_summary, parse_gh_watch_summary, parse_json_from_mixed_output, parse_release_collect_evidence_path,
         payload_has_multi_selector, preflight_steps_from_action,
         prune_expired_branch_previews, resolve_branch_targets, scope_filter_rows,
         default_policy_json_for_kind, sanitize_payload_for_local_exec, should_prefer_local_command, should_use_local_command_fallback, sorted_unique_ids, sorted_unique_tags,
@@ -5366,6 +5389,7 @@ mod tests {
         assert!(dependency_action_scope_required("release-collect-evidence"));
         assert!(dependency_action_scope_required("release-verify-bundle"));
         assert!(dependency_action_scope_required("ci-watch"));
+        assert!(dependency_action_scope_required("ci-status"));
         assert!(!dependency_action_scope_required("db-status"));
         assert!(!dependency_action_scope_required("services-start"));
 
@@ -5413,6 +5437,40 @@ likely_cause:          job_failures
         assert_eq!(
             parsed.get("failed_jobs").and_then(Value::as_str),
             Some("2")
+        );
+    }
+
+    #[test]
+    fn test_parse_gh_status_summary() {
+        let stdout = r#"
+========== gh_status summary ==========
+repo:                  novelbytelabs/ArqonPilot
+branch:                main
+ci_run_id:             111
+docs_run_id:           222
+overall_state:         running
+overall_conclusion:    unknown
+docs_state:            pass
+rust_state:            running
+ui_smoke_state:        pass
+packaging_parity_state: fail
+run_url:               https://github.com/novelbytelabs/ArqonPilot/actions/runs/111
+======================================
+"#;
+        let parsed = parse_gh_status_summary(stdout, "").expect("summary should parse");
+        assert_eq!(
+            parsed.get("repo").and_then(Value::as_str),
+            Some("novelbytelabs/ArqonPilot")
+        );
+        assert_eq!(
+            parsed.get("overall_state").and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(parsed.get("docs_state").and_then(Value::as_str), Some("pass"));
+        assert_eq!(parsed.get("rust_state").and_then(Value::as_str), Some("running"));
+        assert_eq!(
+            parsed.get("packaging_parity_state").and_then(Value::as_str),
+            Some("fail")
         );
     }
 
@@ -6797,6 +6855,33 @@ fn parse_gh_watch_summary(stdout: &str, stderr: &str) -> Option<Value> {
     }
 }
 
+fn parse_gh_status_summary(stdout: &str, stderr: &str) -> Option<Value> {
+    let combined = format!("{stdout}\n{stderr}");
+    let mut in_block = false;
+    let mut summary = serde_json::Map::new();
+    for raw in combined.lines() {
+        let line = raw.trim();
+        if line == "========== gh_status summary ==========" {
+            in_block = true;
+            continue;
+        }
+        if line == "======================================" {
+            break;
+        }
+        if !in_block {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            summary.insert(k.trim().to_string(), Value::String(v.trim().to_string()));
+        }
+    }
+    if summary.is_empty() {
+        None
+    } else {
+        Some(Value::Object(summary))
+    }
+}
+
 fn parse_prepush_summary(stdout: &str, stderr: &str) -> Option<Value> {
     let combined = format!("{stdout}\n{stderr}");
     let mut status = None::<String>;
@@ -7054,6 +7139,7 @@ fn dependency_action_scope_required(action: &str) -> bool {
             | "release-collect-evidence"
             | "release-verify-bundle"
             | "ci-watch"
+            | "ci-status"
     )
 }
 
@@ -7782,6 +7868,39 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .chip.fail { border-color: rgba(255, 46, 46, 0.2); background: rgba(255, 46, 46, 0.04); color: var(--rose); }
     .chip.warn { border-color: rgba(255, 215, 0, 0.2); background: rgba(255, 215, 0, 0.04); color: var(--accent); }
     .chip.neutral { border-color: var(--border); background: rgba(255,255,255,0.02); color: var(--muted); }
+    .chip.running { border-color: rgba(255, 215, 0, 0.26); background: rgba(255, 215, 0, 0.06); color: var(--accent); }
+    .routine-jobs-row {
+      margin-top: -4px;
+      margin-bottom: 14px;
+      border: 1px solid rgba(0, 245, 255, 0.16);
+      border-radius: 8px;
+      padding: 8px;
+      background: linear-gradient(135deg, rgba(0,245,255,0.05), rgba(95,111,255,0.06));
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+    }
+    .routine-jobs-title {
+      font-size: 0.66rem;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 6px;
+    }
+    .tl-item {
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.02);
+    }
+    .tl-item.running { border-left: 2px solid rgba(255, 215, 0, 0.6); }
+    .tl-item.completed { border-left: 2px solid rgba(0, 245, 255, 0.66); }
+    .tl-item.failed { border-left: 2px solid rgba(255, 46, 46, 0.7); }
+    .tl-item.stage-scope { background: linear-gradient(90deg, rgba(0,245,255,0.06), rgba(0,0,0,0.02)); }
+    .tl-item.stage-multi { background: linear-gradient(90deg, rgba(95,111,255,0.08), rgba(0,0,0,0.02)); }
+    .tl-item.stage-gates { background: linear-gradient(90deg, rgba(255,215,0,0.08), rgba(0,0,0,0.02)); }
+    .tl-item.stage-push { background: linear-gradient(90deg, rgba(0,245,255,0.09), rgba(0,0,0,0.02)); }
+    .tl-item.stage-ci { background: linear-gradient(90deg, rgba(168,185,227,0.12), rgba(0,0,0,0.02)); }
+    .tl-item.stage-evidence { background: linear-gradient(90deg, rgba(120,255,208,0.08), rgba(0,0,0,0.02)); }
     .branch-matrix-table {
       width: 100%;
       border-collapse: collapse;
@@ -8139,6 +8258,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <span id="dash-routine-push-chip" class="chip neutral" tabindex="0" role="status">Push: idle</span>
         <span id="dash-routine-ci-chip" class="chip neutral" tabindex="0" role="status">CI: idle</span>
         <span id="dash-routine-evidence-chip" class="chip neutral" tabindex="0" role="status">Evidence: idle</span>
+      </div>
+      <div class="routine-jobs-row" id="dash-routine-ci-jobs-row" role="status" aria-live="polite">
+        <div class="routine-jobs-title">Live CI Jobs</div>
+        <div class="chip-row" style="margin:0;">
+          <span id="dash-routine-ci-docs-chip" class="chip neutral" tabindex="0" role="status">Docs: idle</span>
+          <span id="dash-routine-ci-rust-chip" class="chip neutral" tabindex="0" role="status">Rust: idle</span>
+          <span id="dash-routine-ci-ui-chip" class="chip neutral" tabindex="0" role="status">UI Smoke: idle</span>
+          <span id="dash-routine-ci-packaging-chip" class="chip neutral" tabindex="0" role="status">Packaging: idle</span>
+        </div>
       </div>
       <div class="row">
         <input id="dash-routine-group" placeholder="group (e.g. core)" value="core" />
