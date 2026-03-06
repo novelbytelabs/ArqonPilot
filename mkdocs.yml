@@ -54,6 +54,7 @@ nav:
       - Settings & Governance Plan: "settings-tab-and-governance-plan.md"
   - Operations & Support:
       - Operator Runbook: "operator-runbook.md"
+      - Pilot-for-Pilot Control Plane Contract: "pilot-for-pilot-control-plane-contract.md"
       - Troubleshooting: "troubleshooting.md"
       - Testing Strategy: "testing-strategy.md"
       - Tech Debt: "tech-debt.md"

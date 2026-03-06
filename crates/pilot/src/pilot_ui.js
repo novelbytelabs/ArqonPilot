@@ -195,6 +195,14 @@ const dashBusChip = document.getElementById('dash-bus-chip');
 const dashDbChip = document.getElementById('dash-db-chip');
 const dashGateChip = document.getElementById('dash-gate-chip');
 const dashPushChip = document.getElementById('dash-push-chip');
+const dashRoutineScopeChip = document.getElementById('dash-routine-scope-chip');
+const dashRoutineMultiChip = document.getElementById('dash-routine-multi-chip');
+const dashRoutineGatesChip = document.getElementById('dash-routine-gates-chip');
+const dashRoutinePushChip = document.getElementById('dash-routine-push-chip');
+const dashRoutineCiChip = document.getElementById('dash-routine-ci-chip');
+const dashRoutineEvidenceChip = document.getElementById('dash-routine-evidence-chip');
+const dashRoutineOut = document.getElementById('dash-routine-out');
+const dashRoutineRunBtn = document.getElementById('dash-routine-run-btn');
 const dashOracleChip = document.getElementById('dash-oracle-chip');
 const dashHealChip = document.getElementById('dash-heal-chip');
 const dashAgorgScoreChip = document.getElementById('dash-agorg-score-chip');
@@ -289,6 +297,7 @@ let multiOutputMode = 'html';
 let multiActionLast = null;
 let multiMacroRunning = false;
 let multiMacroExpanded = false;
+let dashRoutineRunning = false;
 
 function activatePanel(tabName, opts = {}) {
   const persist = opts.persist !== false;
@@ -2072,6 +2081,7 @@ async function depRun(action) {
       updateDashChip(normalizedAction, !!inner.ok, inner);
   }
   depLoadLogs();
+  return data;
 }
 
 function setChip(el, label, level) {
@@ -4009,6 +4019,26 @@ function multiRefreshRegistry() {
   });
 }
 
+async function multiSelectorStats() {
+  const group = (document.getElementById('multi-group')?.value || '').trim();
+  const selectedTags = tags(document.getElementById('multi-tags')?.value || '');
+  let url = '/api/multi/registry_stats';
+  const params = [];
+  if (group) params.push(`group=${encodeURIComponent(group)}`);
+  if (selectedTags.length > 0) params.push(`tags=${encodeURIComponent(selectedTags.join(','))}`);
+  if (params.length) url += `?${params.join('&')}`;
+  const data = await fetchJsonSafe(url);
+  if (!data || data.ok === false) {
+    return { ok: false, error: data?.error || 'Failed to load registry stats' };
+  }
+  return {
+    ok: true,
+    filtered: Number(data.filtered_count || 0),
+    inScope: Number(data.in_scope_total || 0),
+    total: Number(data.total_registered || 0)
+  };
+}
+
 function multiLoadSelectorOptions() {
   fetchJsonSafe('/api/multi/selectors').then((data) => {
     if (!data || data.ok === false) return;
@@ -4222,6 +4252,193 @@ function dashServicesStart() { depRun('services-start'); }
 function dashServicesStop() { depRun('services-stop'); }
 function dashServicesRestart() { depRun('services-restart'); }
 function dashRunPush() { depRun('push'); }
+
+function routineSetChip(chip, label, level) {
+  if (!chip) return;
+  chip.textContent = label;
+  chip.className = `chip ${level}`;
+}
+
+function routineResetChips() {
+  routineSetChip(dashRoutineScopeChip, 'Scope: idle', 'neutral');
+  routineSetChip(dashRoutineMultiChip, 'Multi: idle', 'neutral');
+  routineSetChip(dashRoutineGatesChip, 'Gates: idle', 'neutral');
+  routineSetChip(dashRoutinePushChip, 'Push: idle', 'neutral');
+  routineSetChip(dashRoutineCiChip, 'CI: idle', 'neutral');
+  routineSetChip(dashRoutineEvidenceChip, 'Evidence: idle', 'neutral');
+}
+
+function parseMultiScopeFromRoutine() {
+  const routineGroup = (document.getElementById('dash-routine-group')?.value || '').trim();
+  const routineTags = tags(document.getElementById('dash-routine-tags')?.value || '');
+  return {
+    group: routineGroup || null,
+    tags: routineTags
+  };
+}
+
+function isDepStepPass(action, data) {
+  const inner = (data && data.inner && typeof data.inner === 'object') ? data.inner : data;
+  if (!inner) return false;
+  if (['policy', 'hook-policy', 'drift', 'gate'].includes(action)) {
+    const report = inner.report;
+    if (!report || !Array.isArray(report.steps)) return !!inner.ok;
+    const expected = action === 'hook-policy' ? 'Hook' : action.charAt(0).toUpperCase() + action.slice(1).replace('-', ' ');
+    const step = report.steps.find((s) => String(s.step || '') === expected);
+    if (!step || !step.result) return !!inner.ok;
+    return String(step.result.status || '') === 'Pass';
+  }
+  return !!inner.ok;
+}
+
+function routineWriteSummary(lines) {
+  if (!dashRoutineOut) return;
+  dashRoutineOut.textContent = lines.join('\n');
+  focusResultsForA11y(dashRoutineOut);
+}
+
+async function dashRunPostCommitRoutine() {
+  if (dashRoutineRunning) return;
+  dashRoutineRunning = true;
+  if (dashRoutineRunBtn) {
+    dashRoutineRunBtn.disabled = true;
+    dashRoutineRunBtn.textContent = 'Running...';
+  }
+  routineResetChips();
+  const lines = [];
+  lines.push('Post-Commit Routine');
+  lines.push(`Started: ${new Date().toISOString()}`);
+  try {
+    routineSetChip(dashRoutineScopeChip, 'Scope: running', 'warn');
+    const active = await fetchJsonSafe('/api/agorg/active');
+    if (!active || !active.ok || !active.active || !active.active.id) {
+      routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
+      lines.push('Scope: FAIL (no active AGOrg)');
+      lines.push('Remediation: open AGOrg tab and select active scope.');
+      routineWriteSummary(lines);
+      return;
+    }
+    const scope = parseMultiScopeFromRoutine();
+    if (!scope.group && (!Array.isArray(scope.tags) || scope.tags.length === 0)) {
+      routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
+      lines.push('Scope: FAIL (Group/Tags required)');
+      lines.push('Remediation: set Group or Tags in the Post-Commit Routine card.');
+      routineWriteSummary(lines);
+      return;
+    }
+    const multiGroupInput = document.getElementById('multi-group');
+    const multiTagsInput = document.getElementById('multi-tags');
+    if (multiGroupInput) multiGroupInput.value = scope.group || '';
+    if (multiTagsInput) multiTagsInput.value = (scope.tags || []).join(',');
+    const stats = await multiSelectorStats();
+    if (!stats.ok || stats.filtered <= 0) {
+      routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
+      lines.push(`Scope: FAIL (${stats.error || 'no repos matched selector'})`);
+      lines.push('Remediation: register AGO(s), then adjust Group/Tags selector.');
+      routineWriteSummary(lines);
+      return;
+    }
+    routineSetChip(dashRoutineScopeChip, `Scope: pass (${stats.filtered})`, 'ok');
+    lines.push(`Scope: PASS (AGOrg=${active.active.name}, matched=${stats.filtered}/${stats.inScope})`);
+
+    routineSetChip(dashRoutineMultiChip, 'Multi: running', 'warn');
+    const multiSteps = [
+      { cmd: 'pilot.multi.list', payload: scope },
+      { cmd: 'pilot.multi.status', payload: scope },
+      { cmd: 'pilot.multi.order', payload: scope },
+      { cmd: 'pilot.multi.dag', payload: { ...scope, dry_run: true } },
+      { cmd: 'pilot.multi.prs.create', payload: { ...scope, dry_run: true, head_branch: 'dev', base_branch: 'main' } }
+    ];
+    let multiOk = true;
+    for (const step of multiSteps) {
+      const result = await runMultiCommand(step.cmd, step.payload, { outputEl: multiActionOut });
+      if (!result || !result.ok) {
+        multiOk = false;
+        lines.push(`Multi: FAIL (${step.cmd})`);
+        lines.push(`Reason: ${result?.error || result?.inner?.error || 'unknown'}`);
+        break;
+      }
+    }
+    if (!multiOk) {
+      routineSetChip(dashRoutineMultiChip, 'Multi: fail', 'fail');
+      routineWriteSummary(lines);
+      return;
+    }
+    const snap = multiActionLast && multiActionLast.data ? multiActionLast.data.multi_snapshot : null;
+    const repoCount = Array.isArray(snap?.repos) ? snap.repos.length : 0;
+    routineSetChip(dashRoutineMultiChip, `Multi: pass (${repoCount})`, 'ok');
+    lines.push(`Multi: PASS (repos=${repoCount})`);
+
+    routineSetChip(dashRoutineGatesChip, 'Gates: running', 'warn');
+    const gateActions = ['policy', 'hook-policy', 'drift', 'gate'];
+    for (const action of gateActions) {
+      const data = await depRun(action);
+      if (!isDepStepPass(action, data)) {
+        routineSetChip(dashRoutineGatesChip, `Gates: fail (${action})`, 'fail');
+        lines.push(`Gates: FAIL at ${action}`);
+        lines.push('Remediation: inspect Dashboard gate output and retry.');
+        routineWriteSummary(lines);
+        return;
+      }
+    }
+    routineSetChip(dashRoutineGatesChip, 'Gates: pass', 'ok');
+    lines.push('Gates: PASS');
+
+    const allowPush = !!document.getElementById('dash-routine-allow-push')?.checked;
+    if (!allowPush) {
+      routineSetChip(dashRoutinePushChip, 'Push: blocked', 'warn');
+      lines.push('Push: BLOCKED (allow push step is disabled)');
+    } else {
+      routineSetChip(dashRoutinePushChip, 'Push: running', 'warn');
+      const pushRes = await depRun('push');
+      if (!isDepStepPass('push', pushRes)) {
+        routineSetChip(dashRoutinePushChip, 'Push: fail', 'fail');
+        lines.push(`Push: FAIL (${pushRes?.error || pushRes?.inner?.error || 'unknown'})`);
+        routineWriteSummary(lines);
+        return;
+      }
+      routineSetChip(dashRoutinePushChip, 'Push: pass', 'ok');
+      lines.push('Push: PASS');
+    }
+
+    routineSetChip(dashRoutineCiChip, 'CI: running', 'warn');
+    const ci = await fetchJsonSafe('/api/orchestrate/graph-status');
+    if (!ci || !ci.ok) {
+      routineSetChip(dashRoutineCiChip, 'CI: fail', 'fail');
+      lines.push(`CI: FAIL (${ci?.error || 'graph status unavailable'})`);
+      routineWriteSummary(lines);
+      return;
+    }
+    routineSetChip(dashRoutineCiChip, 'CI: pass', 'ok');
+    lines.push(`CI: PASS (schema=${ci.schema_version || 'unknown'})`);
+
+    const exportEvidence = !!document.getElementById('dash-routine-export-evidence')?.checked;
+    if (!exportEvidence) {
+      routineSetChip(dashRoutineEvidenceChip, 'Evidence: skipped', 'warn');
+      lines.push('Evidence: SKIPPED (toggle disabled)');
+    } else {
+      routineSetChip(dashRoutineEvidenceChip, 'Evidence: running', 'warn');
+      const ev = await dashExportEvidence();
+      if (!ev || !ev.ok) {
+        routineSetChip(dashRoutineEvidenceChip, 'Evidence: fail', 'fail');
+        lines.push(`Evidence: FAIL (${ev?.error || 'export failed'})`);
+        routineWriteSummary(lines);
+        return;
+      }
+      routineSetChip(dashRoutineEvidenceChip, 'Evidence: pass', 'ok');
+      lines.push(`Evidence: PASS (${ev.path || 'artifact exported'})`);
+    }
+
+    lines.push('Result: SUCCESS');
+    routineWriteSummary(lines);
+  } finally {
+    dashRoutineRunning = false;
+    if (dashRoutineRunBtn) {
+      dashRoutineRunBtn.disabled = false;
+      dashRoutineRunBtn.textContent = 'Run Post-Commit Routine';
+    }
+  }
+}
 
 function dashWorkflowHint(kind) {
   const guides = {
@@ -4592,6 +4809,7 @@ async function dashExportEvidence() {
   out.textContent = text;
   if (dashStatusOut) dashStatusOut.textContent = text;
   appendLive({ source: 'dashboard', action: 'evidence-export', ok: !!data.ok, path: data.path || '' });
+  return data;
 }
 
 function codexPayloadFromUi() {

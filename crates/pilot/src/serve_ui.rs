@@ -7910,6 +7910,40 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <button id="p5-chip-apply" class="chip neutral action-chip" onclick="p5OrchestrateStep('command', 'multi.apply', false)" aria-label="Execute Staged Apply" title="Execute Staged Apply (Mutates)">Staged Apply</button>
       </div>
     </div>
+    <div class="card" style="grid-column: 1 / -1;">
+      <h3>Post-Commit Routine (Pilot for Pilot)</h3>
+      <div class="helper">One-click flow: Scope -> Multi Preview -> Gates -> Push -> CI -> Evidence. Stops on first hard failure.</div>
+      <div class="chip-row">
+        <span id="dash-routine-scope-chip" class="chip neutral" tabindex="0" role="status">Scope: idle</span>
+        <span id="dash-routine-multi-chip" class="chip neutral" tabindex="0" role="status">Multi: idle</span>
+        <span id="dash-routine-gates-chip" class="chip neutral" tabindex="0" role="status">Gates: idle</span>
+        <span id="dash-routine-push-chip" class="chip neutral" tabindex="0" role="status">Push: idle</span>
+        <span id="dash-routine-ci-chip" class="chip neutral" tabindex="0" role="status">CI: idle</span>
+        <span id="dash-routine-evidence-chip" class="chip neutral" tabindex="0" role="status">Evidence: idle</span>
+      </div>
+      <div class="row">
+        <input id="dash-routine-group" placeholder="group (e.g. core)" value="core" />
+        <input id="dash-routine-tags" placeholder="tags (comma-separated, e.g. pilot)" value="pilot" />
+      </div>
+      <div class="row">
+        <label style="font-size:0.82rem;color:#a8b9e3;">
+          <input id="dash-routine-allow-push" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
+          allow push step
+        </label>
+        <label style="font-size:0.82rem;color:#a8b9e3;">
+          <input id="dash-routine-export-evidence" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
+          export evidence
+        </label>
+        <button id="dash-routine-run-btn" class="btn" onclick="dashRunPostCommitRoutine()">Run Post-Commit Routine</button>
+      </div>
+      <div class="pre-wrap">
+        <div class="pre-actions">
+          <button class="action-btn" onclick="copyToClipboard('dash-routine-out', this)">COPY</button>
+          <button class="action-btn" onclick="clearElement('dash-routine-out')">CLEAR</button>
+        </div>
+        <pre id="dash-routine-out" role="status" aria-live="polite">Routine ready.</pre>
+      </div>
+    </div>
     <div class="grid">
       <div class="card" style="grid-column: 1 / -1;">
         <h3>Unified Operations Timeline</h3>

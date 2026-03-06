@@ -3,6 +3,12 @@
 This is the canonical end-to-end release process for Arqon Pilot alpha builds.
 It covers packaging, publish order, docs publish, and audit evidence.
 
+This playbook is also the source of truth for the **Pilot-for-Pilot** operator flow
+(edit/commit in IDE, then validate/push/release via Pilot controls or equivalent scripts).
+
+For UI/automation implementation details, see:
+`docs/pilot-for-pilot-control-plane-contract.md`.
+
 Current policy:
 
 1. Core lane Rust/Cargo: `1.82.0` (frozen)
@@ -33,6 +39,72 @@ Run these phases in this exact order:
 
 ---
 
+## Script Coverage Matrix (Current)
+
+Use this matrix to avoid drift between docs and the actual scripts in `scripts/`.
+
+### A) Mandatory for Push/Release
+
+1. `./scripts/verify_toolchain_policy.sh`
+2. `./scripts/prepush_gate.sh`
+3. `./scripts/release_readiness_check.sh`
+4. `./scripts/migration_smoke_test.sh`
+5. `./scripts/ui_smoke_check.sh`
+6. `./scripts/push_main.sh`
+7. `./scripts/release_collect_evidence.sh`
+8. `./scripts/verify_pypi_release.sh` (post-publish verification)
+
+### B) High-Value Parity / Hardening (Recommended)
+
+1. `./scripts/run_preflight_graph.sh --json --skip-push`
+2. `./scripts/ci_parity_check.sh`
+3. `./scripts/compat_matrix_smoke.sh`
+4. `./scripts/preflight_proactive_check.sh`
+5. `./scripts/pilot_discipline_gate.sh`
+6. `./scripts/pypi_smoke_check.sh` (wheel-install smoke before publish)
+7. `python scripts/check_duplicate_consts.py` (JS safety guard for UI script extraction/regression)
+
+### C) Recovery / Repair
+
+1. `./scripts/repair_lock_182.sh`
+2. `./scripts/ci_repair.sh`
+3. `./scripts/ci_replay.sh`
+4. `./scripts/replay_execution.sh`
+5. `./scripts/generate_replay_bundle.sh`
+
+### D) Policy / Hook Infrastructure
+
+1. `./scripts/install_git_hooks.sh`
+2. `./scripts/verify_git_hook_policy.sh`
+3. `./scripts/repo_boundary_guard.sh`
+4. `./scripts/frozen_versions.sh` (sourced by other scripts; do not run standalone)
+
+---
+
+## Pilot-for-Pilot Streamlined Routine (Post-Commit)
+
+After coding and committing in VS Code, run this exact sequence:
+
+1. **Multi orchestration preview** (scope check + cohort sanity):
+   - Run List/Status/Order/DAG/PR Plan flow.
+2. **Dashboard health gates**:
+   - Policy -> Hook Policy -> Drift -> Gate
+3. **Push Safe**:
+   - Execute safe push path (or `./scripts/push_main.sh` equivalent)
+4. **CI monitor + evidence capture**:
+   - Verify workflows and collect evidence bundle.
+
+If GUI action is unavailable/unhealthy, use script equivalents:
+
+```bash
+./scripts/run_preflight_graph.sh --json --skip-push
+./scripts/prepush_gate.sh
+./scripts/push_main.sh
+./scripts/release_collect_evidence.sh --label <version-or-run-id>
+```
+
+---
+
 ## 1) Preflight and Gate Checks
 
 1. Ensure branch is clean and synchronized:
@@ -55,6 +127,7 @@ git pull --ff-only origin main
 ./scripts/prepush_gate.sh
 ./scripts/release_readiness_check.sh
 ./scripts/migration_smoke_test.sh
+./scripts/compat_matrix_smoke.sh
 ```
 
 4. Run Clean Operator Proof (G-044 boundary + no tribal deps):
@@ -69,6 +142,12 @@ env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/local/bin" bash -lc './scripts/rele
 ./scripts/wave_acceptance_matrix.sh --wave I --profile full
 ./scripts/wave_acceptance_matrix.sh --wave J --profile full
 ./scripts/ui_smoke_check.sh
+```
+
+6. Run preflight graph (machine-readable execution envelope):
+
+```bash
+./scripts/run_preflight_graph.sh --json --skip-push
 ```
 
 ## 2) Version Bump
@@ -135,6 +214,12 @@ gh workflow run pypi.yml -f target=pypi
 gh run list --workflow pypi.yml --limit 5
 ```
 
+3. Optional but recommended wheel smoke in isolated env:
+
+```bash
+./scripts/pypi_smoke_check.sh
+```
+
 ## 8) Clean Environment Install Smoke
 
 ```bash
@@ -192,6 +277,8 @@ Every alpha release must include:
 6. clean-venv smoke install output (`pilot --help`)
 7. Git tag + commit SHA
 8. workflow run IDs (`ci`, `pypi`)
+9. preflight graph JSON artifact path (`run_preflight_graph --json`)
+10. compatibility matrix smoke output (`compat_matrix_smoke.sh`)
 
 Record these in both:
 
@@ -218,3 +305,17 @@ Before every major alpha milestone, execute a simulation rollback drill:
    `git checkout - && cargo build -p pilot --locked`
 4. Verify Restoration:
    `pilot agorg list`
+
+---
+
+## Automation Backlog (Pilot UI Parity)
+
+These must remain aligned with this playbook as UI features are finalized:
+
+1. One-click **Post-Commit Routine** in UI:
+   - Multi flow -> Dashboard gates -> Push Safe -> Evidence export.
+2. Live progress stream per step with final summary and remediation hints.
+3. Step-to-script traceability:
+   - Every UI action must map to a script/command listed in this document.
+4. No hidden/manual side-channel:
+   - If a step is required for release, it must exist in UI and in this playbook.
