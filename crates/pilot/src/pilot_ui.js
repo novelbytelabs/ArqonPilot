@@ -349,8 +349,10 @@ let dashRoutinePolicySimulationId = '';
 let dashRoutinePolicySimulationFingerprint = '';
 let routineCiSyncTimer = null;
 let routineCiSyncBusy = false;
+let routineCiAutoResumeBusy = false;
 const ROUTINE_HEAL_LOG_KEY = 'pilot.routine.heal.log.v1';
 const ROUTINE_HEAL_RECIPE_KEY = 'pilot.routine.heal.recipe.v1';
+const ROUTINE_CI_CONTINUATION_KEY = 'pilot.routine.ci.continuation.v1';
 const ROUTINE_SAFE_HEAL_ACTIONS = Object.freeze(new Set(['cargo-fmt', 'repair']));
 const ROUTINE_STAGE_ORDER = Object.freeze(['resolve', 'plan', 'multi', 'gates', 'push', 'ci', 'evidence', 'reconcile']);
 const ROUTINE_STAGE_LABELS = Object.freeze({
@@ -5393,6 +5395,7 @@ async function routineSyncCiFromGitHub(opts = {}) {
     dashRoutineWorkspaceState.ciDetail = statusInner || statusRes;
     routineRenderCiObservatory(statusSummary, statusInner || statusRes);
     if (dashRoutineSelectedStage === 'ci') routineRenderWorkspace();
+    routineMaybeAutoContinueFromCi(statusSummary);
   } finally {
     routineCiSyncBusy = false;
   }
@@ -6037,6 +6040,7 @@ async function routineEscalateFailureToCodex() {
   const parsed = routineParseFailureDetail(fail);
   activatePanel('codex');
   const intent = `Resolve routine failure (${fail.stage}): ${classified.signature}`;
+  const { branch, remote } = routineReadBranchRemote();
   const payload = {
     stage: fail.stage,
     summary: fail.summary,
@@ -6047,10 +6051,24 @@ async function routineEscalateFailureToCodex() {
     detail: parsed || fail.detail || '',
     trace_tail: dashRoutineTrace.slice(-8)
   };
-  const expected = 'Root cause identified and minimal safe remediation applied; failed stage verifies PASS.';
+  let cmd = 'pilot.multi.status';
+  let verify = 'pilot.multi.status';
+  if (fail.stage === 'CI') {
+    cmd = 'pilot.dependency.ci-status';
+    verify = 'pilot.dependency.ci-status';
+    payload.branch = branch;
+    payload.ci_timeout_sec = 1800;
+  } else if (fail.stage === 'Gates') {
+    cmd = 'pilot.dependency.gate';
+    verify = 'pilot.dependency.gate';
+  } else if (fail.stage === 'Push') {
+    cmd = 'pilot.dependency.push';
+    verify = 'pilot.dependency.push';
+    payload.branch = branch;
+    payload.remote = remote;
+  }
+  const expected = `Root cause identified and minimal safe remediation applied; failed stage (${fail.stage}) verifies PASS.`;
   const rollback = 'If mutation is unsafe, revert to last clean branch state and rerun in preview mode.';
-  const verify = fail.stage === 'CI' ? 'pilot.multi.status' : 'pilot.multi.status';
-  const cmd = 'pilot.multi.status';
 
   const setVal = (id, value) => {
     const el = document.getElementById(id);
@@ -6145,12 +6163,82 @@ function routineWriteSummary(lines) {
   routineRenderWorkspace();
 }
 
+function routineAppendSummaryLine(line) {
+  if (!dashRoutineOut) return;
+  const prior = String(dashRoutineOut.textContent || '').trimEnd();
+  dashRoutineOut.textContent = prior ? `${prior}\n${line}` : line;
+  focusResultsForA11y(dashRoutineOut);
+}
+
+function routineReadCiContinuation() {
+  try {
+    const raw = window.localStorage.getItem(ROUTINE_CI_CONTINUATION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+function routineWriteCiContinuation(payload) {
+  try {
+    window.localStorage.setItem(ROUTINE_CI_CONTINUATION_KEY, JSON.stringify(payload || {}));
+  } catch (_) {}
+}
+
+function routineClearCiContinuation() {
+  try {
+    window.localStorage.removeItem(ROUTINE_CI_CONTINUATION_KEY);
+  } catch (_) {}
+}
+
+function routineStepIsTerminalPass(state) {
+  const s = String(state || '').toLowerCase();
+  return s === 'pass' || s === 'passed' || s === 'success' || s === 'succeeded' || s === 'completed' || s === 'ok';
+}
+
+function routineMaybeAutoContinueFromCi(summary = null) {
+  if (!summary || typeof summary !== 'object') return;
+  if (dashRoutineRunning || routineCiAutoResumeBusy) return;
+  const pending = routineReadCiContinuation();
+  if (!pending || typeof pending !== 'object') return;
+  const nextStep = String(pending.next_step || '').toLowerCase();
+  if (!nextStep) return;
+  const summaryBranch = String(summary.branch || '').trim();
+  if (pending.branch && summaryBranch && pending.branch !== summaryBranch) return;
+  const summaryRunId = String(summary.ci_run_id || summary.run_id || '').trim();
+  if (pending.ci_run_id && summaryRunId && pending.ci_run_id !== summaryRunId) return;
+  if (!routineStepIsTerminalPass(summary.overall_state)) return;
+
+  routineCiAutoResumeBusy = true;
+  routineClearCiContinuation();
+  const stageLabel = ROUTINE_STAGE_LABELS[routineStageKey(nextStep)] || nextStep;
+  routineRecord(
+    'CI',
+    'pass',
+    `Auto-resume verified CI completion and will continue at ${stageLabel}.`,
+    JSON.stringify({ pending, summary }, null, 2),
+    '',
+    '',
+    Date.now()
+  );
+  routineAppendSummaryLine(`Auto-Resume: CI completed; resuming from ${nextStep}.`);
+  setTimeout(() => {
+    dashRunPostCommitRoutine({ resumeFromStep: nextStep, resumeReason: 'ci-continuation' })
+      .catch(() => {})
+      .finally(() => { routineCiAutoResumeBusy = false; });
+  }, 120);
+}
+
 async function dashRunPostCommitRoutine(options = {}) {
   if (dashRoutineRunning) return;
   dashRoutineRunning = true;
   dashRoutineAutoHealAttempted = false;
   const requestedResumeFrom = String(options?.resumeFromStep || '').toLowerCase().trim();
   const autoResumeDepth = Number(options?.autoResumeDepth || 0);
+  const resumeReason = String(options?.resumeReason || '').trim();
   const previousWorkspaceState = dashRoutineWorkspaceState || {};
   let queuedAutoResumeStep = '';
   if (dashRoutineRunBtn) {
@@ -6187,6 +6275,7 @@ async function dashRunPostCommitRoutine(options = {}) {
   const lines = [];
   lines.push('Post-Commit Routine');
   lines.push(`Started: ${new Date().toISOString()}`);
+  if (resumeReason) lines.push(`Resume Reason: ${resumeReason}`);
   try {
     const loaded = await loadRoutinePolicyProfile();
     routineApplyPolicyProfile(loaded);
@@ -6200,8 +6289,11 @@ async function dashRunPostCommitRoutine(options = {}) {
     }
 
     const stepsToRun = profile.step_order.slice();
+    routineClearCiContinuation();
     const includeSet = new Set(stepsToRun);
     const resumeIndex = requestedResumeFrom ? stepsToRun.indexOf(requestedResumeFrom) : -1;
+    const ciIndex = stepsToRun.indexOf('ci');
+    const nextStepAfterCi = ciIndex >= 0 && ciIndex + 1 < stepsToRun.length ? stepsToRun[ciIndex + 1] : '';
     const effectiveSteps = resumeIndex >= 0 ? stepsToRun.slice(resumeIndex) : stepsToRun;
     if (requestedResumeFrom) {
       if (resumeIndex >= 0) {
@@ -6460,6 +6552,7 @@ async function dashRunPostCommitRoutine(options = {}) {
           const triggerRes = await depRun('ci-trigger', { branch: ciBranch });
           if (!isDepStepPass('ci-trigger', triggerRes)) {
             dashRoutineWorkspaceState.ciInFlight = false;
+            routineClearCiContinuation();
             routineSetStageState('ci', 'Blocked', 'fail');
             routineSetCiJobChips({});
             routineRenderCiObservatory({});
@@ -6474,6 +6567,15 @@ async function dashRunPostCommitRoutine(options = {}) {
         }
         await routineLoadCiCatalog();
         dashRoutineWorkspaceState.ciInFlight = true;
+        if (nextStepAfterCi) {
+          routineWriteCiContinuation({
+            branch: routineReadBranchRemote().branch,
+            ci_run_id: '',
+            next_step: nextStepAfterCi,
+            recorded_at: new Date().toISOString(),
+            reason: 'ci-stage-inflight'
+          });
+        }
         routineSetStageState('ci', 'Running', 'warn');
         routineSetCiJobChips({
           docs_state: 'running',
@@ -6522,6 +6624,7 @@ async function dashRunPostCommitRoutine(options = {}) {
           const likelyCause = String(ciInner?.summary?.likely_cause || '').toLowerCase();
           const noFreshRun = likelyCause === 'no_fresh_run_detected';
           dashRoutineWorkspaceState.ciInFlight = false;
+          routineClearCiContinuation();
           routineSetStageState('ci', 'Fail', 'fail');
           lines.push(`CI: FAIL (${ciInner?.error || ci?.error || 'watch failed'})`);
           routineRecord(
@@ -6557,6 +6660,15 @@ async function dashRunPostCommitRoutine(options = {}) {
             conclusion: ciWatchSummary.conclusion || ciStatusSummary.conclusion || ''
           }
           : ciWatchSummary;
+        if (nextStepAfterCi) {
+          routineWriteCiContinuation({
+            branch: ciSummary.branch || routineReadBranchRemote().branch,
+            ci_run_id: ciSummary.run_id || ciSummary.ci_run_id || '',
+            next_step: nextStepAfterCi,
+            recorded_at: new Date().toISOString(),
+            reason: 'ci-stage-completed'
+          });
+        }
         dashRoutineWorkspaceState.ciDetail = ciStatusSummary
           ? { ...(ciStatusInner || {}), watch_summary: ciWatchSummary, summary: ciSummary }
           : (ciInner || ci);
@@ -6568,10 +6680,12 @@ async function dashRunPostCommitRoutine(options = {}) {
         routineRecord('CI', 'pass', 'GitHub Actions run completed successfully.', JSON.stringify(ciInner, null, 2), '', '', stageStart);
         lines.push(`CI: PASS (${ciSummary.workflow || 'workflow'})`);
         if (runUrl) lines.push(`CI Run: ${runUrl}`);
+        if (nextStepAfterCi) lines.push(`CI Continuation: armed for ${nextStepAfterCi}`);
         continue;
       }
 
       if (stepName === 'evidence') {
+        routineClearCiContinuation();
         const exportEvidence = !!document.getElementById('dash-routine-export-evidence')?.checked;
         if (!exportEvidence) {
           routineSetChip(dashRoutineEvidenceChip, 'Evidence: skipped', 'warn');
@@ -6639,6 +6753,7 @@ async function dashRunPostCommitRoutine(options = {}) {
       dashRoutineWorkspaceState.lastResult = 'success';
       routineSetLastResult('success', 'Last Result: success');
       routineRecordFailure(null);
+      routineClearCiContinuation();
       routineAnnounceStatus('Post-Commit Routine completed successfully.');
     }
     routineRecord('Reconcile', failed ? 'fail' : 'pass', failed ? 'Routine ended with blocking failure.' : 'Routine completed successfully.', '', dashRoutineWorkspaceState.failure?.remediation || '', '', 0);
@@ -6652,6 +6767,7 @@ async function dashRunPostCommitRoutine(options = {}) {
     }
     routineRenderWorkspace();
     if (dashRoutineOut) dashRoutineOut.focus();
+    if (!queuedAutoResumeStep) routineClearCiContinuation();
     if (queuedAutoResumeStep) {
       setTimeout(() => {
         dashRunPostCommitRoutine({ resumeFromStep: queuedAutoResumeStep, autoResumeDepth: autoResumeDepth + 1 });

@@ -64,7 +64,8 @@ fn test_ci_observatory_terminal_refresh_after_watch_contract() {
 #[test]
 fn test_ci_status_prefers_workflow_specific_lookup_contract() {
     let script_path = Path::new("../../scripts/gh_actions_status_latest.sh");
-    let script = fs::read_to_string(script_path).expect("Failed to read gh_actions_status_latest.sh");
+    let script =
+        fs::read_to_string(script_path).expect("Failed to read gh_actions_status_latest.sh");
 
     assert!(
         script.contains("--workflow docs.yml")
@@ -101,5 +102,20 @@ fn test_ci_observatory_dashboard_auto_sync_loop_contract() {
             && js_content.contains("setInterval(() =>")
             && js_content.contains("15000"),
         "Dashboard CI observatory must keep a periodic auto-sync loop for live Docs/CI/PyPI status parity"
+    );
+}
+
+#[test]
+fn test_ci_auto_continuation_resume_contract() {
+    let js_path = Path::new("src/pilot_ui.js");
+    let js_content = fs::read_to_string(js_path).expect("Failed to read pilot_ui.js");
+
+    assert!(
+        js_content.contains("ROUTINE_CI_CONTINUATION_KEY")
+            && js_content.contains("function routineMaybeAutoContinueFromCi(summary = null)")
+            && js_content.contains("routineWriteCiContinuation(")
+            && js_content.contains("routineClearCiContinuation();")
+            && js_content.contains("resumeReason: 'ci-continuation'"),
+        "Routine must persist CI continuation intent and auto-resume from post-CI step after verified terminal CI completion"
     );
 }

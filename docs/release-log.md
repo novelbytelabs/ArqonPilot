@@ -231,3 +231,17 @@ Use this structure for every new release:
   - Added run URL/state mapping for selected workflow notes across `ci.yml`, `docs.yml`, and `pypi.yml`.
 - Regression guards:
   - `crates/pilot/tests/ci_observatory_regression_test.rs` now validates auto-sync loop contract and Docs/PyPI state mapping contract.
+
+### Wave D Slice 2 (CI Continuation Auto-Resume)
+
+- Added restart-safe CI continuation token (`localStorage`) that arms at CI stage start/completion and records the next post-CI step.
+- Dashboard CI sync now checks for verified terminal CI success and automatically resumes routine execution from the armed step (typically `evidence`), then proceeds to `reconcile`.
+- Added transcript provenance line (`Auto-Resume: CI completed; resuming from ...`) and timeline record for automatic continuation decisions.
+
+### Wave D Slice 3 (Codex Escalation De-Stub)
+
+- Routine escalation to Codex is now stage-aware:
+  - `CI` failures map to `pilot.dependency.ci-status`
+  - `Gates` failures map to `pilot.dependency.gate`
+  - `Push` failures map to `pilot.dependency.push`
+- Codex backend now supports `pilot.dependency.*` commands and executes them through local dependency action routing, so preview/approve/execute/reconcile can run actionable gate/push/CI commands instead of a generic `pilot.multi.status` fallback.

@@ -5538,11 +5538,13 @@ async fn run_codex_action(
         }
         let command = req.command.as_deref().unwrap_or("").trim().to_string();
         if command.is_empty()
-            || !(command.starts_with("pilot.") || command.starts_with("api.agorg."))
+            || !(command.starts_with("pilot.")
+                || command.starts_with("api.agorg.")
+                || command.starts_with("pilot.dependency."))
         {
             return error_response(
                 StatusCode::BAD_REQUEST,
-                "command must be namespaced as pilot.* or api.agorg.*",
+                "command must be namespaced as pilot.*, pilot.dependency.*, or api.agorg.*",
             );
         }
         if let Some(allowlist) = &state.allowed_commands {
@@ -5711,7 +5713,14 @@ async fn run_codex_action(
             "intent": execute_contract.intent
         }));
 
-        let exec_result = if execute_contract.command.starts_with("api.agorg.") {
+        let exec_result = if execute_contract.command.starts_with("pilot.dependency.") {
+            run_local_dependency_contract_command(
+                &state,
+                &execute_contract.command,
+                execute_contract.payload_normalized.clone(),
+            )
+            .await
+        } else if execute_contract.command.starts_with("api.agorg.") {
             run_local_agorg_contract_command(
                 &state,
                 &execute_contract.command,
@@ -5824,7 +5833,14 @@ async fn run_codex_action(
                     );
                 }
             }
-            let verify_result = if verify_cmd.starts_with("api.agorg.") {
+            let verify_result = if verify_cmd.starts_with("pilot.dependency.") {
+                run_local_dependency_contract_command(
+                    &state,
+                    verify_cmd,
+                    reconcile_contract.verify_payload.clone(),
+                )
+                .await
+            } else if verify_cmd.starts_with("api.agorg.") {
                 run_local_agorg_contract_command(
                     &state,
                     verify_cmd,
@@ -5922,6 +5938,31 @@ async fn run_local_agorg_contract_command(
             command
         )),
     }
+}
+
+async fn run_local_dependency_contract_command(
+    state: &Arc<UiState>,
+    command: &str,
+    payload: Value,
+) -> Result<Value> {
+    let Some(action) = command.strip_prefix("pilot.dependency.") else {
+        return Err(miette::miette!(
+            "unsupported local dependency contract command '{}'",
+            command
+        ));
+    };
+    if action.trim().is_empty() {
+        return Err(miette::miette!("dependency action suffix cannot be empty"));
+    }
+    let mut req_payload = if payload.is_object() { payload } else { json!({}) };
+    req_payload["action"] = json!(action);
+    if req_payload.get("json").is_none() {
+        req_payload["json"] = json!(true);
+    }
+    let req: DependencyActionRequest = serde_json::from_value(req_payload)
+        .map_err(|e| miette::miette!("invalid dependency payload: {e}"))?;
+    let resp = run_dependency_action(State(state.clone()), Json(req)).await;
+    Ok(extract_json_body(resp).await)
 }
 
 fn now_unix() -> u64 {

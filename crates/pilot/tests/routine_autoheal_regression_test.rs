@@ -61,6 +61,13 @@ fn test_routine_autoheal_and_codex_escalation_contract() {
             && js_content.contains("CI: TRIGGERED (workflow_dispatch fallback after no-op push)"),
         "Missing no-op push CI-trigger fallback"
     );
+    assert!(
+        js_content.contains("cmd = 'pilot.dependency.ci-status'")
+            && js_content.contains("verify = 'pilot.dependency.ci-status'")
+            && js_content.contains("cmd = 'pilot.dependency.gate'")
+            && js_content.contains("cmd = 'pilot.dependency.push'"),
+        "Routine->Codex escalation must map stage failures to actionable dependency commands"
+    );
 
     let push_script = fs::read_to_string(Path::new("../../scripts/push_main.sh"))
         .expect("Failed to read push_main.sh");
@@ -69,5 +76,18 @@ fn test_routine_autoheal_and_codex_escalation_contract() {
             && push_script.contains("GCM_INTERACTIVE=Never")
             && push_script.contains("BatchMode=yes"),
         "Missing non-interactive push guardrails in push_main.sh"
+    );
+}
+
+#[test]
+fn test_codex_dependency_command_routing_contract() {
+    let rs_path = Path::new("src/serve_ui.rs");
+    let rs_content = fs::read_to_string(rs_path).expect("Failed to read serve_ui.rs");
+
+    assert!(
+        rs_content.contains("command.starts_with(\"pilot.dependency.\")")
+            && rs_content.contains("run_local_dependency_contract_command")
+            && rs_content.contains("pilot.dependency.*, or api.agorg.*"),
+        "Codex action backend must support pilot.dependency.* command namespace and local dependency execution routing"
     );
 }
