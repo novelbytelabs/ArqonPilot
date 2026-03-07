@@ -8907,7 +8907,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .routine-stage-tab[data-level="neutral"] .routine-stage-state { color: var(--muted); }
     .routine-section-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+      grid-template-columns: minmax(0, 1fr);
       gap: 14px;
       align-items: start;
     }
@@ -9703,43 +9703,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
             </div>
           </div>
           <div class="routine-section-grid">
-            <section id="dash-routine-stage-panel" class="routine-stage-card" role="tabpanel" aria-labelledby="dash-routine-stage-resolve-tab" tabindex="0">
-              <div class="routine-inline-actions" style="justify-content: space-between; margin-bottom: 10px;">
-                <div>
-                  <h4 id="dash-routine-workspace-title">Resolve</h4>
-                  <div id="dash-routine-workspace-summary" class="routine-stage-summary">Active scope, cohort, and execution permissions will appear here.</div>
-                </div>
-                <div id="dash-routine-workspace-chip-row" class="chip-row" style="margin-bottom:0;"></div>
-              </div>
-              <div id="dash-routine-workspace-metrics" class="routine-metric-grid"></div>
-              <div class="routine-subgrid">
-                <div class="routine-detail-box">
-                  <h5>Details</h5>
-                  <ul id="dash-routine-workspace-details">
-                    <li>Run Resolve to materialize scope and cohort data.</li>
-                  </ul>
-                </div>
-                <div class="routine-detail-box">
-                  <h5>Artifacts And Actions</h5>
-                  <ul id="dash-routine-workspace-artifacts">
-                    <li>No artifacts yet.</li>
-                  </ul>
-                </div>
-              </div>
-              <div id="dash-routine-workspace-notes" class="routine-stage-notes" role="status" aria-live="polite">Routine workspace ready.</div>
-              <div id="dash-routine-dag-view" class="routine-dag-view" aria-live="polite">
-                <div class="routine-dag-header">
-                  <div>
-                    <h4 style="margin:0;">Dependency DAG</h4>
-                    <div class="helper">Stage-banded cohort topology for the current Multi preview.</div>
-                  </div>
-                  <span id="dash-routine-dag-summary-chip" class="chip neutral">DAG: pending</span>
-                </div>
-                <div id="dash-routine-dag-lanes" class="routine-dag-lanes">
-                  <div class="routine-dag-empty">Run Multi to materialize dependency topology.</div>
-                </div>
-              </div>
-            </section>
             <section class="routine-ci-card" aria-labelledby="dash-routine-ci-observatory-title">
               <div class="routine-inline-actions" style="justify-content: space-between; margin-bottom: 10px;">
                 <div>
@@ -9781,6 +9744,43 @@ const INDEX_HTML: &str = r#"<!doctype html>
                   <h5>CI Notes</h5>
                   <div id="dash-routine-ci-policy-summary" class="helper" style="margin-bottom: 8px;">Policy coverage will appear after workflow discovery.</div>
                   <div id="dash-routine-ci-notes" class="routine-modal-status" style="min-height: 96px;">CI observatory ready.</div>
+                </div>
+              </div>
+            </section>
+            <section id="dash-routine-stage-panel" class="routine-stage-card" role="tabpanel" aria-labelledby="dash-routine-stage-resolve-tab" tabindex="0">
+              <div class="routine-inline-actions" style="justify-content: space-between; margin-bottom: 10px;">
+                <div>
+                  <h4 id="dash-routine-workspace-title">Resolve</h4>
+                  <div id="dash-routine-workspace-summary" class="routine-stage-summary">Active scope, cohort, and execution permissions will appear here.</div>
+                </div>
+                <div id="dash-routine-workspace-chip-row" class="chip-row" style="margin-bottom:0;"></div>
+              </div>
+              <div id="dash-routine-workspace-metrics" class="routine-metric-grid"></div>
+              <div class="routine-subgrid">
+                <div class="routine-detail-box">
+                  <h5>Details</h5>
+                  <ul id="dash-routine-workspace-details">
+                    <li>Run Resolve to materialize scope and cohort data.</li>
+                  </ul>
+                </div>
+                <div class="routine-detail-box">
+                  <h5>Artifacts And Actions</h5>
+                  <ul id="dash-routine-workspace-artifacts">
+                    <li>No artifacts yet.</li>
+                  </ul>
+                </div>
+              </div>
+              <div id="dash-routine-workspace-notes" class="routine-stage-notes" role="status" aria-live="polite">Routine workspace ready.</div>
+              <div id="dash-routine-dag-view" class="routine-dag-view" aria-live="polite">
+                <div class="routine-dag-header">
+                  <div>
+                    <h4 style="margin:0;">Dependency DAG</h4>
+                    <div class="helper">Stage-banded cohort topology for the current Multi preview.</div>
+                  </div>
+                  <span id="dash-routine-dag-summary-chip" class="chip neutral">DAG: pending</span>
+                </div>
+                <div id="dash-routine-dag-lanes" class="routine-dag-lanes">
+                  <div class="routine-dag-empty">Run Multi to materialize dependency topology.</div>
                 </div>
               </div>
             </section>
