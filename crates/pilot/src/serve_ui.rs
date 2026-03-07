@@ -4616,6 +4616,7 @@ async fn run_dependency_action(
         action,
         "repair"
             | "cargo-fmt"
+            | "ci-trigger"
             | "db-start"
             | "db-stop"
             | "db-restart"
@@ -5233,6 +5234,17 @@ async fn run_dependency_action(
                 "./scripts/gh_actions_watch_latest.sh --branch {branch} --timeout-sec {timeout}"
             );
             run_local_script_streamed(&cmd, "ci-watch", &state.events).await
+        }
+        ("ci-trigger", _) => {
+            let branch = req.branch.as_deref().unwrap_or("main");
+            if !is_safe_cli_token(branch) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "branch contains unsupported characters",
+                );
+            }
+            let cmd = format!("./scripts/gh_actions_trigger_ci.sh --branch {branch}");
+            run_local_script_streamed(&cmd, "ci-trigger", &state.events).await
         }
         ("ci-status", _) => {
             let branch = req.branch.as_deref().unwrap_or("main");
@@ -6109,6 +6121,7 @@ mod tests {
         assert!(dependency_action_scope_required("release-readiness"));
         assert!(dependency_action_scope_required("release-collect-evidence"));
         assert!(dependency_action_scope_required("release-verify-bundle"));
+        assert!(dependency_action_scope_required("ci-trigger"));
         assert!(dependency_action_scope_required("ci-watch"));
         assert!(dependency_action_scope_required("ci-status"));
         assert!(!dependency_action_scope_required("db-status"));
@@ -8020,6 +8033,7 @@ fn dependency_action_scope_required(action: &str) -> bool {
             | "release-migration-smoke"
             | "release-collect-evidence"
             | "release-verify-bundle"
+            | "ci-trigger"
             | "ci-watch"
             | "ci-status"
     )

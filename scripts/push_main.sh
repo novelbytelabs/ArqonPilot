@@ -31,6 +31,13 @@ echo "[push-safe] branch=$BRANCH remote=$REMOTE"
 echo "[push-safe] current_branch=$CURRENT_BRANCH"
 echo "[push-safe] log file: $LOG_FILE"
 
+# Force non-interactive git execution so Dashboard routines fail fast instead of hanging.
+export GIT_TERMINAL_PROMPT=0
+export GCM_INTERACTIVE=Never
+export GIT_ASKPASS="${GIT_ASKPASS:-/bin/true}"
+export SSH_ASKPASS="${SSH_ASKPASS:-/bin/true}"
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
+
 PUSH_NET_RETRIES="${PUSH_NET_RETRIES:-6}"
 PUSH_NET_RETRY_DELAY_SEC="${PUSH_NET_RETRY_DELAY_SEC:-8}"
 DNS_PREFLIGHT_ATTEMPTS="${DNS_PREFLIGHT_ATTEMPTS:-12}"

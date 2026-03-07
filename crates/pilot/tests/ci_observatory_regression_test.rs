@@ -30,3 +30,19 @@ fn test_ci_observatory_inflight_pass_suppression_contract() {
         "Workflow state rendering must normalize through in-flight guard"
     );
 }
+
+#[test]
+fn test_ci_watch_requires_fresh_branch_run_contract() {
+    let script_path = Path::new("../../scripts/gh_actions_watch_latest.sh");
+    let script =
+        fs::read_to_string(script_path).expect("Failed to read gh_actions_watch_latest.sh");
+
+    assert!(
+        script.contains("LOOKBACK_SEC=900")
+            && script.contains("window_start_iso")
+            && script.contains("fresh_candidate_ids")
+            && script.contains("fresh_candidate_ids_by_sha")
+            && script.contains("no_fresh_run_detected"),
+        "CI watch must enforce fresh-run window and avoid stale run attachment"
+    );
+}

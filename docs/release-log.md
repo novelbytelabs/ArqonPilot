@@ -186,6 +186,23 @@ Use this structure for every new release:
 - Learning loop:
   - heal outcomes are persisted locally in `localStorage` key `pilot.routine.heal.log.v1`.
   - Reconcile exposes `Heal Log` and `Clear Heal Log` controls for operator feedback loops.
+- Learning loop promotion (follow-on hardening):
+  - successful safe remediations are now promoted into reusable recipes (`pilot.routine.heal.recipe.v1`) keyed by failure fingerprint.
+  - repeated failures with matching fingerprint automatically reuse learned playbooks before Codex escalation.
+  - recipe controls are exposed in Reconcile (`Recipes`, `Clear Recipes`) for operator governance.
+- Push anti-stall hardening:
+  - routine push stage now uses a bounded timeout (15 min) with explicit running ledger entry.
+  - `scripts/push_main.sh` now enforces non-interactive git behavior (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=Never`, SSH batch mode) to avoid indefinite credential prompts.
+- Resume hardening:
+  - after successful auto-heal, Reconcile now exposes `Resume from Failed Stage`.
+  - auto-heal success now auto-queues one resume pass from the failed stage (`autoResumeDepth` guard prevents loops).
+  - routine runner accepts resume targeting (`resumeFromStep`) and re-enters from the failed stage while preserving prior scope context.
+  - push timeout failures now surface as explicit `Timed out` stage state with targeted remediation text.
+- CI watch freshness hardening:
+  - `gh_actions_watch_latest.sh` now requires a fresh branch run in a configurable lookback window (default 15m) and prefers matching `headSha`.
+  - routine CI stage no longer treats stale historical runs as current success; missing fresh runs now fail with `likely_cause=no_fresh_run_detected`.
+  - no-op push (`Everything up-to-date`) now attempts `workflow_dispatch` fallback trigger (`ci-trigger`) and then watches the fresh run.
+  - `.github/workflows/ci.yml` now declares `workflow_dispatch` to support resilient CI triggering without a new push delta.
 - Regression guards added:
   - `crates/pilot/tests/routine_autoheal_regression_test.rs`
   - `scripts/test_matrix.sh` includes `--test routine_autoheal_regression_test`

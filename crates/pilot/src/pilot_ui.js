@@ -342,11 +342,14 @@ let multiMacroExpanded = false;
 let dashRoutineRunning = false;
 let dashRoutineAutoHealRunning = false;
 let dashRoutineAutoHealAttempted = false;
+let dashRoutineCanResume = false;
 let dashRoutineTrace = [];
 let dashRoutineSelectedStage = 'resolve';
 let dashRoutinePolicySimulationId = '';
 let dashRoutinePolicySimulationFingerprint = '';
 const ROUTINE_HEAL_LOG_KEY = 'pilot.routine.heal.log.v1';
+const ROUTINE_HEAL_RECIPE_KEY = 'pilot.routine.heal.recipe.v1';
+const ROUTINE_SAFE_HEAL_ACTIONS = Object.freeze(new Set(['cargo-fmt', 'repair']));
 const ROUTINE_STAGE_ORDER = Object.freeze(['resolve', 'plan', 'multi', 'gates', 'push', 'ci', 'evidence', 'reconcile']);
 const ROUTINE_STAGE_LABELS = Object.freeze({
   resolve: 'Resolve',
@@ -367,6 +370,7 @@ let dashRoutineWorkspaceState = {
   multiSnapshot: null,
   gateDetail: null,
   pushDetail: null,
+  pushNoop: false,
   ciDetail: null,
   ciCatalog: null,
   ciSelectedWorkflowKey: '',
@@ -2199,6 +2203,33 @@ async function depRun(action, options = {}) {
   }
   depLoadLogs();
   return data;
+}
+
+async function depRunWithTimeout(action, options = {}, timeoutMs = 0) {
+  const timeout = Number(timeoutMs);
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    return depRun(action, options);
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${action} timed out after ${Math.floor(timeout / 1000)}s`)), timeout);
+    depRun(action, options)
+      .then((data) => {
+        clearTimeout(timer);
+        resolve(data);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+function routinePushLikelyNoop(pushRes) {
+  const inner = depEnvelopeInner(pushRes) || {};
+  const stdout = String(inner?.stdout || pushRes?.stdout || '');
+  const summary = inner?.summary && typeof inner.summary === 'object' ? inner.summary : {};
+  const merged = `${stdout}\n${JSON.stringify(summary)}`.toLowerCase();
+  return merged.includes('everything up-to-date') || merged.includes('everything up to date');
 }
 
 function setChip(el, label, level) {
@@ -5418,7 +5449,9 @@ function routineResetChips() {
   dashRoutineWorkspaceState.ciCatalog = null;
   dashRoutineWorkspaceState.ciSelectedWorkflowKey = '';
   dashRoutineWorkspaceState.healStatus = '';
+  dashRoutineWorkspaceState.pushNoop = false;
   dashRoutineAutoHealAttempted = false;
+  dashRoutineCanResume = false;
   routineRenderCiObservatory({});
   routineSetChip(dashRoutineProfileSourceChip, 'Profile: loading', 'neutral');
   routineSetChip(dashRoutineProfileStepsChip, 'Steps: -', 'neutral');
@@ -5523,6 +5556,9 @@ function routineRenderActions() {
   const healBtn = classified.playbook.length
     ? `<button class="btn" onclick="routineAutoHealAndRetry()" ${dashRoutineAutoHealRunning ? 'disabled' : ''}>${dashRoutineAutoHealRunning ? 'Auto-Heal Running...' : 'Auto-Heal + Verify'}</button>`
     : '';
+  const resumeBtn = dashRoutineCanResume
+    ? `<button class="btn" onclick="dashResumePostCommitRoutine()" ${dashRoutineRunning ? 'disabled' : ''}>Resume from Failed Stage</button>`
+    : '';
   const statusBlock = dashRoutineWorkspaceState.healStatus
     ? `<pre style="margin:6px 0 0; max-height:160px; overflow:auto; font-size:0.72rem;">${routineEscapeHtml(dashRoutineWorkspaceState.healStatus)}</pre>`
     : '';
@@ -5531,9 +5567,12 @@ function routineRenderActions() {
     <div class="row" style="gap:8px; align-items:center; flex-wrap:wrap;">
       <button class="btn secondary" onclick="routineRunAction('${fail.actionId}')">${label}</button>
       ${healBtn}
+      ${resumeBtn}
       <button class="btn secondary" onclick="routineEscalateFailureToCodex()">Escalate to Codex</button>
       <button class="btn secondary" onclick="routineShowHealLog()">Heal Log (${healStats.total})</button>
+      <button class="btn secondary" onclick="routineShowHealRecipes()">Recipes (${healStats.learned})</button>
       <button class="btn secondary" onclick="routineClearHealLog()">Clear Heal Log</button>
+      <button class="btn secondary" onclick="routineClearHealRecipes()">Clear Recipes</button>
     </div>
     ${statusBlock}
   `;
@@ -5541,6 +5580,17 @@ function routineRenderActions() {
 
 function routineLatestFailureEntry() {
   return [...dashRoutineTrace].reverse().find((e) => e.status === 'fail') || null;
+}
+
+function routineFailureStageToStep(entry) {
+  const stage = String(entry?.stage || '').toLowerCase().trim();
+  if (stage === 'scope') return 'scope';
+  if (stage === 'multi') return 'multi';
+  if (stage === 'gates') return 'gates';
+  if (stage === 'push') return 'push';
+  if (stage === 'ci') return 'ci';
+  if (stage === 'evidence') return 'evidence';
+  return '';
 }
 
 function routineParseFailureDetail(entry) {
@@ -5567,6 +5617,17 @@ function routineClassifyFailureForHeal(entry) {
     verifyAction: '',
     summary: 'No known safe remediation matched.'
   };
+
+  const learned = routineMatchLearnedHealRecipe(entry);
+  if (learned) {
+    return {
+      signature: `learned:${learned.signature || learned.fingerprint || 'recipe'}`,
+      confidence: learned.confidence || 'medium',
+      playbook: Array.isArray(learned.playbook) ? learned.playbook : [],
+      verifyAction: learned.verifyAction || '',
+      summary: `Using learned remediation recipe (${learned.source || 'local-history'}).`
+    };
+  }
 
   if (entry?.stage === 'Gates' && action === 'prepush-gate') {
     if (merged.includes('diff in') && merged.includes('[cargo-fmt]')) {
@@ -5628,6 +5689,87 @@ function routineClassifyFailureForHeal(entry) {
   return base;
 }
 
+function routineNormalizeFailureText(value) {
+  let text = String(value || '').toLowerCase();
+  text = text.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/g, '<uuid>');
+  text = text.replace(/\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?z/g, '<ts>');
+  text = text.replace(/:\d{2,6}/g, ':#');
+  text = text.replace(/\b\d{3,}\b/g, '#');
+  text = text.replace(/\s+/g, ' ').trim();
+  return text.slice(0, 320);
+}
+
+function routineFailureFingerprint(entry) {
+  if (!entry || typeof entry !== 'object') return '';
+  const parsed = routineParseFailureDetail(entry);
+  const inner = parsed && parsed.inner && typeof parsed.inner === 'object' ? parsed.inner : parsed;
+  const merged = `${String(inner?.stdout || '')}\n${String(inner?.stderr || '')}`;
+  const key = {
+    stage: String(entry.stage || '').toLowerCase(),
+    action: String(inner?.action || '').toLowerCase(),
+    summary: routineNormalizeFailureText(entry.summary || ''),
+    remediation: routineNormalizeFailureText(entry.remediation || ''),
+    detail: routineNormalizeFailureText(merged)
+  };
+  return JSON.stringify(key);
+}
+
+function routineHealRecipeRead() {
+  try {
+    const raw = window.localStorage.getItem(ROUTINE_HEAL_RECIPE_KEY);
+    const items = raw ? JSON.parse(raw) : [];
+    return Array.isArray(items) ? items : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function routineHealRecipeWrite(items) {
+  try {
+    const next = Array.isArray(items) ? items.slice(-200) : [];
+    window.localStorage.setItem(ROUTINE_HEAL_RECIPE_KEY, JSON.stringify(next));
+  } catch (_) {}
+}
+
+function routineIsSafeHealPlaybook(playbook) {
+  if (!Array.isArray(playbook) || !playbook.length) return false;
+  return playbook.every((step) => ROUTINE_SAFE_HEAL_ACTIONS.has(String(step?.action || '').trim()));
+}
+
+function routineLearnSuccessfulHeal(entry, classified) {
+  if (!entry || !classified || !routineIsSafeHealPlaybook(classified.playbook)) return;
+  const fingerprint = routineFailureFingerprint(entry);
+  if (!fingerprint) return;
+  const items = routineHealRecipeRead();
+  const next = Array.isArray(items) ? items : [];
+  const recipe = {
+    ts: new Date().toISOString(),
+    fingerprint,
+    stage: String(entry.stage || ''),
+    signature: String(classified.signature || 'unknown'),
+    confidence: String(classified.confidence || 'medium'),
+    verifyAction: String(classified.verifyAction || ''),
+    playbook: classified.playbook.map((step) => ({
+      action: String(step.action || ''),
+      label: String(step.label || step.action || '')
+    })),
+    source: 'auto-heal-success'
+  };
+  const existingIdx = next.findIndex((item) => item && item.fingerprint === fingerprint);
+  if (existingIdx >= 0) next[existingIdx] = recipe;
+  else next.push(recipe);
+  routineHealRecipeWrite(next);
+}
+
+function routineMatchLearnedHealRecipe(entry) {
+  const fingerprint = routineFailureFingerprint(entry);
+  if (!fingerprint) return null;
+  const items = routineHealRecipeRead();
+  const hit = items.find((item) => item && item.fingerprint === fingerprint);
+  if (!hit || !routineIsSafeHealPlaybook(hit.playbook)) return null;
+  return hit;
+}
+
 function routineHealLogAppend(record) {
   try {
     const raw = window.localStorage.getItem(ROUTINE_HEAL_LOG_KEY);
@@ -5656,7 +5798,8 @@ function routineHealLogStats() {
     if (item && item.ok) success += 1;
     else failed += 1;
   }
-  return { total: items.length, success, failed };
+  const learned = routineHealRecipeRead().length;
+  return { total: items.length, success, failed, learned };
 }
 
 function routineShowHealLog() {
@@ -5664,6 +5807,7 @@ function routineShowHealLog() {
   if (!items.length) {
     dashRoutineWorkspaceState.healStatus = 'Heal log is empty.';
     routineRenderActions();
+    routineAnnounceStatus('Heal log is empty.');
     return;
   }
   const lines = ['Heal Log (latest first):'];
@@ -5671,8 +5815,36 @@ function routineShowHealLog() {
   recent.forEach((item) => {
     lines.push(`- ${item.ts || 'unknown'} | ${item.signature || 'unknown'} | ${item.ok ? 'PASS' : 'FAIL'} | stage=${item.stage || '-'} | confidence=${item.confidence || 'n/a'}`);
   });
+  const recipes = routineHealRecipeRead();
+  if (recipes.length) {
+    lines.push('', `Learned recipes: ${recipes.length}`);
+    [...recipes].reverse().slice(0, 10).forEach((item) => {
+      const actions = (item.playbook || []).map((step) => step.action).join(' -> ') || '-';
+      lines.push(`- ${item.ts || 'unknown'} | stage=${item.stage || '-'} | ${item.signature || 'unknown'} | ${actions}`);
+    });
+  }
   dashRoutineWorkspaceState.healStatus = lines.join('\n');
   routineRenderActions();
+  routineAnnounceStatus(`Heal log loaded (${items.length} records).`);
+}
+
+function routineShowHealRecipes() {
+  const recipes = routineHealRecipeRead();
+  if (!recipes.length) {
+    dashRoutineWorkspaceState.healStatus = 'No learned recipes yet.';
+    routineRenderActions();
+    routineAnnounceStatus('No learned recipes available.');
+    return;
+  }
+  const lines = [`Learned Recipes (${recipes.length})`];
+  [...recipes].reverse().slice(0, 20).forEach((item) => {
+    const actions = (item.playbook || []).map((step) => step.action).join(' -> ') || '-';
+    const verifyAction = item.verifyAction || '-';
+    lines.push(`- ${item.ts || 'unknown'} | stage=${item.stage || '-'} | ${item.signature || 'unknown'} | fix=${actions} | verify=${verifyAction}`);
+  });
+  dashRoutineWorkspaceState.healStatus = lines.join('\n');
+  routineRenderActions();
+  routineAnnounceStatus(`Loaded ${recipes.length} learned heal recipes.`);
 }
 
 function routineClearHealLog() {
@@ -5681,6 +5853,16 @@ function routineClearHealLog() {
   } catch (_) {}
   dashRoutineWorkspaceState.healStatus = 'Heal log cleared.';
   routineRenderActions();
+  routineAnnounceStatus('Heal log cleared.');
+}
+
+function routineClearHealRecipes() {
+  try {
+    window.localStorage.removeItem(ROUTINE_HEAL_RECIPE_KEY);
+  } catch (_) {}
+  dashRoutineWorkspaceState.healStatus = 'Learned heal recipes cleared.';
+  routineRenderActions();
+  routineAnnounceStatus('Learned heal recipes cleared.');
 }
 
 async function routineAutoHealAndRetry(options = {}) {
@@ -5709,6 +5891,7 @@ async function routineAutoHealAndRetry(options = {}) {
   dashRoutineAutoHealRunning = true;
   dashRoutineWorkspaceState.healStatus = `${fromAuto ? 'Automatic' : 'Manual'} auto-heal started for signature=${classified.signature} (${classified.confidence}).`;
   routineRenderActions();
+  routineAnnounceStatus(`Auto-heal started for ${classified.signature}.`);
 
   let ok = true;
   const lines = [`Auto-heal signature: ${classified.signature}`, `Summary: ${classified.summary}`];
@@ -5748,6 +5931,8 @@ async function routineAutoHealAndRetry(options = {}) {
   if (ok) {
     lines.push('Auto-heal result: SUCCESS');
     lines.push('Next: retry the routine or continue from failed stage.');
+    routineLearnSuccessfulHeal(fail, classified);
+    dashRoutineCanResume = true;
   } else {
     lines.push('Auto-heal result: FAILED');
     lines.push('Escalating to Codex with incident context.');
@@ -5764,10 +5949,25 @@ async function routineAutoHealAndRetry(options = {}) {
   routineRenderActions();
   routineRenderWorkspace();
   if (!ok) {
+    routineAnnounceAlert('Auto-heal failed. Escalating to Codex.');
     await routineEscalateFailureToCodex();
     return { attempted: true, ok: false, escalated: true };
   }
+  routineAnnounceStatus('Auto-heal completed successfully.');
   return { attempted: true, ok: true, escalated: false };
+}
+
+async function dashResumePostCommitRoutine() {
+  if (dashRoutineRunning) return;
+  const fail = routineLatestFailureEntry();
+  const resumeFromStep = routineFailureStageToStep(fail);
+  if (!resumeFromStep) {
+    dashRoutineWorkspaceState.healStatus = 'Resume unavailable: no resumable failed stage in trace.';
+    routineRenderActions();
+    routineAnnounceAlert('Resume unavailable: no resumable failed stage.');
+    return;
+  }
+  await dashRunPostCommitRoutine({ resumeFromStep });
 }
 
 async function routineEscalateFailureToCodex() {
@@ -5885,10 +6085,14 @@ function routineWriteSummary(lines) {
   routineRenderWorkspace();
 }
 
-async function dashRunPostCommitRoutine() {
+async function dashRunPostCommitRoutine(options = {}) {
   if (dashRoutineRunning) return;
   dashRoutineRunning = true;
   dashRoutineAutoHealAttempted = false;
+  const requestedResumeFrom = String(options?.resumeFromStep || '').toLowerCase().trim();
+  const autoResumeDepth = Number(options?.autoResumeDepth || 0);
+  const previousWorkspaceState = dashRoutineWorkspaceState || {};
+  let queuedAutoResumeStep = '';
   if (dashRoutineRunBtn) {
     dashRoutineRunBtn.disabled = true;
     dashRoutineRunBtn.textContent = 'Running...';
@@ -5899,15 +6103,16 @@ async function dashRunPostCommitRoutine() {
   dashRoutineWorkspaceState = {
     loaded: null,
     resolveSnapshot: null,
-    active: null,
-    scope: parseMultiScopeFromRoutine(),
-    stats: null,
-    multiSnapshot: null,
-    gateDetail: null,
-    pushDetail: null,
-    ciDetail: null,
-    ciCatalog: dashRoutineWorkspaceState.ciCatalog,
-    ciSelectedWorkflowKey: dashRoutineWorkspaceState.ciSelectedWorkflowKey || '',
+    active: requestedResumeFrom ? (previousWorkspaceState.active || null) : null,
+    scope: requestedResumeFrom ? (previousWorkspaceState.scope || parseMultiScopeFromRoutine()) : parseMultiScopeFromRoutine(),
+    stats: requestedResumeFrom ? (previousWorkspaceState.stats || null) : null,
+    multiSnapshot: requestedResumeFrom ? (previousWorkspaceState.multiSnapshot || null) : null,
+    gateDetail: requestedResumeFrom ? (previousWorkspaceState.gateDetail || null) : null,
+    pushDetail: requestedResumeFrom ? (previousWorkspaceState.pushDetail || null) : null,
+    pushNoop: requestedResumeFrom ? !!previousWorkspaceState.pushNoop : false,
+    ciDetail: requestedResumeFrom ? (previousWorkspaceState.ciDetail || null) : null,
+    ciCatalog: previousWorkspaceState.ciCatalog || null,
+    ciSelectedWorkflowKey: previousWorkspaceState.ciSelectedWorkflowKey || '',
     ciInFlight: false,
     healStatus: '',
     evidenceDetail: null,
@@ -5936,6 +6141,15 @@ async function dashRunPostCommitRoutine() {
 
     const stepsToRun = profile.step_order.slice();
     const includeSet = new Set(stepsToRun);
+    const resumeIndex = requestedResumeFrom ? stepsToRun.indexOf(requestedResumeFrom) : -1;
+    const effectiveSteps = resumeIndex >= 0 ? stepsToRun.slice(resumeIndex) : stepsToRun;
+    if (requestedResumeFrom) {
+      if (resumeIndex >= 0) {
+        lines.push(`Resume: starting from ${requestedResumeFrom}; skipped steps: ${stepsToRun.slice(0, resumeIndex).join(', ') || 'none'}`);
+      } else {
+        lines.push(`Resume: requested step "${requestedResumeFrom}" not in profile; running full routine.`);
+      }
+    }
     if (!includeSet.has('scope')) routineSetChip(dashRoutineScopeChip, 'Scope: off', 'neutral');
     if (!includeSet.has('multi')) routineSetChip(dashRoutineMultiChip, 'Multi: off', 'neutral');
     if (!includeSet.has('gates')) routineSetChip(dashRoutineGatesChip, 'Gates: off', 'neutral');
@@ -5952,13 +6166,13 @@ async function dashRunPostCommitRoutine() {
     routineRenderWorkspace();
 
     const context = {
-      active: null,
-      scope: null,
-      stats: null
+      active: dashRoutineWorkspaceState.active || null,
+      scope: dashRoutineWorkspaceState.scope || null,
+      stats: dashRoutineWorkspaceState.stats || null
     };
     let failed = false;
 
-    for (const stepName of stepsToRun) {
+    for (const stepName of effectiveSteps) {
       const stageStart = Date.now();
       const stageKey = routineStageKey(stepName);
       routineSelectStage(stageKey);
@@ -6132,28 +6346,72 @@ async function dashRunPostCommitRoutine() {
         }
         routineSetChip(dashRoutinePushChip, 'Push: running', 'warn');
         routineSetStageState('push', 'Running', 'warn');
+        routineRecord('Push', 'running', 'Executing push-safe pipeline...', '', '', '', stageStart);
         const { branch, remote } = routineReadBranchRemote();
-        const pushRes = await depRun('push', { branch, remote });
+        let pushRes;
+        try {
+          pushRes = await depRunWithTimeout('push', { branch, remote }, 15 * 60 * 1000);
+        } catch (err) {
+          pushRes = {
+            ok: false,
+            error: err?.message || 'push request timed out',
+            inner: {
+              ok: false,
+              action: 'push',
+              error: err?.message || 'push request timed out'
+            }
+          };
+        }
         dashRoutineWorkspaceState.pushDetail = depEnvelopeInner(pushRes);
         if (!isDepStepPass('push', pushRes)) {
+          const pushError = String(pushRes?.error || pushRes?.inner?.error || 'unknown');
+          const pushTimedOut = pushError.toLowerCase().includes('timed out');
           routineSetChip(dashRoutinePushChip, 'Push: fail', 'fail');
-          routineSetStageState('push', 'Fail', 'fail');
-          lines.push(`Push: FAIL (${pushRes?.error || pushRes?.inner?.error || 'unknown'})`);
-          routineRecord('Push', 'fail', 'Push safe failed.', JSON.stringify(pushRes || {}, null, 2), 'Open push controls and inspect gate/push diagnostics.', 'open_push', stageStart);
-          routineAnnounceAlert('Routine blocked: push failed.');
+          routineSetStageState('push', pushTimedOut ? 'Timed out' : 'Fail', 'fail');
+          lines.push(`Push: FAIL (${pushError})`);
+          routineRecord(
+            'Push',
+            'fail',
+            pushTimedOut ? 'Push timed out.' : 'Push safe failed.',
+            JSON.stringify(pushRes || {}, null, 2),
+            pushTimedOut ? 'Push timed out. Check credentials/network and resume from Push.' : 'Open push controls and inspect gate/push diagnostics.',
+            'open_push',
+            stageStart
+          );
+          routineAnnounceAlert(pushTimedOut ? 'Routine blocked: push timed out.' : 'Routine blocked: push failed.');
           if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
           failed = true;
           if (profile.stop_on_fail) break;
           continue;
         }
+        dashRoutineWorkspaceState.pushNoop = routinePushLikelyNoop(pushRes);
         routineSetChip(dashRoutinePushChip, 'Push: pass', 'ok');
         routineSetStageState('push', 'Ready', 'ok');
         routineRecord('Push', 'pass', 'Push safe passed.', JSON.stringify(pushRes || {}, null, 2), '', '', stageStart);
-        lines.push('Push: PASS');
+        lines.push(`Push: PASS${dashRoutineWorkspaceState.pushNoop ? ' (no new remote update)' : ''}`);
         continue;
       }
 
       if (stepName === 'ci') {
+        if (dashRoutineWorkspaceState.pushNoop) {
+          routineSetStageState('ci', 'Triggering', 'warn');
+          routineRecord('CI', 'running', 'Push had no remote update; triggering CI workflow_dispatch fallback.', '', '', '', stageStart);
+          const ciBranch = routineReadBranchRemote().branch;
+          const triggerRes = await depRun('ci-trigger', { branch: ciBranch });
+          if (!isDepStepPass('ci-trigger', triggerRes)) {
+            dashRoutineWorkspaceState.ciInFlight = false;
+            routineSetStageState('ci', 'Blocked', 'fail');
+            routineSetCiJobChips({});
+            routineRenderCiObservatory({});
+            routineRecord('CI', 'fail', 'CI trigger fallback failed.', JSON.stringify(triggerRes || {}, null, 2), 'Enable workflow_dispatch in ci.yml and verify gh auth/permissions.', 'open_ci', stageStart);
+            lines.push('CI: FAIL (push was up-to-date and CI fallback trigger failed)');
+            routineAnnounceAlert('Routine blocked: CI trigger fallback failed.');
+            failed = true;
+            if (profile.stop_on_fail) break;
+            continue;
+          }
+          lines.push('CI: TRIGGERED (workflow_dispatch fallback after no-op push)');
+        }
         await routineLoadCiCatalog();
         dashRoutineWorkspaceState.ciInFlight = true;
         routineSetStageState('ci', 'Running', 'warn');
@@ -6201,11 +6459,23 @@ async function dashRunPostCommitRoutine() {
         const ciInner = depEnvelopeInner(ci);
         dashRoutineWorkspaceState.ciDetail = ciInner || ci;
         if (!ciInner || !ciInner.ok) {
+          const likelyCause = String(ciInner?.summary?.likely_cause || '').toLowerCase();
+          const noFreshRun = likelyCause === 'no_fresh_run_detected';
           dashRoutineWorkspaceState.ciInFlight = false;
           routineSetStageState('ci', 'Fail', 'fail');
           lines.push(`CI: FAIL (${ciInner?.error || ci?.error || 'watch failed'})`);
-          routineRecord('CI', 'fail', 'GitHub Actions watch failed.', JSON.stringify(ciInner || ci || {}, null, 2), 'Inspect run URL and failing jobs in CI summary.', 'open_ci', stageStart);
-          routineAnnounceAlert('Routine blocked: CI watch failed.');
+          routineRecord(
+            'CI',
+            'fail',
+            noFreshRun ? 'No fresh CI run was detected for this routine window.' : 'GitHub Actions watch failed.',
+            JSON.stringify(ciInner || ci || {}, null, 2),
+            noFreshRun
+              ? 'No new workflow run was triggered. Confirm a new commit was pushed, then retry Push/CI.'
+              : 'Inspect run URL and failing jobs in CI summary.',
+            'open_ci',
+            stageStart
+          );
+          routineAnnounceAlert(noFreshRun ? 'Routine blocked: no fresh CI run detected.' : 'Routine blocked: CI watch failed.');
           if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
           failed = true;
           if (profile.stop_on_fail) break;
@@ -6271,6 +6541,12 @@ async function dashRunPostCommitRoutine() {
           routineSetLastResult('success', 'Last Result: recovered');
           routineSetStageState('reconcile', 'Recovered', 'ok');
           routineAnnounceStatus('Post-Commit Routine recovered via auto-heal.');
+          const failureForResume = dashRoutineWorkspaceState.failure || routineLatestFailureEntry();
+          const autoResumeStep = routineFailureStageToStep(failureForResume);
+          if (autoResumeStep && autoResumeDepth < 1) {
+            queuedAutoResumeStep = autoResumeStep;
+            lines.push(`Auto-Resume: queued from ${autoResumeStep}.`);
+          }
         } else if (healResult?.escalated) {
           lines.push('Auto-Heal: failed or not applicable. Escalated to Codex.');
         } else {
@@ -6298,6 +6574,11 @@ async function dashRunPostCommitRoutine() {
     }
     routineRenderWorkspace();
     if (dashRoutineOut) dashRoutineOut.focus();
+    if (queuedAutoResumeStep) {
+      setTimeout(() => {
+        dashRunPostCommitRoutine({ resumeFromStep: queuedAutoResumeStep, autoResumeDepth: autoResumeDepth + 1 });
+      }, 60);
+    }
   }
 }
 

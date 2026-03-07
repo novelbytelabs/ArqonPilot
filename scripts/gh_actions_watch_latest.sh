@@ -4,13 +4,14 @@ set -euo pipefail
 BRANCH="main"
 TIMEOUT_SEC=1200
 POLL_SEC=15
+LOOKBACK_SEC=900
 REPO_SLUG=""
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/gh_actions_watch_latest.sh [--branch <name>] [--timeout-sec <seconds>] [--poll-sec <seconds>] [--repo <owner/repo>]
+Usage: ./scripts/gh_actions_watch_latest.sh [--branch <name>] [--timeout-sec <seconds>] [--poll-sec <seconds>] [--lookback-sec <seconds>] [--repo <owner/repo>]
 
-Watches the latest GitHub Actions run for a branch until completion.
+Watches a fresh GitHub Actions run for a branch until completion.
 Prints a parseable summary block at the end.
 EOF
 }
@@ -29,6 +30,10 @@ while [[ $# -gt 0 ]]; do
       POLL_SEC="${2:-}"
       shift 2
       ;;
+    --lookback-sec)
+      LOOKBACK_SEC="${2:-}"
+      shift 2
+      ;;
     --repo)
       REPO_SLUG="${2:-}"
       shift 2
@@ -45,8 +50,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! [[ "$TIMEOUT_SEC" =~ ^[0-9]+$ ]] || ! [[ "$POLL_SEC" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: timeout/poll values must be numeric" >&2
+if ! [[ "$TIMEOUT_SEC" =~ ^[0-9]+$ ]] || ! [[ "$POLL_SEC" =~ ^[0-9]+$ ]] || ! [[ "$LOOKBACK_SEC" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: timeout/poll/lookback values must be numeric" >&2
   exit 2
 fi
 
@@ -77,41 +82,88 @@ if [[ -z "$REPO_SLUG" ]]; then
   exit 7
 fi
 
-echo "[ci-watch] repo=${REPO_SLUG} branch=${BRANCH} timeout=${TIMEOUT_SEC}s poll=${POLL_SEC}s"
+start_ts="$(date +%s)"
+window_start_ts="$((start_ts - LOOKBACK_SEC))"
+window_start_iso="$(date -u -d "@${window_start_ts}" +%Y-%m-%dT%H:%M:%SZ)"
+expected_head_sha="$(git rev-parse "${BRANCH}" 2>/dev/null || git rev-parse HEAD 2>/dev/null || true)"
 
-run_ids="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch==\"${BRANCH}\") | .databaseId" 2>/dev/null || true)"
-if [[ -z "$run_ids" ]]; then
-  # Compatibility fallback for older gh/jq combos.
-  run_ids="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --template "{{range .}}{{if eq .headBranch \"${BRANCH}\"}}{{.databaseId}}{{\"\\n\"}}{{end}}{{end}}" 2>/dev/null || true)"
+echo "[ci-watch] repo=${REPO_SLUG} branch=${BRANCH} timeout=${TIMEOUT_SEC}s poll=${POLL_SEC}s lookback=${LOOKBACK_SEC}s"
+echo "[ci-watch] fresh-run window starts at ${window_start_iso}"
+if [[ -n "${expected_head_sha}" ]]; then
+  echo "[ci-watch] expected head sha=${expected_head_sha}"
 fi
 
-run_id=""
-if [[ -n "$run_ids" ]]; then
+fresh_candidate_ids() {
+  gh run list --repo "$REPO_SLUG" --limit 80 --json databaseId,headBranch,headSha,createdAt --jq \
+    ".[] | select(.headBranch==\"${BRANCH}\") | select((.createdAt // \"\") >= \"${window_start_iso}\") | .databaseId" 2>/dev/null || true
+}
+
+fresh_candidate_ids_by_sha() {
+  if [[ -z "${expected_head_sha}" ]]; then
+    return 0
+  fi
+  gh run list --repo "$REPO_SLUG" --limit 80 --json databaseId,headBranch,headSha,createdAt --jq \
+    ".[] | select(.headBranch==\"${BRANCH}\") | select((.createdAt // \"\") >= \"${window_start_iso}\") | select((.headSha // \"\") == \"${expected_head_sha}\") | .databaseId" 2>/dev/null || true
+}
+
+pick_ci_run_from_ids() {
+  local ids="$1"
+  local rid ci_job_count
+  if [[ -z "$ids" ]]; then
+    echo ""
+    return 0
+  fi
   while read -r rid; do
     [[ -z "$rid" ]] && continue
     ci_job_count="$(gh api "repos/${REPO_SLUG}/actions/runs/${rid}/jobs?per_page=100" --jq '[.jobs[]? | select(((.name // "")|ascii_downcase)=="rust" or ((.name // "")|ascii_downcase)=="ui-smoke" or ((.name // "")|ascii_downcase)=="packaging-parity")] | length' 2>/dev/null || echo "0")"
     if [[ "${ci_job_count:-0}" != "0" ]]; then
-      run_id="$rid"
-      break
+      echo "$rid"
+      return 0
     fi
-  done <<< "$run_ids"
-fi
+  done <<< "$ids"
+  echo ""
+}
+
+run_id=""
+while [[ -z "$run_id" ]]; do
+  candidate_ids="$(fresh_candidate_ids_by_sha)"
+  run_id="$(pick_ci_run_from_ids "$candidate_ids")"
+  if [[ -z "$run_id" ]]; then
+    candidate_ids="$(fresh_candidate_ids)"
+    run_id="$(pick_ci_run_from_ids "$candidate_ids")"
+  fi
+  if [[ -n "$run_id" ]]; then
+    break
+  fi
+  elapsed=$(( "$(date +%s)" - start_ts ))
+  if (( elapsed >= TIMEOUT_SEC )); then
+    break
+  fi
+  echo "[ci-watch] waiting for fresh CI run on branch=${BRANCH} (elapsed=${elapsed}s)"
+  sleep "$POLL_SEC"
+done
 
 if [[ -z "$run_id" || "$run_id" == "null" ]]; then
-  # Fallback: if no CI-typed run found, take latest branch run.
-  run_id="$(echo "$run_ids" | head -n1)"
-fi
-if [[ -z "$run_id" || "$run_id" == "null" ]]; then
-  # Last resort: latest run in repo.
-  run_id="$(gh run list --repo "$REPO_SLUG" --limit 1 --json databaseId --template "{{range .}}{{.databaseId}}{{end}}" 2>/dev/null || true)"
-fi
-if [[ -z "$run_id" || "$run_id" == "null" ]]; then
-  echo "ERROR: no workflow run found for branch '${BRANCH}'." >&2
-  exit 4
+  echo "ERROR: no fresh workflow run found for branch '${BRANCH}' (window >= ${window_start_iso})." >&2
+  echo "========== gh_watch summary =========="
+  echo "result:                FAIL"
+  echo "repo:                  ${REPO_SLUG}"
+  echo "branch:                ${BRANCH}"
+  echo "run_id:                none"
+  echo "workflow:              unknown"
+  echo "status:                timeout"
+  echo "conclusion:            timed_out"
+  echo "failed_jobs:           0"
+  echo "failed_job_names:      none"
+  echo "run_url:               unknown"
+  echo "likely_cause:          no_fresh_run_detected"
+  echo "expected_head_sha:     ${expected_head_sha:-unknown}"
+  echo "window_start:          ${window_start_iso}"
+  echo "======================================"
+  exit 124
 fi
 
 echo "[ci-watch] watching run_id=${run_id}"
-start_ts="$(date +%s)"
 status=""
 conclusion=""
 workflow=""
@@ -171,6 +223,8 @@ echo "failed_jobs:           ${failed_jobs_count}"
 echo "failed_job_names:      ${failed_jobs_names:-none}"
 echo "run_url:               ${run_url:-unknown}"
 echo "likely_cause:          ${likely_cause}"
+echo "expected_head_sha:     ${expected_head_sha:-unknown}"
+echo "window_start:          ${window_start_iso}"
 echo "======================================"
 
 exit "$exit_code"

@@ -272,6 +272,7 @@ Phase C kickoff (slice 2):
 3. A local learning loop log stores heal attempts/results (`pilot.routine.heal.log.v1`) to evolve failure coverage.
 4. When `Auto-heal known-safe failures` toggle is enabled, routine failure paths invoke auto-heal automatically before final failure closeout.
 5. Reconcile surface exposes heal-log inspection/reset controls so operators can review learning outcomes without leaving Dashboard.
+6. Successful safe remediations are fingerprinted and stored as reusable local recipes; repeated matching failures auto-replay learned fixes before escalation.
 
 ## Phase D: Release Mode
 
