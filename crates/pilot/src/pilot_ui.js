@@ -341,6 +341,7 @@ let multiMacroRunning = false;
 let multiMacroExpanded = false;
 let dashRoutineRunning = false;
 let dashRoutineAutoHealRunning = false;
+let dashRoutineAutoHealAttempted = false;
 let dashRoutineTrace = [];
 let dashRoutineSelectedStage = 'resolve';
 let dashRoutinePolicySimulationId = '';
@@ -508,6 +509,13 @@ function collectUiSessionState() {
     branch_matrix_tags: readInputValue('branch-matrix-tags'),
     branch_matrix_search: readInputValue('branch-matrix-search'),
     branch_matrix_base: readInputValue('branch-matrix-base'),
+    routine_group: readInputValue('dash-routine-group'),
+    routine_tags: readInputValue('dash-routine-tags'),
+    routine_branch: readInputValue('dash-routine-branch'),
+    routine_remote: readInputValue('dash-routine-remote'),
+    routine_allow_push: readInputChecked('dash-routine-allow-push'),
+    routine_export_evidence: readInputChecked('dash-routine-export-evidence'),
+    routine_auto_heal: readInputChecked('dash-routine-auto-heal'),
     branch_matrix_advanced_open: !!(branchMatrixAdvanced && branchMatrixAdvanced.open),
     branch_log_limit: readInputValue('branch-log-limit'),
     codex_contract_id: readInputValue('codex-contract-id'),
@@ -547,6 +555,13 @@ function applyUiSessionState(session) {
   setVal('branch-matrix-tags', session.branch_matrix_tags);
   setVal('branch-matrix-search', session.branch_matrix_search);
   setVal('branch-matrix-base', session.branch_matrix_base);
+  setVal('dash-routine-group', session.routine_group);
+  setVal('dash-routine-tags', session.routine_tags);
+  setVal('dash-routine-branch', session.routine_branch);
+  setVal('dash-routine-remote', session.routine_remote);
+  setCheck('dash-routine-allow-push', session.routine_allow_push);
+  setCheck('dash-routine-export-evidence', session.routine_export_evidence);
+  setCheck('dash-routine-auto-heal', session.routine_auto_heal);
   if (branchMatrixAdvanced && session.branch_matrix_advanced_open !== undefined && session.branch_matrix_advanced_open !== null) {
     branchMatrixAdvanced.open = !!session.branch_matrix_advanced_open;
   }
@@ -4481,9 +4496,14 @@ function routineActiveProfile() {
 function routineUpdateModeChip() {
   const allowPush = !!document.getElementById('dash-routine-allow-push')?.checked;
   const exportEvidence = !!document.getElementById('dash-routine-export-evidence')?.checked;
+  const autoHeal = !!document.getElementById('dash-routine-auto-heal')?.checked;
   const mode = allowPush ? 'mutating' : 'safe';
-  const suffix = exportEvidence ? ' + evidence' : '';
+  const suffix = `${exportEvidence ? ' + evidence' : ''}${autoHeal ? ' + auto-heal' : ''}`;
   routineSetChip(dashRoutineModeChip, `Mode: ${mode}${suffix}`, allowPush ? 'warn' : 'neutral');
+}
+
+function routineAutoHealEnabled() {
+  return !!document.getElementById('dash-routine-auto-heal')?.checked;
 }
 
 function routineSetLastResult(status, label = '') {
@@ -5398,6 +5418,7 @@ function routineResetChips() {
   dashRoutineWorkspaceState.ciCatalog = null;
   dashRoutineWorkspaceState.ciSelectedWorkflowKey = '';
   dashRoutineWorkspaceState.healStatus = '';
+  dashRoutineAutoHealAttempted = false;
   routineRenderCiObservatory({});
   routineSetChip(dashRoutineProfileSourceChip, 'Profile: loading', 'neutral');
   routineSetChip(dashRoutineProfileStepsChip, 'Steps: -', 'neutral');
@@ -5505,11 +5526,14 @@ function routineRenderActions() {
   const statusBlock = dashRoutineWorkspaceState.healStatus
     ? `<pre style="margin:6px 0 0; max-height:160px; overflow:auto; font-size:0.72rem;">${routineEscapeHtml(dashRoutineWorkspaceState.healStatus)}</pre>`
     : '';
+  const healStats = routineHealLogStats();
   dashRoutineActions.innerHTML = `
     <div class="row" style="gap:8px; align-items:center; flex-wrap:wrap;">
       <button class="btn secondary" onclick="routineRunAction('${fail.actionId}')">${label}</button>
       ${healBtn}
       <button class="btn secondary" onclick="routineEscalateFailureToCodex()">Escalate to Codex</button>
+      <button class="btn secondary" onclick="routineShowHealLog()">Heal Log (${healStats.total})</button>
+      <button class="btn secondary" onclick="routineClearHealLog()">Clear Heal Log</button>
     </div>
     ${statusBlock}
   `;
@@ -5614,20 +5638,76 @@ function routineHealLogAppend(record) {
   } catch (_) {}
 }
 
-async function routineAutoHealAndRetry() {
-  if (dashRoutineAutoHealRunning) return;
+function routineHealLogRead() {
+  try {
+    const raw = window.localStorage.getItem(ROUTINE_HEAL_LOG_KEY);
+    const items = raw ? JSON.parse(raw) : [];
+    return Array.isArray(items) ? items : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function routineHealLogStats() {
+  const items = routineHealLogRead();
+  let success = 0;
+  let failed = 0;
+  for (const item of items) {
+    if (item && item.ok) success += 1;
+    else failed += 1;
+  }
+  return { total: items.length, success, failed };
+}
+
+function routineShowHealLog() {
+  const items = routineHealLogRead();
+  if (!items.length) {
+    dashRoutineWorkspaceState.healStatus = 'Heal log is empty.';
+    routineRenderActions();
+    return;
+  }
+  const lines = ['Heal Log (latest first):'];
+  const recent = [...items].reverse().slice(0, 20);
+  recent.forEach((item) => {
+    lines.push(`- ${item.ts || 'unknown'} | ${item.signature || 'unknown'} | ${item.ok ? 'PASS' : 'FAIL'} | stage=${item.stage || '-'} | confidence=${item.confidence || 'n/a'}`);
+  });
+  dashRoutineWorkspaceState.healStatus = lines.join('\n');
+  routineRenderActions();
+}
+
+function routineClearHealLog() {
+  try {
+    window.localStorage.removeItem(ROUTINE_HEAL_LOG_KEY);
+  } catch (_) {}
+  dashRoutineWorkspaceState.healStatus = 'Heal log cleared.';
+  routineRenderActions();
+}
+
+async function routineAutoHealAndRetry(options = {}) {
+  if (dashRoutineAutoHealRunning) return { attempted: false, ok: false, escalated: false };
+  const fromAuto = !!options.fromAuto;
   const fail = routineLatestFailureEntry();
-  if (!fail) return;
+  if (!fail) return { attempted: false, ok: false, escalated: false };
   const classified = routineClassifyFailureForHeal(fail);
   if (!classified.playbook.length) {
     dashRoutineWorkspaceState.healStatus = `Auto-heal skipped: ${classified.summary}`;
+    routineHealLogAppend({
+      ts: new Date().toISOString(),
+      signature: classified.signature,
+      confidence: classified.confidence,
+      ok: false,
+      stage: fail.stage,
+      summary: fail.summary,
+      reason: 'no_safe_playbook'
+    });
     routineRenderActions();
     await routineEscalateFailureToCodex();
-    return;
+    return { attempted: false, ok: false, escalated: true };
   }
 
+  dashRoutineAutoHealAttempted = true;
   dashRoutineAutoHealRunning = true;
-  dashRoutineWorkspaceState.healStatus = `Auto-heal started for signature=${classified.signature} (${classified.confidence}).`;
+  dashRoutineWorkspaceState.healStatus = `${fromAuto ? 'Automatic' : 'Manual'} auto-heal started for signature=${classified.signature} (${classified.confidence}).`;
   routineRenderActions();
 
   let ok = true;
@@ -5683,7 +5763,11 @@ async function routineAutoHealAndRetry() {
   });
   routineRenderActions();
   routineRenderWorkspace();
-  if (!ok) await routineEscalateFailureToCodex();
+  if (!ok) {
+    await routineEscalateFailureToCodex();
+    return { attempted: true, ok: false, escalated: true };
+  }
+  return { attempted: true, ok: true, escalated: false };
 }
 
 async function routineEscalateFailureToCodex() {
@@ -5804,6 +5888,7 @@ function routineWriteSummary(lines) {
 async function dashRunPostCommitRoutine() {
   if (dashRoutineRunning) return;
   dashRoutineRunning = true;
+  dashRoutineAutoHealAttempted = false;
   if (dashRoutineRunBtn) {
     dashRoutineRunBtn.disabled = true;
     dashRoutineRunBtn.textContent = 'Running...';
@@ -6176,6 +6261,22 @@ async function dashRunPostCommitRoutine() {
       dashRoutineWorkspaceState.lastResult = 'failed';
       routineSetLastResult('failed', 'Last Result: failed');
       routineAnnounceAlert('Post-Commit Routine failed.');
+      if (routineAutoHealEnabled() && !dashRoutineAutoHealAttempted) {
+        lines.push('Auto-Heal: attempting known-safe remediation.');
+        const healResult = await routineAutoHealAndRetry({ fromAuto: true });
+        if (healResult?.ok) {
+          lines.push('Auto-Heal: SUCCESS (verification passed).');
+          failed = false;
+          dashRoutineWorkspaceState.lastResult = 'recovered';
+          routineSetLastResult('success', 'Last Result: recovered');
+          routineSetStageState('reconcile', 'Recovered', 'ok');
+          routineAnnounceStatus('Post-Commit Routine recovered via auto-heal.');
+        } else if (healResult?.escalated) {
+          lines.push('Auto-Heal: failed or not applicable. Escalated to Codex.');
+        } else {
+          lines.push('Auto-Heal: no safe playbook matched.');
+        }
+      }
       if (!profile.stop_on_fail) {
         lines.push('Mode: Continue-on-fail (profile stop_on_fail=false)');
       }
@@ -6980,7 +7081,7 @@ async function bootUi() {
     el.addEventListener('change', handler);
     el.addEventListener('input', handler);
   });
-  ['dash-routine-allow-push', 'dash-routine-export-evidence'].forEach((id) => {
+  ['dash-routine-allow-push', 'dash-routine-export-evidence', 'dash-routine-auto-heal'].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('change', () => {

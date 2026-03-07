@@ -270,6 +270,8 @@ Phase C kickoff (slice 2):
 1. Reconcile action rail now supports `Auto-Heal + Verify` for known-safe failure signatures.
 2. If auto-heal cannot classify a safe remediation or verification still fails, flow escalates to Codex with a prefilled incident packet.
 3. A local learning loop log stores heal attempts/results (`pilot.routine.heal.log.v1`) to evolve failure coverage.
+4. When `Auto-heal known-safe failures` toggle is enabled, routine failure paths invoke auto-heal automatically before final failure closeout.
+5. Reconcile surface exposes heal-log inspection/reset controls so operators can review learning outcomes without leaving Dashboard.
 
 ## Phase D: Release Mode
 

@@ -7,7 +7,7 @@ fn test_routine_autoheal_and_codex_escalation_contract() {
     let js_content = fs::read_to_string(js_path).expect("Failed to read pilot_ui.js");
 
     assert!(
-        js_content.contains("function routineAutoHealAndRetry()"),
+        js_content.contains("function routineAutoHealAndRetry("),
         "Missing auto-heal routine handler"
     );
     assert!(
@@ -22,5 +22,16 @@ fn test_routine_autoheal_and_codex_escalation_contract() {
     assert!(
         js_content.contains("dashRoutineAutoHealRunning"),
         "Missing auto-heal running guard state"
+    );
+    assert!(
+        js_content.contains("dash-routine-auto-heal")
+            && js_content.contains("function routineAutoHealEnabled()"),
+        "Missing auto-heal toggle plumbing"
+    );
+    assert!(
+        js_content.contains("function routineShowHealLog()")
+            && js_content.contains("function routineClearHealLog()")
+            && js_content.contains("pilot.routine.heal.log.v1"),
+        "Missing learning-loop heal log controls"
     );
 }

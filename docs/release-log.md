@@ -179,11 +179,13 @@ Use this structure for every new release:
 - Reconcile actions now include:
   - `Auto-Heal + Verify` (known-safe playbooks)
   - `Escalate to Codex` (prefilled incident packet + preview)
+- Routine toggle `Auto-heal known-safe failures` defaults on and runs remediation automatically before failure closeout.
 - Initial safe playbooks:
   - `format_parity` -> `cargo-fmt` -> verify gate
   - `lock_drift` -> `repair` -> verify gate
 - Learning loop:
   - heal outcomes are persisted locally in `localStorage` key `pilot.routine.heal.log.v1`.
+  - Reconcile exposes `Heal Log` and `Clear Heal Log` controls for operator feedback loops.
 - Regression guards added:
   - `crates/pilot/tests/routine_autoheal_regression_test.rs`
   - `scripts/test_matrix.sh` includes `--test routine_autoheal_regression_test`

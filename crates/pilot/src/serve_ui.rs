@@ -9742,6 +9742,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
                 <input id="dash-routine-export-evidence" type="checkbox" />
                 Export evidence
               </label>
+              <label class="routine-toggle">
+                <input id="dash-routine-auto-heal" type="checkbox" checked />
+                Auto-heal known-safe failures
+              </label>
               <button id="dash-routine-run-btn" class="btn" onclick="dashRunPostCommitRoutine()">Run Post-Commit Routine</button>
             </div>
           </div>
