@@ -2197,6 +2197,7 @@ fn discover_dashboard_ci_catalog(
         Vec<DashboardCiWorkflowCatalogEntry>,
         Vec<DashboardCiRequirementGap>,
         bool,
+        Vec<String>,
     ),
     String,
 > {
@@ -2205,27 +2206,41 @@ fn discover_dashboard_ci_catalog(
         .step_order
         .iter()
         .any(|step| step.eq_ignore_ascii_case("ci"));
-    let mut workflow_paths = fs::read_dir(workflows_dir)
-        .map_err(|err| {
-            format!(
+    let mut warnings = Vec::<String>::new();
+    let mut workflow_paths = Vec::<PathBuf>::new();
+    match fs::read_dir(workflows_dir) {
+        Ok(entries) => {
+            workflow_paths = entries
+                .filter_map(|entry| entry.ok().map(|item| item.path()))
+                .filter(|path| {
+                    path.extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| matches!(ext, "yml" | "yaml"))
+                        .unwrap_or(false)
+                })
+                .collect::<Vec<_>>();
+        }
+        Err(err) => {
+            warnings.push(format!(
                 "Cannot read workflow directory '{}': {err}",
                 workflows_dir.display()
-            )
-        })?
-        .filter_map(|entry| entry.ok().map(|item| item.path()))
-        .filter(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| matches!(ext, "yml" | "yaml"))
-                .unwrap_or(false)
-        })
-        .collect::<Vec<_>>();
+            ));
+        }
+    }
     workflow_paths.sort();
 
     let mut workflows = Vec::new();
     for path in workflow_paths {
-        let content = fs::read_to_string(&path)
-            .map_err(|err| format!("Cannot read workflow file '{}': {err}", path.display()))?;
+        let content = match fs::read_to_string(&path) {
+            Ok(v) => v,
+            Err(err) => {
+                warnings.push(format!(
+                    "Cannot read workflow file '{}': {err}",
+                    path.display()
+                ));
+                continue;
+            }
+        };
         workflows.push(parse_workflow_catalog_entry(&path, &content, ci_enabled));
     }
 
@@ -2300,7 +2315,7 @@ fn discover_dashboard_ci_catalog(
         }
     }
 
-    Ok((workflows, gaps, ci_enabled))
+    Ok((workflows, gaps, ci_enabled, warnings))
 }
 
 async fn api_dashboard_ci_catalog(
@@ -2351,8 +2366,8 @@ async fn api_dashboard_ci_catalog(
     let policy: OperatorRoutinePolicy =
         serde_json::from_value(policy_json).unwrap_or_else(|_| OperatorRoutinePolicy::default());
     let workflows_dir = cwd.join(".github").join("workflows");
-    let (workflows, gaps, ci_enabled) = match discover_dashboard_ci_catalog(&workflows_dir, &policy)
-    {
+    let (workflows, gaps, ci_enabled, warnings) =
+        match discover_dashboard_ci_catalog(&workflows_dir, &policy) {
         Ok(v) => v,
         Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
     };
@@ -2378,10 +2393,12 @@ async fn api_dashboard_ci_catalog(
             "workflow_count": workflows.len(),
             "required_workflow_count": workflows.iter().filter(|wf| wf.required_by_policy).count(),
             "required_job_count": workflows.iter().flat_map(|wf| wf.jobs.iter()).filter(|job| job.required_by_policy).count(),
-            "gap_count": gaps.len()
+            "gap_count": gaps.len(),
+            "warning_count": warnings.len()
         },
         "workflows": workflows,
-        "missing": gaps
+        "missing": gaps,
+        "warnings": warnings
     }))
     .into_response()
 }
@@ -6433,11 +6450,12 @@ jobs:
         .expect("docs.yml should be written");
 
         let policy = OperatorRoutinePolicy::default();
-        let (workflows, gaps, ci_enabled) =
+        let (workflows, gaps, ci_enabled, warnings) =
             discover_dashboard_ci_catalog(&workflows_dir, &policy).expect("catalog should parse");
 
         assert!(ci_enabled);
         assert_eq!(workflows.len(), 2);
+        assert!(warnings.is_empty());
         assert!(gaps.iter().any(|gap| gap.id == "ui-smoke"));
         assert!(gaps.iter().any(|gap| gap.id == "packaging-parity"));
         assert!(!gaps
@@ -6445,6 +6463,26 @@ jobs:
             .any(|gap| gap.id == "build" && gap.kind == "job"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_discover_dashboard_ci_catalog_missing_directory_yields_warnings_and_gaps() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let missing_dir = std::env::temp_dir().join(format!("pilot-ci-catalog-missing-{unique}"));
+        let policy = OperatorRoutinePolicy::default();
+        let (workflows, gaps, ci_enabled, warnings) =
+            discover_dashboard_ci_catalog(&missing_dir, &policy).expect("catalog should degrade");
+
+        assert!(ci_enabled);
+        assert!(workflows.is_empty());
+        assert!(warnings
+            .iter()
+            .any(|warn| warn.contains("Cannot read workflow directory")));
+        assert!(gaps.iter().any(|gap| gap.id == "ci.yml"));
+        assert!(gaps.iter().any(|gap| gap.id == "docs.yml"));
     }
 
     #[test]

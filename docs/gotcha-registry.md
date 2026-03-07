@@ -653,8 +653,25 @@ Keep this file current whenever a new failure class appears.
      - `gh auth status -h github.com`
   2. Verify latest run exists for target branch:
      - `gh run list --branch <branch> --limit 5`
-  3. Re-run CI watch:
+ 3. Re-run CI watch:
      - `./scripts/gh_actions_watch_latest.sh --branch <branch> --timeout-sec 1800`
+
+## G-030: CI observatory shows `PASS` while GitHub Actions is still running
+
+- Signature:
+  - CI stage tile shows `Running`, but one or more workflow/job chips show `pass`.
+  - Intermittent false-positive pass before `gh` watch reaches terminal completion.
+  - CI catalog endpoint fails hard when `.github/workflows` is missing/unreadable, leaving stale UI posture.
+- Cause:
+  - Mixed signal timing between `ci-status` polling and `ci-watch`.
+  - Catalog discovery treated missing/unreadable workflow sources as fatal instead of degradable warnings.
+- Recovery:
+  1. Treat `overall_state=running|queued|in_progress` as authoritative and keep chips in running posture.
+  2. Complete the run or refresh once watch reaches terminal status.
+  3. If catalog warnings are present, restore `.github/workflows` readability and required files (`ci.yml`, `docs.yml`).
+- Prevention:
+  - Do not allow pass/success-complete chip rendering while CI is in-flight.
+  - Keep catalog discovery non-fatal and surface warnings + policy gaps in dashboard UI.
 
 ## Frozen Policy (Do Not Change)
 

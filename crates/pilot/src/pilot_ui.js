@@ -366,6 +366,7 @@ let dashRoutineWorkspaceState = {
   ciDetail: null,
   ciCatalog: null,
   ciSelectedWorkflowKey: '',
+  ciInFlight: false,
   evidenceDetail: null,
   lastResult: 'idle',
   lastRunAt: null,
@@ -4941,31 +4942,33 @@ async function routineLoadCiCatalog() {
 }
 
 function routineCiWorkflowState(summary = {}, workflow = {}) {
+  const normalize = (raw) => routineNormalizeCiState(raw, summary);
   const key = String(workflow.key || '').toLowerCase();
   const name = String(workflow.workflow_name || '').toLowerCase();
   if (key === 'docs.yml' || key === 'docs.yaml' || name.includes('docs')) {
-    return String(summary.docs_state || 'idle').toLowerCase();
+    return normalize(summary.docs_state);
   }
   if (key === 'ci.yml' || key === 'ci.yaml' || name.includes('ci')) {
-    return String(summary.overall_state || 'idle').toLowerCase();
+    return normalize(summary.overall_state);
   }
   return 'idle';
 }
 
 function routineCiJobState(summary = {}, workflow = {}, job = {}) {
+  const normalize = (raw) => routineNormalizeCiState(raw, summary);
   const workflowKey = String(workflow.key || '').toLowerCase();
   const jobId = String(job.id || '').toLowerCase();
   if ((workflowKey === 'ci.yml' || workflowKey === 'ci.yaml') && jobId === 'rust') {
-    return String(summary.rust_state || 'idle').toLowerCase();
+    return normalize(summary.rust_state);
   }
   if ((workflowKey === 'ci.yml' || workflowKey === 'ci.yaml') && jobId === 'ui-smoke') {
-    return String(summary.ui_smoke_state || 'idle').toLowerCase();
+    return normalize(summary.ui_smoke_state);
   }
   if ((workflowKey === 'ci.yml' || workflowKey === 'ci.yaml') && jobId === 'packaging-parity') {
-    return String(summary.packaging_parity_state || 'idle').toLowerCase();
+    return normalize(summary.packaging_parity_state);
   }
   if ((workflowKey === 'docs.yml' || workflowKey === 'docs.yaml') && jobId === 'build') {
-    return String(summary.docs_state || 'idle').toLowerCase();
+    return normalize(summary.docs_state);
   }
   return 'idle';
 }
@@ -5039,7 +5042,8 @@ function routineRenderCiObservatory(summary = {}, detail = null) {
       `Policy: ${basis.source || 'unknown'} v${basis.version ?? '-'}`,
       `CI Stage: ${basis.ci_stage_enabled ? 'enabled' : 'disabled'}`,
       `Required workflows: ${catalog.summary?.required_workflow_count ?? 0}`,
-      `Coverage gaps: ${catalog.summary?.gap_count ?? 0}`
+      `Coverage gaps: ${catalog.summary?.gap_count ?? 0}`,
+      `Warnings: ${catalog.summary?.warning_count ?? 0}`
     ];
     dashRoutineCiPolicySummary.textContent = summaryBits.join(' | ');
   }
@@ -5067,6 +5071,11 @@ function routineRenderCiObservatory(summary = {}, detail = null) {
         missing.forEach((gap) => {
           lines.push(`- ${gap.label || gap.id}: ${gap.remediation || 'restore the missing contract element'}`);
         });
+      }
+      const warnings = Array.isArray(catalog.warnings) ? catalog.warnings : [];
+      if (warnings.length) {
+        lines.push('', 'Catalog Warnings:');
+        warnings.forEach((warn) => lines.push(`- ${warn}`));
       }
       if (detail && selectedWorkflow.key && String(selectedWorkflow.key).toLowerCase() === 'ci.yml') {
         lines.push('', `Latest CI detail captured for branch ${summary.branch || routineReadBranchRemote().branch}.`);
@@ -5154,21 +5163,33 @@ async function routinePolicyModalActivate() {
 
 function routineCiChipLevel(state) {
   const normalized = String(state || '').toLowerCase();
-  if (normalized === 'pass' || normalized === 'success' || normalized === 'completed') return 'ok';
+  if (normalized === 'pass' || normalized === 'passed' || normalized === 'success' || normalized === 'succeeded' || normalized === 'completed' || normalized === 'ok') return 'ok';
   if (normalized === 'running' || normalized === 'in_progress' || normalized === 'queued') return 'warn';
   if (normalized === 'fail' || normalized === 'failure' || normalized === 'timed_out' || normalized === 'cancelled') return 'fail';
   return 'neutral';
 }
 
+function routineCiSummaryInFlight(summary = null) {
+  if (!summary || typeof summary !== 'object') return false;
+  const overallState = String(summary.overall_state || '').toLowerCase();
+  return overallState === 'running' || overallState === 'queued' || overallState === 'in_progress' || overallState === 'pending';
+}
+
+function routineNormalizeCiState(raw, summary = null) {
+  let s = String(raw || 'idle').toLowerCase();
+  if (s === 'unknown' || s === 'null' || s === '') s = 'idle';
+  const ciInFlight = dashRoutineWorkspaceState.ciInFlight || routineCiSummaryInFlight(summary);
+  if (ciInFlight) {
+    if (s === 'pass' || s === 'passed' || s === 'success' || s === 'succeeded' || s === 'completed' || s === 'ok') s = 'running';
+  }
+  return s;
+}
+
 function routineSetCiJobChips(summary = {}) {
-  const normalizeState = (raw) => {
-    const s = String(raw || 'idle').toLowerCase();
-    return (s === 'unknown' || s === 'null' || s === '') ? 'idle' : s;
-  };
-  const docsState = normalizeState(summary.docs_state);
-  const rustState = normalizeState(summary.rust_state);
-  const uiState = normalizeState(summary.ui_smoke_state);
-  const packagingState = normalizeState(summary.packaging_parity_state);
+  const docsState = routineNormalizeCiState(summary.docs_state, summary);
+  const rustState = routineNormalizeCiState(summary.rust_state, summary);
+  const uiState = routineNormalizeCiState(summary.ui_smoke_state, summary);
+  const packagingState = routineNormalizeCiState(summary.packaging_parity_state, summary);
   routineSetChip(dashRoutineCiDocsChip, `Docs: ${docsState}`, routineCiChipLevel(docsState));
   routineSetChip(dashRoutineCiRustChip, `Rust: ${rustState}`, routineCiChipLevel(rustState));
   routineSetChip(dashRoutineCiUiChip, `UI Smoke: ${uiState}`, routineCiChipLevel(uiState));
@@ -5282,6 +5303,7 @@ function routineResetChips() {
   routineSetChip(dashRoutineGatesChip, 'Gates: idle', 'neutral');
   routineSetChip(dashRoutinePushChip, 'Push: idle', 'neutral');
   routineSetChip(dashRoutineEvidenceChip, 'Evidence: idle', 'neutral');
+  dashRoutineWorkspaceState.ciInFlight = false;
   routineSetCiJobChips({});
   dashRoutineWorkspaceState.ciCatalog = null;
   dashRoutineWorkspaceState.ciSelectedWorkflowKey = '';
@@ -5473,6 +5495,7 @@ async function dashRunPostCommitRoutine() {
   routineResetTimeline();
   dashRoutineWorkspaceState = {
     loaded: null,
+    resolveSnapshot: null,
     active: null,
     scope: parseMultiScopeFromRoutine(),
     stats: null,
@@ -5480,6 +5503,9 @@ async function dashRunPostCommitRoutine() {
     gateDetail: null,
     pushDetail: null,
     ciDetail: null,
+    ciCatalog: dashRoutineWorkspaceState.ciCatalog,
+    ciSelectedWorkflowKey: dashRoutineWorkspaceState.ciSelectedWorkflowKey || '',
+    ciInFlight: false,
     evidenceDetail: null,
     lastResult: 'running',
     lastRunAt: new Date().toISOString(),
@@ -5725,6 +5751,7 @@ async function dashRunPostCommitRoutine() {
 
       if (stepName === 'ci') {
         await routineLoadCiCatalog();
+        dashRoutineWorkspaceState.ciInFlight = true;
         routineSetStageState('ci', 'Running', 'warn');
         routineSetCiJobChips({
           docs_state: 'running',
@@ -5741,7 +5768,6 @@ async function dashRunPostCommitRoutine() {
         const ciBranch = routineReadBranchRemote().branch;
         let ciPollDone = false;
         let ciPollBusy = false;
-        let ciLastSummary = null;
         const pullCiStatus = async () => {
           if (ciPollDone || ciPollBusy) return;
           ciPollBusy = true;
@@ -5752,7 +5778,6 @@ async function dashRunPostCommitRoutine() {
               ? statusInner.summary
               : null;
             if (statusSummary) {
-              ciLastSummary = statusSummary;
               routineSetCiJobChips(statusSummary);
               dashRoutineWorkspaceState.ciDetail = statusInner || statusRes;
               routineRenderCiObservatory(statusSummary, statusInner || statusRes);
@@ -5772,6 +5797,7 @@ async function dashRunPostCommitRoutine() {
         const ciInner = depEnvelopeInner(ci);
         dashRoutineWorkspaceState.ciDetail = ciInner || ci;
         if (!ciInner || !ciInner.ok) {
+          dashRoutineWorkspaceState.ciInFlight = false;
           routineSetStageState('ci', 'Fail', 'fail');
           lines.push(`CI: FAIL (${ciInner?.error || ci?.error || 'watch failed'})`);
           routineRecord('CI', 'fail', 'GitHub Actions watch failed.', JSON.stringify(ciInner || ci || {}, null, 2), 'Inspect run URL and failing jobs in CI summary.', 'open_ci', stageStart);
@@ -5782,9 +5808,8 @@ async function dashRunPostCommitRoutine() {
           continue;
         }
         const ciSummary = (ciInner.summary && typeof ciInner.summary === 'object') ? ciInner.summary : {};
-        if (ciLastSummary && typeof ciLastSummary === 'object') {
-          routineSetCiJobChips(ciLastSummary);
-        }
+        dashRoutineWorkspaceState.ciInFlight = false;
+        routineSetCiJobChips(ciSummary);
         const runUrl = ciSummary.run_url || '';
         routineRenderCiObservatory(ciSummary, ciInner);
         routineSetStageState('ci', runUrl ? 'Observed' : 'Ready', 'ok');

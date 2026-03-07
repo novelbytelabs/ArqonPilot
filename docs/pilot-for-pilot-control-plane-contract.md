@@ -245,6 +245,13 @@ Definition of done (B):
 2. Workflow rows are derived from configured GitHub Actions files.
 3. Required-vs-optional CI coverage is legible from Dashboard.
 4. Selected workflow detail and latest run posture are visible without leaving the deck.
+5. In-flight CI jobs never render as `PASS`; running/queued takes precedence until completion.
+6. Missing/unreadable workflow catalog inputs degrade to warnings + policy gaps, not fatal API failure.
+
+Phase B hardening notes:
+
+1. `/api/dashboard/ci/catalog` now emits `warnings[]` and `summary.warning_count` when workflow directory/files cannot be read.
+2. CI state normalization now treats `overall_state=running|queued|in_progress` as authoritative and suppresses false-positive pass states in the observatory chips.
 
 ## Phase C: Governance-Driven Orchestration
 
