@@ -340,9 +340,12 @@ let multiActionLast = null;
 let multiMacroRunning = false;
 let multiMacroExpanded = false;
 let dashRoutineRunning = false;
+let dashRoutineAutoHealRunning = false;
 let dashRoutineTrace = [];
 let dashRoutineSelectedStage = 'resolve';
 let dashRoutinePolicySimulationId = '';
+let dashRoutinePolicySimulationFingerprint = '';
+const ROUTINE_HEAL_LOG_KEY = 'pilot.routine.heal.log.v1';
 const ROUTINE_STAGE_ORDER = Object.freeze(['resolve', 'plan', 'multi', 'gates', 'push', 'ci', 'evidence', 'reconcile']);
 const ROUTINE_STAGE_LABELS = Object.freeze({
   resolve: 'Resolve',
@@ -367,6 +370,7 @@ let dashRoutineWorkspaceState = {
   ciCatalog: null,
   ciSelectedWorkflowKey: '',
   ciInFlight: false,
+  healStatus: '',
   evidenceDetail: null,
   lastResult: 'idle',
   lastRunAt: null,
@@ -4833,7 +4837,8 @@ function routineWorkspaceViewModel(stage) {
     details: [
       dashRoutineWorkspaceState.lastResult === 'success' ? 'Routine completed without terminal failure.' : 'Routine has not completed successfully yet.',
       failure ? `Last blocking stage: ${failure.stage}` : 'No blocking stage recorded.',
-      failure?.remediation ? `Next action: ${failure.remediation}` : 'Next action will appear when a stage blocks.'
+      failure?.remediation ? `Next action: ${failure.remediation}` : 'Next action will appear when a stage blocks.',
+      dashRoutineWorkspaceState.healStatus ? 'Auto-heal transcript captured in action panel.' : 'No auto-heal run recorded yet.'
     ],
     artifacts: [
       evidenceDetail?.path || 'No evidence artifact recorded.',
@@ -5097,6 +5102,59 @@ function routinePolicyModalSetStatus(value) {
   }
 }
 
+function routinePolicyDraftFingerprint(profile) {
+  return JSON.stringify(normalizeRoutineProfile(profile));
+}
+
+function routinePolicyDraftValidate(policyJson) {
+  const errors = [];
+  const warnings = [];
+  if (!policyJson || typeof policyJson !== 'object' || Array.isArray(policyJson)) {
+    errors.push('Policy draft must be a JSON object.');
+    return { ok: false, errors, warnings, normalizedPolicy: null, profile: null };
+  }
+  const rawProfile = policyJson.post_commit_profile;
+  if (!rawProfile || typeof rawProfile !== 'object' || Array.isArray(rawProfile)) {
+    errors.push('Draft must include object key: post_commit_profile.');
+    return { ok: false, errors, warnings, normalizedPolicy: null, profile: null };
+  }
+  const profile = normalizeRoutineProfile(rawProfile);
+  if (!Array.isArray(rawProfile.step_order) || rawProfile.step_order.length === 0) {
+    warnings.push('step_order was empty or invalid; normalized to default sequence.');
+  }
+  if (!profile.step_order.includes('push') && profile.include_push_step) {
+    warnings.push('include_push_step=true while push is absent from step_order.');
+  }
+  if (profile.step_order.includes('push') && !profile.include_push_step) {
+    warnings.push('push is present in step_order but include_push_step=false.');
+  }
+  const normalizedPolicy = {
+    ...policyJson,
+    post_commit_profile: profile
+  };
+  return { ok: true, errors, warnings, normalizedPolicy, profile };
+}
+
+function routinePolicyDraftStatusSummary(validation, loaded) {
+  if (!validation || !validation.ok) {
+    return `Policy draft invalid:\n${(validation?.errors || ['unknown error']).map((e) => `- ${e}`).join('\n')}`;
+  }
+  const profile = validation.profile;
+  const baseline = loaded?.profile ? normalizeRoutineProfile(loaded.profile) : ROUTINE_DEFAULT_PROFILE;
+  const diff = routineProfileDiff(profile);
+  const changed = JSON.stringify(profile) !== JSON.stringify(baseline);
+  const lines = [
+    `Draft profile step_order: ${profile.step_order.join(' -> ')}`,
+    `Draft toggles: stop_on_fail=${profile.stop_on_fail}, include_push_step=${profile.include_push_step}, export_evidence_step=${profile.export_evidence_step}`,
+    changed ? `Draft diff vs loaded profile: ${diff.join(', ') || 'none'}` : 'Draft matches loaded profile.'
+  ];
+  if (validation.warnings.length) {
+    lines.push('Warnings:');
+    validation.warnings.forEach((warn) => lines.push(`- ${warn}`));
+  }
+  return lines.join('\n');
+}
+
 function routinePolicyModalOpen() {
   if (!dashRoutinePolicyModal) return;
   dashRoutinePolicyModal.classList.add('active');
@@ -5117,6 +5175,8 @@ async function routinePolicyModalLoad() {
       post_commit_profile: loaded.profile
     }, null, 2);
   }
+  dashRoutinePolicySimulationId = '';
+  dashRoutinePolicySimulationFingerprint = '';
   routinePolicyModalSetStatus(`Loaded operator_routine policy (${loaded.source} v${loaded.version} [${loaded.status}])`);
 }
 
@@ -5129,22 +5189,51 @@ async function routinePolicyModalSimulate() {
     routinePolicyModalSetStatus(`Invalid JSON: ${err.message}`);
     return;
   }
+  const loaded = dashRoutineWorkspaceState.loaded || await loadRoutinePolicyProfile();
+  const validation = routinePolicyDraftValidate(policyJson);
+  if (!validation.ok) {
+    routinePolicyModalSetStatus(routinePolicyDraftStatusSummary(validation, loaded));
+    return;
+  }
+  const draftSummary = routinePolicyDraftStatusSummary(validation, loaded);
   const res = await fetchJsonSafe('/api/settings/policy/operator_routine/simulate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ago_path: null, policy_json: policyJson })
+    body: JSON.stringify({ ago_path: null, policy_json: validation.normalizedPolicy })
   });
   if (isErrorResponse(res)) {
-    routinePolicyModalSetStatus(res);
+    routinePolicyModalSetStatus(`${draftSummary}\n\nSimulation failed:\n${JSON.stringify(res, null, 2)}`);
     return;
   }
   dashRoutinePolicySimulationId = res.evidence_id || '';
-  routinePolicyModalSetStatus(res);
+  dashRoutinePolicySimulationFingerprint = routinePolicyDraftFingerprint(validation.profile);
+  routinePolicyModalSetStatus(`${draftSummary}\n\nSimulation evidence: ${dashRoutinePolicySimulationId || 'missing'}`);
 }
 
 async function routinePolicyModalActivate() {
   if (!dashRoutinePolicySimulationId) {
     routinePolicyModalSetStatus('Simulation evidence is required before activation.');
+    return;
+  }
+  if (!dashRoutinePolicyEditor) return;
+  let policyJson;
+  try {
+    policyJson = JSON.parse(dashRoutinePolicyEditor.value);
+  } catch (err) {
+    routinePolicyModalSetStatus(`Invalid JSON: ${err.message}`);
+    return;
+  }
+  const loaded = dashRoutineWorkspaceState.loaded || await loadRoutinePolicyProfile();
+  const validation = routinePolicyDraftValidate(policyJson);
+  if (!validation.ok) {
+    routinePolicyModalSetStatus(routinePolicyDraftStatusSummary(validation, loaded));
+    return;
+  }
+  const currentFingerprint = routinePolicyDraftFingerprint(validation.profile);
+  if (!dashRoutinePolicySimulationFingerprint || currentFingerprint !== dashRoutinePolicySimulationFingerprint) {
+    routinePolicyModalSetStatus(
+      `${routinePolicyDraftStatusSummary(validation, loaded)}\n\nDraft changed since last simulation. Re-run Simulate before Activate.`
+    );
     return;
   }
   const res = await fetchJsonSafe('/api/settings/policy/operator_routine/activate', {
@@ -5157,7 +5246,8 @@ async function routinePolicyModalActivate() {
     return;
   }
   dashRoutinePolicySimulationId = '';
-  routinePolicyModalSetStatus(res);
+  dashRoutinePolicySimulationFingerprint = '';
+  routinePolicyModalSetStatus(`Activation succeeded:\n${JSON.stringify(res, null, 2)}`);
   await dashLoadRoutine();
 }
 
@@ -5307,6 +5397,7 @@ function routineResetChips() {
   routineSetCiJobChips({});
   dashRoutineWorkspaceState.ciCatalog = null;
   dashRoutineWorkspaceState.ciSelectedWorkflowKey = '';
+  dashRoutineWorkspaceState.healStatus = '';
   routineRenderCiObservatory({});
   routineSetChip(dashRoutineProfileSourceChip, 'Profile: loading', 'neutral');
   routineSetChip(dashRoutineProfileStepsChip, 'Steps: -', 'neutral');
@@ -5407,7 +5498,234 @@ function routineRenderActions() {
   if (fail.actionId === 'open_dashboard_gate') label = 'Open Dashboard Gates';
   if (fail.actionId === 'open_push') label = 'Open Push Controls';
   if (fail.actionId === 'open_ci') label = 'Open CI Summary';
-  dashRoutineActions.innerHTML = `<button class="btn secondary" onclick="routineRunAction('${fail.actionId}')">${label}</button>`;
+  const classified = routineClassifyFailureForHeal(fail);
+  const healBtn = classified.playbook.length
+    ? `<button class="btn" onclick="routineAutoHealAndRetry()" ${dashRoutineAutoHealRunning ? 'disabled' : ''}>${dashRoutineAutoHealRunning ? 'Auto-Heal Running...' : 'Auto-Heal + Verify'}</button>`
+    : '';
+  const statusBlock = dashRoutineWorkspaceState.healStatus
+    ? `<pre style="margin:6px 0 0; max-height:160px; overflow:auto; font-size:0.72rem;">${routineEscapeHtml(dashRoutineWorkspaceState.healStatus)}</pre>`
+    : '';
+  dashRoutineActions.innerHTML = `
+    <div class="row" style="gap:8px; align-items:center; flex-wrap:wrap;">
+      <button class="btn secondary" onclick="routineRunAction('${fail.actionId}')">${label}</button>
+      ${healBtn}
+      <button class="btn secondary" onclick="routineEscalateFailureToCodex()">Escalate to Codex</button>
+    </div>
+    ${statusBlock}
+  `;
+}
+
+function routineLatestFailureEntry() {
+  return [...dashRoutineTrace].reverse().find((e) => e.status === 'fail') || null;
+}
+
+function routineParseFailureDetail(entry) {
+  if (!entry || !entry.detail) return null;
+  try {
+    return JSON.parse(entry.detail);
+  } catch (_) {
+    return null;
+  }
+}
+
+function routineClassifyFailureForHeal(entry) {
+  const parsed = routineParseFailureDetail(entry);
+  const inner = parsed && parsed.inner && typeof parsed.inner === 'object' ? parsed.inner : parsed;
+  const action = String(inner?.action || '').toLowerCase();
+  const out = String(inner?.stdout || '');
+  const err = String(inner?.stderr || '');
+  const merged = `${out}\n${err}`.toLowerCase();
+
+  const base = {
+    signature: 'unknown',
+    confidence: 'low',
+    playbook: [],
+    verifyAction: '',
+    summary: 'No known safe remediation matched.'
+  };
+
+  if (entry?.stage === 'Gates' && action === 'prepush-gate') {
+    if (merged.includes('diff in') && merged.includes('[cargo-fmt]')) {
+      return {
+        signature: 'format_parity',
+        confidence: 'high',
+        playbook: [{ action: 'cargo-fmt', label: 'Apply formatter' }],
+        verifyAction: 'gate',
+        summary: 'Detected format parity failure in pre-push gate.'
+      };
+    }
+    if (merged.includes('repair_lock_182') || merged.includes('lockfile compatibility') || merged.includes('edition2024')) {
+      return {
+        signature: 'lock_drift',
+        confidence: 'medium',
+        playbook: [{ action: 'repair', label: 'Repair frozen lock lane' }],
+        verifyAction: 'gate',
+        summary: 'Detected lock drift signal in pre-push gate.'
+      };
+    }
+    return {
+      signature: 'gate_failure_generic',
+      confidence: 'medium',
+      playbook: [],
+      verifyAction: 'gate',
+      summary: 'Gate failure requires operator/Codex investigation.'
+    };
+  }
+
+  if (entry?.stage === 'Push') {
+    return {
+      signature: 'push_failure_generic',
+      confidence: 'low',
+      playbook: [],
+      verifyAction: 'push',
+      summary: 'Push failure may require manual branch/remote/policy intervention.'
+    };
+  }
+
+  if (entry?.stage === 'CI') {
+    if (merged.includes('gh authentication') || merged.includes('gh auth login') || merged.includes('not installed')) {
+      return {
+        signature: 'ci_cli_auth',
+        confidence: 'high',
+        playbook: [],
+        verifyAction: 'ci-status',
+        summary: 'Detected CI watcher environment/auth issue; Codex escalation recommended.'
+      };
+    }
+    return {
+      signature: 'ci_failure_generic',
+      confidence: 'low',
+      playbook: [],
+      verifyAction: 'ci-status',
+      summary: 'CI failure is not in safe local auto-heal registry.'
+    };
+  }
+
+  return base;
+}
+
+function routineHealLogAppend(record) {
+  try {
+    const raw = window.localStorage.getItem(ROUTINE_HEAL_LOG_KEY);
+    const items = raw ? JSON.parse(raw) : [];
+    const next = Array.isArray(items) ? items : [];
+    next.push(record);
+    window.localStorage.setItem(ROUTINE_HEAL_LOG_KEY, JSON.stringify(next.slice(-200)));
+  } catch (_) {}
+}
+
+async function routineAutoHealAndRetry() {
+  if (dashRoutineAutoHealRunning) return;
+  const fail = routineLatestFailureEntry();
+  if (!fail) return;
+  const classified = routineClassifyFailureForHeal(fail);
+  if (!classified.playbook.length) {
+    dashRoutineWorkspaceState.healStatus = `Auto-heal skipped: ${classified.summary}`;
+    routineRenderActions();
+    await routineEscalateFailureToCodex();
+    return;
+  }
+
+  dashRoutineAutoHealRunning = true;
+  dashRoutineWorkspaceState.healStatus = `Auto-heal started for signature=${classified.signature} (${classified.confidence}).`;
+  routineRenderActions();
+
+  let ok = true;
+  const lines = [`Auto-heal signature: ${classified.signature}`, `Summary: ${classified.summary}`];
+  try {
+    for (const step of classified.playbook) {
+      lines.push(`Running fix step: ${step.action}`);
+      const res = await depRun(step.action);
+      const pass = isDepStepPass(step.action, res);
+      lines.push(`- ${step.action}: ${pass ? 'PASS' : 'FAIL'}`);
+      if (!pass) {
+        ok = false;
+        lines.push(`- detail: ${JSON.stringify(depEnvelopeInner(res) || res || {}, null, 2)}`);
+        break;
+      }
+    }
+
+    if (ok && classified.verifyAction) {
+      lines.push(`Verifying failed stage via: ${classified.verifyAction}`);
+      const verifyRes = await depRun(classified.verifyAction);
+      const verifyPass = isDepStepPass(classified.verifyAction, verifyRes);
+      lines.push(`- verify ${classified.verifyAction}: ${verifyPass ? 'PASS' : 'FAIL'}`);
+      ok = verifyPass;
+      if (!verifyPass) lines.push(`- detail: ${JSON.stringify(depEnvelopeInner(verifyRes) || verifyRes || {}, null, 2)}`);
+      if (classified.verifyAction === 'gate') {
+        dashRoutineWorkspaceState.gateDetail = depEnvelopeInner(verifyRes);
+      } else if (classified.verifyAction === 'push') {
+        dashRoutineWorkspaceState.pushDetail = depEnvelopeInner(verifyRes);
+      } else if (classified.verifyAction === 'ci-status') {
+        dashRoutineWorkspaceState.ciDetail = depEnvelopeInner(verifyRes);
+      }
+    }
+  } finally {
+    dashRoutineAutoHealRunning = false;
+  }
+
+  const timestamp = new Date().toISOString();
+  if (ok) {
+    lines.push('Auto-heal result: SUCCESS');
+    lines.push('Next: retry the routine or continue from failed stage.');
+  } else {
+    lines.push('Auto-heal result: FAILED');
+    lines.push('Escalating to Codex with incident context.');
+  }
+  dashRoutineWorkspaceState.healStatus = lines.join('\n');
+  routineHealLogAppend({
+    ts: timestamp,
+    signature: classified.signature,
+    confidence: classified.confidence,
+    ok,
+    stage: fail.stage,
+    summary: fail.summary
+  });
+  routineRenderActions();
+  routineRenderWorkspace();
+  if (!ok) await routineEscalateFailureToCodex();
+}
+
+async function routineEscalateFailureToCodex() {
+  const fail = routineLatestFailureEntry();
+  if (!fail) return;
+  const classified = routineClassifyFailureForHeal(fail);
+  const parsed = routineParseFailureDetail(fail);
+  activatePanel('codex');
+  const intent = `Resolve routine failure (${fail.stage}): ${classified.signature}`;
+  const payload = {
+    stage: fail.stage,
+    summary: fail.summary,
+    remediation: fail.remediation || '',
+    signature: classified.signature,
+    confidence: classified.confidence,
+    action_id: fail.actionId || '',
+    detail: parsed || fail.detail || '',
+    trace_tail: dashRoutineTrace.slice(-8)
+  };
+  const expected = 'Root cause identified and minimal safe remediation applied; failed stage verifies PASS.';
+  const rollback = 'If mutation is unsafe, revert to last clean branch state and rerun in preview mode.';
+  const verify = fail.stage === 'CI' ? 'pilot.multi.status' : 'pilot.multi.status';
+  const cmd = 'pilot.multi.status';
+
+  const setVal = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  };
+  setVal('codex-intent', intent);
+  setVal('codex-command', cmd);
+  setVal('codex-payload', JSON.stringify(payload, null, 2));
+  setVal('codex-expected', expected);
+  setVal('codex-rollback', rollback);
+  setVal('codex-verify', verify);
+  if (codexOut) {
+    codexOut.textContent = `Codex escalation packet prepared.\n\n${JSON.stringify(payload, null, 2)}`;
+  }
+  try {
+    await codexRun('preview');
+  } catch (_) {
+    // Keep packet populated even if preview call fails.
+  }
 }
 
 function routineRunAction(actionId) {
@@ -5506,6 +5824,7 @@ async function dashRunPostCommitRoutine() {
     ciCatalog: dashRoutineWorkspaceState.ciCatalog,
     ciSelectedWorkflowKey: dashRoutineWorkspaceState.ciSelectedWorkflowKey || '',
     ciInFlight: false,
+    healStatus: '',
     evidenceDetail: null,
     lastResult: 'running',
     lastRunAt: new Date().toISOString(),

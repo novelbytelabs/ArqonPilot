@@ -129,3 +129,61 @@ Use this structure for every new release:
 - `./scripts/migration_smoke_test.sh` ✅ PASS
 - `./scripts/check_duplicate_consts.py` ✅ PASS
 - Placeholder/stub scan on touched files: no code TODO/stub placeholders introduced ✅
+
+---
+
+## Pilot-for-Pilot Phase B Hardening Closeout (2026-03-07)
+
+- Scope: CI observatory robustness hardening for Post-Commit Routine dashboard deck.
+- Key fixes:
+  - CI in-flight state now suppresses false-positive `PASS` chips until terminal completion.
+  - CI workflow catalog discovery now degrades to warnings + required-gap signals when workflow sources are missing/unreadable.
+  - CI policy summary/notes now expose catalog warning count and warning details.
+
+### Verification
+
+- `node --check crates/pilot/src/pilot_ui.js` ✅
+- `conda run -n helios-gpu-118 cargo check -p pilot --locked` ✅
+- `conda run -n helios-gpu-118 cargo test -p pilot --locked test_discover_dashboard_ci_catalog_reports_missing_required_jobs -- --nocapture` ✅
+- `conda run -n helios-gpu-118 cargo test -p pilot --locked test_discover_dashboard_ci_catalog_missing_directory_yields_warnings_and_gaps -- --nocapture` ✅
+- `conda run -n helios-gpu-118 bash scripts/test_matrix.sh all` ✅ (unit, integration, e2e, regression, adversarial)
+- `conda run -n helios-gpu-118 python -m mkdocs build -q` ✅
+
+### Regression Guards Added
+
+- `crates/pilot/tests/ci_observatory_regression_test.rs` (in-flight PASS suppression contract)
+- `scripts/test_matrix.sh` regression suite now includes `--test ci_observatory_regression_test`
+
+### Notes
+
+- New gotcha registered: `G-030` (CI observatory pass-while-running false positive + catalog hard-fail behavior).
+- Frozen versions policy unchanged:
+  - Core Rust `1.82.0`
+  - Packaging Rust `1.88.0`
+  - Protobuf `4.25.8`
+  - protoc `25.8`
+
+### Phase C Kickoff (same wave)
+
+- Dashboard policy modal hardened:
+  - validates draft shape before simulation/activation
+  - shows normalized profile + diff summary vs loaded profile
+  - requires re-simulation if draft changed after simulation evidence was generated
+- Verification:
+  - `node --check crates/pilot/src/pilot_ui.js` ✅
+  - `conda run -n helios-gpu-118 cargo check -p pilot --locked` ✅
+  - `conda run -n helios-gpu-118 bash scripts/test_matrix.sh regression` ✅
+
+### Phase C Slice 2 (Auto-Heal -> Verify -> Escalate)
+
+- Reconcile actions now include:
+  - `Auto-Heal + Verify` (known-safe playbooks)
+  - `Escalate to Codex` (prefilled incident packet + preview)
+- Initial safe playbooks:
+  - `format_parity` -> `cargo-fmt` -> verify gate
+  - `lock_drift` -> `repair` -> verify gate
+- Learning loop:
+  - heal outcomes are persisted locally in `localStorage` key `pilot.routine.heal.log.v1`.
+- Regression guards added:
+  - `crates/pilot/tests/routine_autoheal_regression_test.rs`
+  - `scripts/test_matrix.sh` includes `--test routine_autoheal_regression_test`

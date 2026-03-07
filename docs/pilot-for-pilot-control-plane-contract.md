@@ -259,6 +259,18 @@ Phase B hardening notes:
 2. Editable routine profiles per AGOrg.
 3. Preview-diff for policy changes before activation.
 
+Phase C kickoff (slice 1):
+
+1. Dashboard policy modal now validates `post_commit_profile` shape before simulate/activate.
+2. Draft summary includes normalized step order + toggle view + diff against loaded profile.
+3. Activation is blocked if the draft changed after simulation (re-simulate required).
+
+Phase C kickoff (slice 2):
+
+1. Reconcile action rail now supports `Auto-Heal + Verify` for known-safe failure signatures.
+2. If auto-heal cannot classify a safe remediation or verification still fails, flow escalates to Codex with a prefilled incident packet.
+3. A local learning loop log stores heal attempts/results (`pilot.routine.heal.log.v1`) to evolve failure coverage.
+
 ## Phase D: Release Mode
 
 1. “Release Routine” variant including tag/publish/verify/evidence steps.

@@ -2368,9 +2368,9 @@ async fn api_dashboard_ci_catalog(
     let workflows_dir = cwd.join(".github").join("workflows");
     let (workflows, gaps, ci_enabled, warnings) =
         match discover_dashboard_ci_catalog(&workflows_dir, &policy) {
-        Ok(v) => v,
-        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
-    };
+            Ok(v) => v,
+            Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
+        };
 
     Json(json!({
         "ok": true,
@@ -4615,6 +4615,7 @@ async fn run_dependency_action(
     if matches!(
         action,
         "repair"
+            | "cargo-fmt"
             | "db-start"
             | "db-stop"
             | "db-restart"
@@ -5079,6 +5080,7 @@ async fn run_dependency_action(
             }
         }
         ("repair", _) => run_local_script("./scripts/repair_lock_182.sh --no-gate").await,
+        ("cargo-fmt", _) => run_local_script("cargo fmt").await,
         ("prepush-gate", _) => {
             run_local_script_streamed("./scripts/prepush_gate.sh", "prepush-gate", &state.events)
                 .await
@@ -6102,6 +6104,7 @@ mod tests {
         assert!(dependency_action_scope_required("policy"));
         assert!(dependency_action_scope_required("gate"));
         assert!(dependency_action_scope_required("prepush-gate"));
+        assert!(dependency_action_scope_required("cargo-fmt"));
         assert!(dependency_action_scope_required("push"));
         assert!(dependency_action_scope_required("release-readiness"));
         assert!(dependency_action_scope_required("release-collect-evidence"));
@@ -6112,6 +6115,7 @@ mod tests {
         assert!(!dependency_action_scope_required("services-start"));
 
         assert!(!dependency_action_requires_cwd_scope("repair"));
+        assert!(!dependency_action_requires_cwd_scope("cargo-fmt"));
         assert!(!dependency_action_requires_cwd_scope("db-start"));
     }
 
@@ -8009,6 +8013,7 @@ fn dependency_action_scope_required(action: &str) -> bool {
             | "gate"
             | "prepush-gate"
             | "repair"
+            | "cargo-fmt"
             | "push"
             | "release-readiness"
             | "release-compat-matrix"

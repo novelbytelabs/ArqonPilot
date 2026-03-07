@@ -41,6 +41,8 @@ run_regression() {
     --test oracle_test \
     --test graph_test \
     --test vector_test \
+    --test ci_observatory_regression_test \
+    --test routine_autoheal_regression_test \
     --test regression_cli_error_report_test
 }
 
