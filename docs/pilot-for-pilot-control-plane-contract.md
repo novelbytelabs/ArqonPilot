@@ -203,22 +203,48 @@ All stage actions return envelope:
 
 ## Phase A: One-Click Post-Commit Routine (Now)
 
-1. Add `Run Post-Commit Routine` button in Dashboard.
-2. Wire pipeline state chips with real-time status.
-3. Run canonical flow with stage-by-stage summaries.
-4. Stop on hard fail with remediation CTA.
+1. Promote Dashboard `Post-Commit Routine` into a control deck with:
+   - routine header
+   - command deck
+   - setup strip
+   - stage workspace
+   - run ledger
+2. Wire stage navigation as an accessible `tablist` / `tabpanel`.
+3. Resolve canonical flow inputs inside the panel:
+   - cohort selector
+   - branch
+   - remote
+   - toggles
+4. Run canonical flow with stage-by-stage summaries and clear remediation CTA.
+5. Surface resolved plan/cohort/guard truth without requiring raw JSON.
 
 Definition of done (A):
 
-1. Operator completes full routine without terminal.
+1. Operator completes full routine from Dashboard without leaving the panel for normal flow.
 2. No raw JSON required to understand outcomes.
 3. Failure in any stage blocks next stage and is clearly explained.
+4. Keyboard-only stage navigation works.
+5. Resolved scope, plan, and guard status are visible before execution.
 
-## Phase B: Deep Visuals
+## Phase B: CI Observatory + Deep Visuals
 
-1. Enhanced DAG canvas with stage layers and edge highlighting.
-2. Repo cohort heatmap (dirty/ahead/behind).
-3. PR plan timeline with copy/share actions.
+1. Dashboard CI observatory discovers real workflow files and jobs from `.github/workflows`.
+2. CI observatory overlays current `operator_routine` posture and the frozen ArqonPilot CI contract:
+   - core Rust `1.82.0`
+   - packaging Rust `1.88.0`
+   - protobuf `4.25.8`
+   - `protoc` `25.8`
+3. Missing required workflows/jobs are surfaced as explicit coverage gaps with remediation text.
+4. Enhanced DAG canvas adds stage layers and edge highlighting.
+5. Repo cohort heatmap (dirty/ahead/behind).
+6. PR plan timeline with copy/share actions.
+
+Definition of done (B):
+
+1. CI observatory is not hardcoded to a fixed chip set.
+2. Workflow rows are derived from configured GitHub Actions files.
+3. Required-vs-optional CI coverage is legible from Dashboard.
+4. Selected workflow detail and latest run posture are visible without leaving the deck.
 
 ## Phase C: Governance-Driven Orchestration
 

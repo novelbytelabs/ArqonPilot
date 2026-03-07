@@ -171,6 +171,23 @@ Keep this file current whenever a new failure class appears.
   2. Accept valid array payload for exceptions endpoint.
   3. On malformed payload, surface explicit `malformed response payload` error.
 
+## G-050: `ui_smoke_check.sh` blocked by existing `pilot serve` instance with mixed UI fingerprint
+
+- Signature:
+  - `Refusing mixed Pilot UI versions: running pid=<...> port=7788 version=0.1.6 fingerprint=<...> conflicts with current version=0.1.6 fingerprint=<...>`
+  - seen while `scripts/ui_smoke_check.sh` starts its own serve process.
+- Cause:
+  - another `pilot serve` instance is already active for the same workspace and the runtime fingerprint changed across builds, so the smoke script refuses to coexist.
+- Recovery:
+  1. Check for existing serve processes before UI smoke:
+     - `pgrep -af "pilot serve"`
+  2. Stop the stale/non-target instance or restart services cleanly before rerunning:
+     - `./scripts/pilot_local.sh services restart`
+  3. Re-run UI smoke:
+     - `bash scripts/ui_smoke_check.sh`
+- Prevention:
+  - keep only one active `pilot serve` per workspace during dashboard validation, especially after rebuilding `pilot`.
+
 ## G-018: Widespread compilation failure after `evaluate_*_policy` signature changes
 
 - Signature:

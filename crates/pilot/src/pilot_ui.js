@@ -199,7 +199,6 @@ const dashRoutineScopeChip = document.getElementById('dash-routine-scope-chip');
 const dashRoutineMultiChip = document.getElementById('dash-routine-multi-chip');
 const dashRoutineGatesChip = document.getElementById('dash-routine-gates-chip');
 const dashRoutinePushChip = document.getElementById('dash-routine-push-chip');
-const dashRoutineCiChip = document.getElementById('dash-routine-ci-chip');
 const dashRoutineEvidenceChip = document.getElementById('dash-routine-evidence-chip');
 const dashRoutineCiDocsChip = document.getElementById('dash-routine-ci-docs-chip');
 const dashRoutineCiRustChip = document.getElementById('dash-routine-ci-rust-chip');
@@ -207,10 +206,36 @@ const dashRoutineCiUiChip = document.getElementById('dash-routine-ci-ui-chip');
 const dashRoutineCiPackagingChip = document.getElementById('dash-routine-ci-packaging-chip');
 const dashRoutineProfileSourceChip = document.getElementById('dash-routine-profile-source-chip');
 const dashRoutineProfileStepsChip = document.getElementById('dash-routine-profile-steps-chip');
+const dashRoutineModeChip = document.getElementById('dash-routine-mode-chip');
+const dashRoutineLastResultChip = document.getElementById('dash-routine-last-result-chip');
+const dashRoutineStageStatusChip = document.getElementById('dash-routine-stage-status-chip');
 const dashRoutineOut = document.getElementById('dash-routine-out');
 const dashRoutineRunBtn = document.getElementById('dash-routine-run-btn');
 const dashRoutineTimeline = document.getElementById('dash-routine-timeline');
 const dashRoutineActions = document.getElementById('dash-routine-actions');
+const dashRoutineStagePanel = document.getElementById('dash-routine-stage-panel');
+const dashRoutineWorkspaceTitle = document.getElementById('dash-routine-workspace-title');
+const dashRoutineWorkspaceSummary = document.getElementById('dash-routine-workspace-summary');
+const dashRoutineWorkspaceChipRow = document.getElementById('dash-routine-workspace-chip-row');
+const dashRoutineWorkspaceMetrics = document.getElementById('dash-routine-workspace-metrics');
+const dashRoutineWorkspaceDetails = document.getElementById('dash-routine-workspace-details');
+const dashRoutineWorkspaceArtifacts = document.getElementById('dash-routine-workspace-artifacts');
+const dashRoutineWorkspaceNotes = document.getElementById('dash-routine-workspace-notes');
+const dashRoutineDagView = document.getElementById('dash-routine-dag-view');
+const dashRoutineDagLanes = document.getElementById('dash-routine-dag-lanes');
+const dashRoutineDagSummaryChip = document.getElementById('dash-routine-dag-summary-chip');
+const dashRoutineScopeSummary = document.getElementById('dash-routine-scope-summary');
+const dashRoutinePlanSummary = document.getElementById('dash-routine-plan-summary');
+const dashRoutineBranchInput = document.getElementById('dash-routine-branch');
+const dashRoutineRemoteInput = document.getElementById('dash-routine-remote');
+const dashRoutineCiDynamicList = document.getElementById('dash-routine-ci-dynamic-list');
+const dashRoutineCiNotes = document.getElementById('dash-routine-ci-notes');
+const dashRoutineCiPolicySummary = document.getElementById('dash-routine-ci-policy-summary');
+const dashRoutinePolicyModal = document.getElementById('dash-routine-policy-modal');
+const dashRoutinePolicyEditor = document.getElementById('dash-routine-policy-editor');
+const dashRoutinePolicyModalStatus = document.getElementById('dash-routine-policy-modal-status');
+const dashRoutineLiveStatus = document.getElementById('dash-routine-live-status');
+const dashRoutineLiveAlert = document.getElementById('dash-routine-live-alert');
 const dashReleaseReadinessChip = document.getElementById('dash-release-readiness-chip');
 const dashReleaseCompatChip = document.getElementById('dash-release-compat-chip');
 const dashReleaseMigrationChip = document.getElementById('dash-release-migration-chip');
@@ -316,6 +341,36 @@ let multiMacroRunning = false;
 let multiMacroExpanded = false;
 let dashRoutineRunning = false;
 let dashRoutineTrace = [];
+let dashRoutineSelectedStage = 'resolve';
+let dashRoutinePolicySimulationId = '';
+const ROUTINE_STAGE_ORDER = Object.freeze(['resolve', 'plan', 'multi', 'gates', 'push', 'ci', 'evidence', 'reconcile']);
+const ROUTINE_STAGE_LABELS = Object.freeze({
+  resolve: 'Resolve',
+  plan: 'Plan',
+  multi: 'Multi',
+  gates: 'Gates',
+  push: 'Push',
+  ci: 'CI',
+  evidence: 'Evidence',
+  reconcile: 'Reconcile'
+});
+let dashRoutineWorkspaceState = {
+  loaded: null,
+  resolveSnapshot: null,
+  active: null,
+  scope: null,
+  stats: null,
+  multiSnapshot: null,
+  gateDetail: null,
+  pushDetail: null,
+  ciDetail: null,
+  ciCatalog: null,
+  ciSelectedWorkflowKey: '',
+  evidenceDetail: null,
+  lastResult: 'idle',
+  lastRunAt: null,
+  failure: null
+};
 const ROUTINE_DEFAULT_PROFILE = Object.freeze({
   step_order: ['scope', 'multi', 'gates', 'push', 'ci', 'evidence'],
   stop_on_fail: true,
@@ -2024,8 +2079,9 @@ async function depRun(action, options = {}) {
     req.preflight_steps = [step];
   }
   if (normalizedAction === 'push') {
-    req.branch = document.getElementById('dash-push-branch').value || 'main';
-    req.remote = document.getElementById('dash-push-remote').value || 'origin';
+    const { branch, remote } = routineReadBranchRemote();
+    req.branch = branch;
+    req.remote = remote;
   }
   if (options && typeof options === 'object') {
     if (typeof options.branch === 'string' && options.branch.trim() !== '') {
@@ -4368,12 +4424,732 @@ function routineApplyPolicyProfile(loaded) {
   const sourceLevel = loaded?.ok ? 'ok' : 'warn';
   routineSetChip(dashRoutineProfileSourceChip, `Profile: ${sourceText}`, sourceLevel);
   routineSetChip(dashRoutineProfileStepsChip, `Steps: ${stepsText}`, 'neutral');
+  dashRoutineWorkspaceState.loaded = loaded;
+  routineSetStageState('plan', 'Ready', loaded?.ok ? 'ok' : 'warn');
+  routineUpdateModeChip();
+  routineRefreshPlanPreview();
+  routineRenderWorkspace();
 }
 
 function routineSetChip(chip, label, level) {
   if (!chip) return;
   chip.textContent = label;
   chip.className = `chip ${level}`;
+}
+
+function routineAnnounceStatus(message) {
+  if (dashRoutineLiveStatus) dashRoutineLiveStatus.textContent = String(message || '');
+}
+
+function routineAnnounceAlert(message) {
+  if (dashRoutineLiveAlert) dashRoutineLiveAlert.textContent = String(message || '');
+}
+
+function routineStageStateEl(stage) {
+  return document.getElementById(`dash-routine-stage-${stage}-state`);
+}
+
+function routineStageTabEl(stage) {
+  return document.getElementById(`dash-routine-stage-${stage}-tab`);
+}
+
+function routineReadBranchRemote() {
+  const branch = (dashRoutineBranchInput?.value || document.getElementById('dash-push-branch')?.value || 'main').trim() || 'main';
+  const remote = (dashRoutineRemoteInput?.value || document.getElementById('dash-push-remote')?.value || 'origin').trim() || 'origin';
+  return { branch, remote };
+}
+
+function routineSyncPushControls() {
+  const legacyBranch = document.getElementById('dash-push-branch');
+  const legacyRemote = document.getElementById('dash-push-remote');
+  const { branch, remote } = routineReadBranchRemote();
+  if (dashRoutineBranchInput && dashRoutineBranchInput.value !== branch) dashRoutineBranchInput.value = branch;
+  if (dashRoutineRemoteInput && dashRoutineRemoteInput.value !== remote) dashRoutineRemoteInput.value = remote;
+  if (legacyBranch && legacyBranch.value !== branch) legacyBranch.value = branch;
+  if (legacyRemote && legacyRemote.value !== remote) legacyRemote.value = remote;
+}
+
+function routineActiveProfile() {
+  return dashRoutineWorkspaceState.loaded?.profile || { ...ROUTINE_DEFAULT_PROFILE };
+}
+
+function routineUpdateModeChip() {
+  const allowPush = !!document.getElementById('dash-routine-allow-push')?.checked;
+  const exportEvidence = !!document.getElementById('dash-routine-export-evidence')?.checked;
+  const mode = allowPush ? 'mutating' : 'safe';
+  const suffix = exportEvidence ? ' + evidence' : '';
+  routineSetChip(dashRoutineModeChip, `Mode: ${mode}${suffix}`, allowPush ? 'warn' : 'neutral');
+}
+
+function routineSetLastResult(status, label = '') {
+  const normalized = String(status || 'idle').toLowerCase();
+  const level = normalized === 'success' ? 'ok' : (normalized === 'failed' ? 'fail' : (normalized === 'running' ? 'warn' : 'neutral'));
+  const text = label || `Last Result: ${normalized}`;
+  routineSetChip(dashRoutineLastResultChip, text, level);
+}
+
+function routineSummaryText() {
+  const active = dashRoutineWorkspaceState.active;
+  const stats = dashRoutineWorkspaceState.stats;
+  if (active && stats && Number.isFinite(stats.filtered)) {
+    return `${active.name || active.id || 'AGOrg'} | ${stats.filtered}/${stats.inScope || stats.filtered} repos`;
+  }
+  return 'Awaiting resolve stage';
+}
+
+function routineRefreshPlanPreview() {
+  const profile = routineActiveProfile();
+  const scopeSummary = routineSummaryText();
+  const stepList = Array.isArray(profile.step_order) && profile.step_order.length
+    ? profile.step_order.map((step) => ROUTINE_STAGE_LABELS[step === 'scope' ? 'resolve' : step] || step).join(' -> ')
+    : 'Resolve to compute plan';
+  if (dashRoutineScopeSummary) dashRoutineScopeSummary.value = scopeSummary;
+  if (dashRoutinePlanSummary) dashRoutinePlanSummary.value = stepList;
+}
+
+async function routineLoadMultiSnapshot() {
+  const scope = parseMultiScopeFromRoutine();
+  const params = new URLSearchParams();
+  if (scope.group) params.set('group', scope.group);
+  if (Array.isArray(scope.tags) && scope.tags.length) params.set('tags', scope.tags.join(','));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const snapshot = await fetchJsonSafe(`/api/multi/snapshot${suffix}`);
+  if (snapshot && snapshot.ok) {
+    dashRoutineWorkspaceState.multiSnapshot = snapshot;
+    if (dashRoutineSelectedStage === 'multi') routineRenderWorkspace();
+  }
+  return snapshot;
+}
+
+async function routineLoadResolveSnapshot() {
+  const scope = parseMultiScopeFromRoutine();
+  const { branch, remote } = routineReadBranchRemote();
+  const params = new URLSearchParams();
+  if (scope.group) params.set('group', scope.group);
+  if (Array.isArray(scope.tags) && scope.tags.length) params.set('tags', scope.tags.join(','));
+  params.set('branch', branch);
+  params.set('remote', remote);
+  const snapshot = await fetchJsonSafe(`/api/dashboard/routine/resolve?${params.toString()}`);
+  if (snapshot && snapshot.ok) {
+    dashRoutineWorkspaceState.resolveSnapshot = snapshot;
+    dashRoutineWorkspaceState.active = snapshot.active_scope || null;
+    dashRoutineWorkspaceState.scope = {
+      group: snapshot.selector?.group || null,
+      tags: Array.isArray(snapshot.selector?.tags) ? snapshot.selector.tags : []
+    };
+    dashRoutineWorkspaceState.stats = {
+      filtered: Number(snapshot.cohort?.filtered_count || 0),
+      inScope: Number(snapshot.cohort?.in_scope_total || 0)
+    };
+    if (snapshot.resolved_policy) {
+      dashRoutineWorkspaceState.loaded = {
+        ok: true,
+        source: snapshot.resolved_policy.source || 'Unknown',
+        version: Number.isFinite(snapshot.resolved_policy.version) ? snapshot.resolved_policy.version : 0,
+        status: snapshot.resolved_policy.status || 'unknown',
+        profile: normalizeRoutineProfile(snapshot.resolved_policy.profile),
+        diff: routineProfileDiff(normalizeRoutineProfile(snapshot.resolved_policy.profile))
+      };
+    }
+    routineRefreshPlanPreview();
+    if (dashRoutineSelectedStage === 'resolve' || dashRoutineSelectedStage === 'plan') {
+      routineRenderWorkspace();
+    }
+  }
+  return snapshot;
+}
+
+function routineEscapeHtml(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+function routineRenderDag(snapshot) {
+  if (!dashRoutineDagView || !dashRoutineDagLanes || !dashRoutineDagSummaryChip) return;
+  const dag = snapshot?.dag;
+  const stages = Array.isArray(dag?.stages) ? dag.stages : [];
+  const edges = Array.isArray(dag?.edges) ? dag.edges : [];
+  const statuses = Array.isArray(snapshot?.statuses) ? snapshot.statuses : [];
+  const statusByName = new Map(statuses.map((status) => [String(status.name || ''), status]));
+  if (!stages.length) {
+    dashRoutineDagView.classList.remove('active');
+    dashRoutineDagLanes.innerHTML = '<div class="routine-dag-empty">Run Multi to materialize dependency topology.</div>';
+    routineSetChip(dashRoutineDagSummaryChip, 'DAG: pending', 'neutral');
+    return;
+  }
+  dashRoutineDagView.classList.add('active');
+  routineSetChip(dashRoutineDagSummaryChip, `DAG: ${stages.length} stage${stages.length === 1 ? '' : 's'} / ${edges.length} edge${edges.length === 1 ? '' : 's'}`, 'ok');
+  const laneHtml = stages.map((stageRepos, idx) => {
+    const nodes = Array.isArray(stageRepos) ? stageRepos.map((repoName) => {
+      const status = statusByName.get(String(repoName)) || {};
+      const readiness = status.clean === false ? 'dirty' : (status.clean === true ? 'clean' : 'unknown');
+      const init = status.pilot_initialized === false ? 'uninitialized' : (status.pilot_initialized === true ? 'pilot-ready' : 'init-unknown');
+      return `
+        <div class="routine-dag-node">
+          <div class="routine-dag-node-name">${routineEscapeHtml(repoName)}</div>
+          <div class="routine-dag-node-meta">${routineEscapeHtml(`${readiness} | ${init}`)}</div>
+        </div>
+      `;
+    }).join('') : '';
+    return `
+      <div class="routine-dag-lane">
+        <div class="routine-dag-lane-title">Execution Stage ${idx + 1}</div>
+        <div class="routine-dag-nodes">${nodes || '<div class="routine-dag-empty">No repos in this stage.</div>'}</div>
+      </div>
+    `;
+  }).join('');
+  dashRoutineDagLanes.innerHTML = laneHtml;
+}
+
+function routineWorkspaceViewModel(stage) {
+  const loaded = dashRoutineWorkspaceState.loaded;
+  const resolveSnapshot = dashRoutineWorkspaceState.resolveSnapshot;
+  const profile = routineActiveProfile();
+  const { branch, remote } = routineReadBranchRemote();
+  const scope = dashRoutineWorkspaceState.scope;
+  const active = dashRoutineWorkspaceState.active;
+  const stats = dashRoutineWorkspaceState.stats;
+  const multiSnapshot = dashRoutineWorkspaceState.multiSnapshot;
+  const gateDetail = dashRoutineWorkspaceState.gateDetail;
+  const pushDetail = dashRoutineWorkspaceState.pushDetail;
+  const ciDetail = dashRoutineWorkspaceState.ciDetail;
+  const evidenceDetail = dashRoutineWorkspaceState.evidenceDetail;
+  const failure = dashRoutineWorkspaceState.failure;
+  const traceTail = dashRoutineTrace.slice(-3).map((entry) => `${entry.stage}: ${entry.summary}`);
+  const baseNotes = traceTail.length ? traceTail.join('\n') : 'No stage activity recorded yet.';
+  if (stage === 'resolve') {
+    const cohort = resolveSnapshot?.cohort || {};
+    const guard = resolveSnapshot?.guard_summary || {};
+    return {
+      title: 'Resolve',
+      summary: 'Active AGOrg, cohort selector, and repo visibility are resolved here before any mutation path begins.',
+      chips: [
+        { label: active ? `AGOrg: ${active.name || active.id}` : 'AGOrg: unresolved', level: active ? 'ok' : 'neutral' },
+        { label: stats ? `Repos: ${stats.filtered}/${stats.inScope || stats.filtered}` : 'Repos: unresolved', level: stats ? 'ok' : 'neutral' },
+        { label: scope?.group ? `Group: ${scope.group}` : 'Group: any', level: scope?.group ? 'ok' : 'neutral' },
+        { label: `Guard: ${guard.blocked ? 'blocked' : 'ready'}`, level: guard.blocked ? 'fail' : 'ok' }
+      ],
+      metrics: [
+        ['Branch', branch],
+        ['Remote', remote],
+        ['Tags', Array.isArray(scope?.tags) && scope.tags.length ? scope.tags.join(', ') : 'none'],
+        ['Clean / Dirty', `${cohort.clean_count || 0} / ${cohort.dirty_count || 0}`],
+        ['Pilot / Oracle Ready', `${cohort.pilot_initialized_count || 0} / ${cohort.oracle_ready_count || 0}`]
+      ],
+      details: [
+        active ? `Active AGOrg: ${active.name || active.id}` : 'No active AGOrg selected yet.',
+        stats ? `Matched ${stats.filtered} repos within ${stats.inScope || stats.filtered} in-scope repos.` : 'Cohort statistics have not been loaded.',
+        scope?.group || (scope?.tags && scope.tags.length) ? `Selector: group=${scope?.group || '-'} tags=${(scope?.tags || []).join(',') || '-'}` : 'Selector is waiting for group or tags input.',
+        guard.blocked ? `Push guard is currently blocked with ${guard.violation_count || 0} violation(s).` : 'Push guard currently resolves without blocking violations.'
+      ],
+      artifacts: [
+        'Resolve uses /api/dashboard/routine/resolve.',
+        active ? 'Scope is ready for Plan and Multi.' : 'Open AGOrg tab if scope selection is missing.'
+      ],
+      notes: resolveSnapshot ? JSON.stringify(resolveSnapshot, null, 2) : baseNotes
+    };
+  }
+  if (stage === 'plan') {
+    const guard = resolveSnapshot?.guard_summary || {};
+    return {
+      title: 'Plan',
+      summary: 'The plan stage resolves the operator_routine policy, mutation toggles, and exact execution order before the deck runs.',
+      chips: [
+        { label: `Policy: ${loaded?.source || 'Built-in default'}`, level: loaded?.ok ? 'ok' : 'warn' },
+        { label: `Stop On Fail: ${profile.stop_on_fail ? 'yes' : 'no'}`, level: profile.stop_on_fail ? 'ok' : 'warn' },
+        { label: `Push Enabled: ${document.getElementById('dash-routine-allow-push')?.checked ? 'yes' : 'no'}`, level: document.getElementById('dash-routine-allow-push')?.checked ? 'warn' : 'neutral' },
+        { label: `Guard Violations: ${guard.violation_count || 0}`, level: guard.violation_count ? 'fail' : 'ok' }
+      ],
+      metrics: [
+        ['Step Count', String(profile.step_order.length)],
+        ['Policy Version', String(loaded?.version ?? 0)],
+        ['Evidence', document.getElementById('dash-routine-export-evidence')?.checked ? 'enabled' : 'disabled']
+      ],
+      details: [
+        `Resolved step order: ${profile.step_order.join(' -> ')}`,
+        loaded?.diff?.length ? `Policy diff from built-in default: ${loaded.diff.join(', ')}` : 'Policy matches the built-in default profile.',
+        `Push target: ${remote}/${branch}`,
+        guard.warning_count ? `Guard warnings: ${guard.warning_count}` : 'No guard warnings in current routine context.'
+      ],
+      artifacts: [
+        'Plan summary is derived from the resolved operator_routine policy.',
+        'Quick Edit Policy can simulate changes without leaving Dashboard.'
+      ],
+      notes: resolveSnapshot ? JSON.stringify(resolveSnapshot.plan || resolveSnapshot, null, 2) : baseNotes
+    };
+  }
+  if (stage === 'multi') {
+    const repoCount = Array.isArray(multiSnapshot?.repos) ? multiSnapshot.repos.length : 0;
+    return {
+      title: 'Multi',
+      summary: 'Multi preview materializes the cohort, order, DAG preview, and pull request plan for the selected repo set.',
+      chips: [
+        { label: `Repos: ${repoCount || 0}`, level: repoCount ? 'ok' : 'neutral' },
+        { label: `DAG: ${repoCount ? 'ready' : 'pending'}`, level: repoCount ? 'ok' : 'neutral' },
+        { label: 'Mode: preview', level: 'neutral' }
+      ],
+      metrics: [
+        ['Repos', String(repoCount || 0)],
+        ['Selector Group', scope?.group || '-'],
+        ['Selector Tags', Array.isArray(scope?.tags) && scope.tags.length ? scope.tags.join(', ') : '-']
+      ],
+      details: repoCount
+        ? (multiSnapshot.repos || []).slice(0, 6).map((repo) => `${repo.name || repo.repo_name || repo.path || 'repo'} | ${repo.path || 'path unavailable'}`)
+        : ['Run Multi to materialize cohort topology and ordering.'],
+      artifacts: [
+        repoCount ? 'Preview snapshot is available in the stage notes.' : 'No DAG snapshot yet.',
+        'This stage reuses the current Multi registry and DAG preview commands.'
+      ],
+      notes: multiSnapshot ? JSON.stringify(multiSnapshot, null, 2) : baseNotes
+    };
+  }
+  if (stage === 'gates') {
+    const steps = gateDetail?.report?.steps || [];
+    return {
+      title: 'Gates',
+      summary: 'Governance checks remain first-class: policy, hook policy, drift, and pre-push gating stay visible as distinct verdicts.',
+      chips: steps.length
+        ? steps.map((step) => ({ label: `${step.step}: ${step.result?.status || 'unknown'}`, level: String(step.result?.status || '').toLowerCase() === 'pass' ? 'ok' : 'fail' }))
+        : [{ label: 'Guard matrix: pending', level: 'neutral' }],
+      metrics: [
+        ['Checks', String(steps.length || 4)],
+        ['Failures', String(steps.filter((step) => String(step.result?.status || '') !== 'Pass').length)],
+        ['Mode', profile.stop_on_fail ? 'strict' : 'continue-on-fail']
+      ],
+      details: steps.length
+        ? steps.map((step) => `${step.step}: ${step.result?.status || 'unknown'}${step.result?.failure_code ? ` (${step.result.failure_code})` : ''}`)
+        : ['Run Gates to get policy and pre-push verdicts.'],
+      artifacts: [
+        'Blocked is treated as governed behavior, not hidden failure.',
+        failure?.stage === 'Gates' ? `Latest remediation: ${failure.remediation || 'inspect Dashboard gate controls'}` : 'Remediation appears here if a guard blocks the path.'
+      ],
+      notes: gateDetail ? JSON.stringify(gateDetail, null, 2) : baseNotes
+    };
+  }
+  if (stage === 'push') {
+    return {
+      title: 'Push',
+      summary: 'Push remains explicit, policy-gated, and operator-visible with owned branch and remote controls inside the deck.',
+      chips: [
+        { label: `Branch: ${branch}`, level: 'neutral' },
+        { label: `Remote: ${remote}`, level: 'neutral' },
+        { label: `Allowed: ${document.getElementById('dash-routine-allow-push')?.checked ? 'yes' : 'no'}`, level: document.getElementById('dash-routine-allow-push')?.checked ? 'warn' : 'neutral' }
+      ],
+      metrics: [
+        ['Branch', branch],
+        ['Remote', remote],
+        ['Guarded', 'yes']
+      ],
+      details: [
+        `Push target resolves to ${remote}/${branch}.`,
+        pushDetail?.error ? `Latest push error: ${pushDetail.error}` : 'No push result yet.',
+        'Legacy dashboard push controls are synchronized from this deck.'
+      ],
+      artifacts: [
+        failure?.stage === 'Push' ? `Latest remediation: ${failure.remediation || 'inspect push diagnostics'}` : 'Push result artifacts appear after execution.',
+        'Push still flows through dependency orchestrate/run and operator_routine guard evaluation.'
+      ],
+      notes: pushDetail ? JSON.stringify(pushDetail, null, 2) : baseNotes
+    };
+  }
+  if (stage === 'ci') {
+    const summary = ciDetail?.summary || {};
+    const catalog = dashRoutineWorkspaceState.ciCatalog || {};
+    const workflowCount = Array.isArray(catalog.workflows) ? catalog.workflows.length : 0;
+    const gapCount = Array.isArray(catalog.missing) ? catalog.missing.length : 0;
+    const selectedWorkflow = (Array.isArray(catalog.workflows) ? catalog.workflows : []).find((wf) => wf.key === dashRoutineWorkspaceState.ciSelectedWorkflowKey)
+      || (Array.isArray(catalog.workflows) ? catalog.workflows[0] : null);
+    return {
+      title: 'Continuous Integration',
+      summary: 'CI observability is dynamic: whatever GitHub Actions are configured and required by current policy should surface here.',
+      chips: [
+        { label: `Docs: ${summary.docs_state || 'idle'}`, level: routineCiChipLevel(summary.docs_state) },
+        { label: `Rust: ${summary.rust_state || 'idle'}`, level: routineCiChipLevel(summary.rust_state) },
+        { label: `UI: ${summary.ui_smoke_state || 'idle'}`, level: routineCiChipLevel(summary.ui_smoke_state) },
+        { label: `Workflows: ${workflowCount}`, level: workflowCount ? 'ok' : 'neutral' },
+        { label: `Gaps: ${gapCount}`, level: gapCount ? 'warn' : 'ok' }
+      ],
+      metrics: [
+        ['Workflow', selectedWorkflow?.workflow_name || summary.workflow || 'n/a'],
+        ['Branch', branch],
+        ['Run URL', summary.run_url ? 'available' : 'pending']
+      ],
+      details: [
+        summary.run_url ? `Run URL: ${summary.run_url}` : 'Run URL not available yet.',
+        `Overall state: ${summary.overall_state || 'idle'}`,
+        `Discovered workflows: ${workflowCount}`,
+        gapCount ? `Coverage gaps: ${gapCount}` : 'No required CI coverage gaps detected.'
+      ],
+      artifacts: [
+        summary.run_url || 'No run URL yet.',
+        selectedWorkflow?.workflow_path || 'No workflow selected.',
+        'CI detail payload is captured in workspace notes.'
+      ],
+      notes: dashRoutineCiNotes?.textContent || (ciDetail ? JSON.stringify(ciDetail, null, 2) : baseNotes)
+    };
+  }
+  if (stage === 'evidence') {
+    return {
+      title: 'Evidence',
+      summary: 'Evidence export should leave the deck with artifact paths and integrity hints, not only a raw JSON blob.',
+      chips: [
+        { label: `Enabled: ${document.getElementById('dash-routine-export-evidence')?.checked ? 'yes' : 'no'}`, level: document.getElementById('dash-routine-export-evidence')?.checked ? 'warn' : 'neutral' },
+        { label: evidenceDetail?.path ? 'Artifact: ready' : 'Artifact: pending', level: evidenceDetail?.path ? 'ok' : 'neutral' },
+        { label: 'Integrity: explicit', level: 'neutral' }
+      ],
+      metrics: [
+        ['Artifact Path', evidenceDetail?.path || '-'],
+        ['Export', evidenceDetail?.ok ? 'success' : 'pending'],
+        ['Signed', 'follow-up verify']
+      ],
+      details: [
+        evidenceDetail?.path ? `Exported to ${evidenceDetail.path}` : 'No evidence bundle has been exported yet.',
+        evidenceDetail?.error ? `Latest error: ${evidenceDetail.error}` : 'Export runs through /api/evidence/export.',
+        'Use Evidence Integrity Verification below the dashboard for cryptographic verification.'
+      ],
+      artifacts: [
+        evidenceDetail?.path || 'No artifact path yet.',
+        'Transcript and workspace notes preserve the raw evidence response for audit.'
+      ],
+      notes: evidenceDetail ? JSON.stringify(evidenceDetail, null, 2) : baseNotes
+    };
+  }
+  return {
+    title: 'Reconcile',
+    summary: 'Reconcile compresses the run into operator language: what changed, what passed, what blocked, and what should happen next.',
+    chips: [
+      { label: `Last Result: ${dashRoutineWorkspaceState.lastResult}`, level: dashRoutineWorkspaceState.lastResult === 'success' ? 'ok' : (dashRoutineWorkspaceState.lastResult === 'failed' ? 'fail' : 'neutral') },
+      { label: `Timeline Entries: ${dashRoutineTrace.length}`, level: dashRoutineTrace.length ? 'ok' : 'neutral' },
+      { label: `Last Run: ${dashRoutineWorkspaceState.lastRunAt ? 'captured' : 'none'}`, level: dashRoutineWorkspaceState.lastRunAt ? 'ok' : 'neutral' }
+    ],
+    metrics: [
+      ['Result', dashRoutineWorkspaceState.lastResult],
+      ['Last Run', dashRoutineWorkspaceState.lastRunAt || '-'],
+      ['Steps Recorded', String(dashRoutineTrace.length)]
+    ],
+    details: [
+      dashRoutineWorkspaceState.lastResult === 'success' ? 'Routine completed without terminal failure.' : 'Routine has not completed successfully yet.',
+      failure ? `Last blocking stage: ${failure.stage}` : 'No blocking stage recorded.',
+      failure?.remediation ? `Next action: ${failure.remediation}` : 'Next action will appear when a stage blocks.'
+    ],
+    artifacts: [
+      evidenceDetail?.path || 'No evidence artifact recorded.',
+      ciDetail?.summary?.run_url || 'No CI run URL recorded.'
+    ],
+    notes: baseNotes
+  };
+}
+
+function routineRenderWorkspace() {
+  const stage = dashRoutineSelectedStage;
+  const vm = routineWorkspaceViewModel(stage);
+  if (dashRoutineWorkspaceTitle) dashRoutineWorkspaceTitle.textContent = vm.title;
+  if (dashRoutineWorkspaceSummary) dashRoutineWorkspaceSummary.textContent = vm.summary;
+  if (dashRoutineStageStatusChip) routineSetChip(dashRoutineStageStatusChip, `Workspace: ${vm.title}`, 'neutral');
+  if (dashRoutineWorkspaceChipRow) {
+    dashRoutineWorkspaceChipRow.innerHTML = (vm.chips || []).map((chip) => `<span class="chip ${chip.level || 'neutral'}">${routineEscapeHtml(chip.label)}</span>`).join('');
+  }
+  if (dashRoutineWorkspaceMetrics) {
+    dashRoutineWorkspaceMetrics.innerHTML = (vm.metrics || []).map(([label, value]) => `
+      <div class="routine-metric">
+        <span class="metric-label">${routineEscapeHtml(label)}</span>
+        <span class="metric-value">${routineEscapeHtml(value)}</span>
+      </div>
+    `).join('');
+  }
+  if (dashRoutineWorkspaceDetails) {
+    dashRoutineWorkspaceDetails.innerHTML = (vm.details || []).map((item) => `<li>${routineEscapeHtml(item)}</li>`).join('');
+  }
+  if (dashRoutineWorkspaceArtifacts) {
+    dashRoutineWorkspaceArtifacts.innerHTML = (vm.artifacts || []).map((item) => `<li>${routineEscapeHtml(item)}</li>`).join('');
+  }
+  if (dashRoutineWorkspaceNotes) dashRoutineWorkspaceNotes.textContent = vm.notes || 'Routine workspace ready.';
+  if (stage === 'multi' && dashRoutineWorkspaceState.multiSnapshot) {
+    routineRenderDag(dashRoutineWorkspaceState.multiSnapshot);
+  } else {
+    routineRenderDag(null);
+  }
+}
+
+function routineUpdateStageTabs() {
+  ROUTINE_STAGE_ORDER.forEach((stage) => {
+    const tab = routineStageTabEl(stage);
+    const stateEl = routineStageStateEl(stage);
+    if (!tab || !stateEl) return;
+    tab.setAttribute('aria-selected', stage === dashRoutineSelectedStage ? 'true' : 'false');
+    if (dashRoutineStagePanel) {
+      if (stage === dashRoutineSelectedStage) {
+        dashRoutineStagePanel.setAttribute('aria-labelledby', tab.id);
+      }
+    }
+    const fallback = stage === 'plan' ? 'preview' : 'idle';
+    const text = stateEl.textContent || fallback;
+    let level = 'neutral';
+    const lower = text.toLowerCase();
+    if (lower.includes('pass') || lower.includes('ready') || lower.includes('captured') || lower.includes('success')) level = 'ok';
+    else if (lower.includes('fail') || lower.includes('blocked')) level = 'fail';
+    else if (lower.includes('running') || lower.includes('preview')) level = 'warn';
+    tab.dataset.level = level;
+  });
+}
+
+function routineSetStageState(stage, text, level = 'neutral') {
+  const stateEl = routineStageStateEl(stage);
+  if (stateEl) stateEl.textContent = text;
+  const tab = routineStageTabEl(stage);
+  if (tab) tab.dataset.level = level;
+  routineUpdateStageTabs();
+}
+
+function routineSelectStage(stage) {
+  if (!ROUTINE_STAGE_ORDER.includes(stage)) return;
+  dashRoutineSelectedStage = stage;
+  routineUpdateStageTabs();
+  routineRenderWorkspace();
+  routineAnnounceStatus(`Routine workspace moved to ${ROUTINE_STAGE_LABELS[stage] || stage}.`);
+}
+
+function routineRecordFailure(entry) {
+  dashRoutineWorkspaceState.failure = entry ? {
+    stage: entry.stage,
+    summary: entry.summary,
+    remediation: entry.remediation,
+    detail: entry.detail
+  } : null;
+}
+
+async function routineLoadCiCatalog() {
+  const { branch } = routineReadBranchRemote();
+  const params = new URLSearchParams({ branch });
+  const res = await fetchJsonSafe(`/api/dashboard/ci/catalog?${params.toString()}`);
+  if (isErrorResponse(res)) {
+    dashRoutineWorkspaceState.ciCatalog = null;
+    return res;
+  }
+  dashRoutineWorkspaceState.ciCatalog = res;
+  const workflows = Array.isArray(res.workflows) ? res.workflows : [];
+  const current = dashRoutineWorkspaceState.ciSelectedWorkflowKey;
+  if (!current || !workflows.some((wf) => wf.key === current)) {
+    const preferred = workflows.find((wf) => wf.required_by_policy)
+      || workflows.find((wf) => (wf.key || '').toLowerCase() === 'ci.yml')
+      || workflows[0];
+    dashRoutineWorkspaceState.ciSelectedWorkflowKey = preferred?.key || '';
+  }
+  return res;
+}
+
+function routineCiWorkflowState(summary = {}, workflow = {}) {
+  const key = String(workflow.key || '').toLowerCase();
+  const name = String(workflow.workflow_name || '').toLowerCase();
+  if (key === 'docs.yml' || key === 'docs.yaml' || name.includes('docs')) {
+    return String(summary.docs_state || 'idle').toLowerCase();
+  }
+  if (key === 'ci.yml' || key === 'ci.yaml' || name.includes('ci')) {
+    return String(summary.overall_state || 'idle').toLowerCase();
+  }
+  return 'idle';
+}
+
+function routineCiJobState(summary = {}, workflow = {}, job = {}) {
+  const workflowKey = String(workflow.key || '').toLowerCase();
+  const jobId = String(job.id || '').toLowerCase();
+  if ((workflowKey === 'ci.yml' || workflowKey === 'ci.yaml') && jobId === 'rust') {
+    return String(summary.rust_state || 'idle').toLowerCase();
+  }
+  if ((workflowKey === 'ci.yml' || workflowKey === 'ci.yaml') && jobId === 'ui-smoke') {
+    return String(summary.ui_smoke_state || 'idle').toLowerCase();
+  }
+  if ((workflowKey === 'ci.yml' || workflowKey === 'ci.yaml') && jobId === 'packaging-parity') {
+    return String(summary.packaging_parity_state || 'idle').toLowerCase();
+  }
+  if ((workflowKey === 'docs.yml' || workflowKey === 'docs.yaml') && jobId === 'build') {
+    return String(summary.docs_state || 'idle').toLowerCase();
+  }
+  return 'idle';
+}
+
+function routineSelectCiWorkflow(workflowKey) {
+  dashRoutineWorkspaceState.ciSelectedWorkflowKey = String(workflowKey || '');
+  routineRenderCiObservatory(
+    dashRoutineWorkspaceState.ciDetail?.summary || {},
+    dashRoutineWorkspaceState.ciDetail || null
+  );
+  if (dashRoutineSelectedStage === 'ci') routineRenderWorkspace();
+}
+
+function routineRenderCiObservatory(summary = {}, detail = null) {
+  const catalog = dashRoutineWorkspaceState.ciCatalog || {};
+  const workflows = Array.isArray(catalog.workflows) ? catalog.workflows : [];
+  const missing = Array.isArray(catalog.missing) ? catalog.missing : [];
+  const selectedKey = dashRoutineWorkspaceState.ciSelectedWorkflowKey || workflows[0]?.key || '';
+  const selectedWorkflow = workflows.find((wf) => wf.key === selectedKey) || workflows[0] || null;
+
+  if (dashRoutineCiDynamicList) {
+    if (!workflows.length && !missing.length) {
+      dashRoutineCiDynamicList.innerHTML = `
+        <div class="routine-ci-item">
+          <div class="routine-ci-item-header">
+            <span class="routine-ci-item-label">No workflow data loaded</span>
+            <span class="chip neutral">Idle</span>
+          </div>
+          <div class="routine-ci-item-copy">Refresh CI to populate live GitHub Actions state for the selected branch.</div>
+        </div>
+      `;
+    } else {
+      const workflowHtml = workflows.map((workflow) => {
+        const workflowState = routineCiWorkflowState(summary, workflow);
+        const selected = selectedWorkflow && workflow.key === selectedWorkflow.key;
+        const jobRow = Array.isArray(workflow.jobs) && workflow.jobs.length
+          ? workflow.jobs.map((job) => {
+            const jobState = routineCiJobState(summary, workflow, job);
+            return `<span class="chip ${routineCiChipLevel(jobState)}">${routineEscapeHtml(job.label || job.id)}: ${routineEscapeHtml(jobState)}</span>`;
+          }).join(' ')
+          : '<span class="chip neutral">No jobs parsed</span>';
+        return `
+          <button type="button" class="routine-ci-item${selected ? ' selected' : ''}" onclick="routineSelectCiWorkflow('${routineEscapeHtml(workflow.key)}')" aria-pressed="${selected ? 'true' : 'false'}">
+            <div class="routine-ci-item-header">
+              <span class="routine-ci-item-label">${routineEscapeHtml(workflow.workflow_name || workflow.key)}</span>
+              <span class="chip ${routineCiChipLevel(workflowState)}">${routineEscapeHtml(workflowState)}</span>
+            </div>
+            <div class="routine-ci-item-meta">${routineEscapeHtml(workflow.workflow_path || workflow.key)} | triggers: ${routineEscapeHtml((workflow.trigger_events || []).join(', ') || 'manual')}</div>
+            <div class="routine-ci-item-copy">${routineEscapeHtml(workflow.policy_reason || 'Dynamic workflow discovery')}</div>
+            <div class="chip-row" style="margin:8px 0 0;">${jobRow}</div>
+          </button>
+        `;
+      }).join('');
+      const missingHtml = missing.map((gap) => `
+        <div class="routine-ci-item routine-ci-missing">
+          <div class="routine-ci-item-header">
+            <span class="routine-ci-item-label">${routineEscapeHtml(gap.label || gap.id)}</span>
+            <span class="chip ${gap.severity === 'high' ? 'fail' : 'warn'}">${routineEscapeHtml(gap.severity || 'warn')}</span>
+          </div>
+          <div class="routine-ci-item-meta">${routineEscapeHtml(gap.kind || 'gap')}${gap.workflow_key ? ` | ${routineEscapeHtml(gap.workflow_key)}` : ''}</div>
+          <div class="routine-ci-item-copy">${routineEscapeHtml(gap.remediation || 'Restore the missing CI contract element.')}</div>
+        </div>
+      `).join('');
+      dashRoutineCiDynamicList.innerHTML = workflowHtml + missingHtml;
+    }
+  }
+
+  if (dashRoutineCiPolicySummary) {
+    const basis = catalog.policy_basis || {};
+    const summaryBits = [
+      `Policy: ${basis.source || 'unknown'} v${basis.version ?? '-'}`,
+      `CI Stage: ${basis.ci_stage_enabled ? 'enabled' : 'disabled'}`,
+      `Required workflows: ${catalog.summary?.required_workflow_count ?? 0}`,
+      `Coverage gaps: ${catalog.summary?.gap_count ?? 0}`
+    ];
+    dashRoutineCiPolicySummary.textContent = summaryBits.join(' | ');
+  }
+
+  if (dashRoutineCiNotes) {
+    if (selectedWorkflow) {
+      const workflowState = routineCiWorkflowState(summary, selectedWorkflow);
+      const jobLines = (selectedWorkflow.jobs || []).map((job) => {
+        const jobState = routineCiJobState(summary, selectedWorkflow, job);
+        return `- ${job.label || job.id}: ${jobState}${job.required_by_policy ? ' [required]' : ''}`;
+      });
+      const lines = [
+        `Workflow: ${selectedWorkflow.workflow_name || selectedWorkflow.key}`,
+        `File: ${selectedWorkflow.workflow_path || selectedWorkflow.key}`,
+        `Status: ${workflowState}`,
+        `Triggers: ${(selectedWorkflow.trigger_events || []).join(', ') || 'manual'}`,
+        `Required by policy: ${selectedWorkflow.required_by_policy ? 'yes' : 'no'}`,
+        `Reason: ${selectedWorkflow.policy_reason || 'n/a'}`,
+        summary.run_url && (selectedWorkflow.key || '').toLowerCase() === 'ci.yml' ? `Run URL: ${summary.run_url}` : '',
+        jobLines.length ? 'Jobs:' : '',
+        ...jobLines
+      ].filter(Boolean);
+      if (missing.length) {
+        lines.push('', 'Coverage Gaps:');
+        missing.forEach((gap) => {
+          lines.push(`- ${gap.label || gap.id}: ${gap.remediation || 'restore the missing contract element'}`);
+        });
+      }
+      if (detail && selectedWorkflow.key && String(selectedWorkflow.key).toLowerCase() === 'ci.yml') {
+        lines.push('', `Latest CI detail captured for branch ${summary.branch || routineReadBranchRemote().branch}.`);
+      }
+      dashRoutineCiNotes.textContent = lines.join('\n');
+    } else if (detail) {
+      dashRoutineCiNotes.textContent = JSON.stringify(detail, null, 2);
+    } else if (summary && Object.keys(summary).length) {
+      dashRoutineCiNotes.textContent = JSON.stringify(summary, null, 2);
+    } else {
+      dashRoutineCiNotes.textContent = 'CI observatory ready.';
+    }
+  }
+}
+
+function routinePolicyModalSetStatus(value) {
+  if (dashRoutinePolicyModalStatus) {
+    dashRoutinePolicyModalStatus.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  }
+}
+
+function routinePolicyModalOpen() {
+  if (!dashRoutinePolicyModal) return;
+  dashRoutinePolicyModal.classList.add('active');
+  dashRoutinePolicyModal.setAttribute('aria-hidden', 'false');
+  routinePolicyModalLoad();
+}
+
+function routinePolicyModalClose() {
+  if (!dashRoutinePolicyModal) return;
+  dashRoutinePolicyModal.classList.remove('active');
+  dashRoutinePolicyModal.setAttribute('aria-hidden', 'true');
+}
+
+async function routinePolicyModalLoad() {
+  const loaded = await loadRoutinePolicyProfile();
+  if (dashRoutinePolicyEditor) {
+    dashRoutinePolicyEditor.value = JSON.stringify({
+      post_commit_profile: loaded.profile
+    }, null, 2);
+  }
+  routinePolicyModalSetStatus(`Loaded operator_routine policy (${loaded.source} v${loaded.version} [${loaded.status}])`);
+}
+
+async function routinePolicyModalSimulate() {
+  if (!dashRoutinePolicyEditor) return;
+  let policyJson;
+  try {
+    policyJson = JSON.parse(dashRoutinePolicyEditor.value);
+  } catch (err) {
+    routinePolicyModalSetStatus(`Invalid JSON: ${err.message}`);
+    return;
+  }
+  const res = await fetchJsonSafe('/api/settings/policy/operator_routine/simulate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ago_path: null, policy_json: policyJson })
+  });
+  if (isErrorResponse(res)) {
+    routinePolicyModalSetStatus(res);
+    return;
+  }
+  dashRoutinePolicySimulationId = res.evidence_id || '';
+  routinePolicyModalSetStatus(res);
+}
+
+async function routinePolicyModalActivate() {
+  if (!dashRoutinePolicySimulationId) {
+    routinePolicyModalSetStatus('Simulation evidence is required before activation.');
+    return;
+  }
+  const res = await fetchJsonSafe('/api/settings/policy/operator_routine/activate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ago_path: null, simulation_evidence_id: dashRoutinePolicySimulationId })
+  });
+  if (isErrorResponse(res)) {
+    routinePolicyModalSetStatus(res);
+    return;
+  }
+  dashRoutinePolicySimulationId = '';
+  routinePolicyModalSetStatus(res);
+  await dashLoadRoutine();
 }
 
 function routineCiChipLevel(state) {
@@ -4399,16 +5175,124 @@ function routineSetCiJobChips(summary = {}) {
   routineSetChip(dashRoutineCiPackagingChip, `Packaging: ${packagingState}`, routineCiChipLevel(packagingState));
 }
 
+async function dashRefreshCiStatus() {
+  const btn = document.querySelector('button[onclick="dashRefreshCiStatus()"]');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '...';
+  }
+  try {
+    routineSyncPushControls();
+    const catalogRes = await routineLoadCiCatalog();
+    if (isErrorResponse(catalogRes)) {
+      routineRenderCiObservatory({}, catalogRes);
+    }
+    const ciBranch = routineReadBranchRemote().branch;
+    const statusRes = await depRun('ci-status', { branch: ciBranch });
+    const statusInner = depEnvelopeInner(statusRes);
+    const statusSummary = statusInner && statusInner.summary && typeof statusInner.summary === 'object'
+      ? statusInner.summary
+      : null;
+    if (statusSummary) {
+      routineSetCiJobChips(statusSummary);
+      dashRoutineWorkspaceState.ciDetail = statusInner || statusRes;
+      routineRenderCiObservatory(statusSummary, statusInner || statusRes);
+      if (dashRoutineSelectedStage === 'ci') routineRenderWorkspace();
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Refresh';
+    }
+  }
+}
+
+async function dashRefreshCdStatus() {
+  const btn = document.querySelector('button[onclick="dashRefreshCdStatus()"]');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '...';
+  }
+  try {
+    routineRefreshPlanPreview();
+    await routineLoadResolveSnapshot();
+    await routineLoadMultiSnapshot();
+    await routineLoadCiCatalog();
+    routineRenderCiObservatory(
+      dashRoutineWorkspaceState.ciDetail?.summary || {},
+      dashRoutineWorkspaceState.ciDetail || null
+    );
+    routineRenderWorkspace();
+    await new Promise(r => setTimeout(r, 800)); 
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Refresh';
+    }
+  }
+}
+
+async function dashLoadRoutine() {
+  const btn = document.querySelector('button[onclick="dashLoadRoutine()"]');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+  }
+  try {
+    const loaded = await loadRoutinePolicyProfile();
+    routineApplyPolicyProfile(loaded);
+    await routineLoadResolveSnapshot();
+    await routineLoadCiCatalog();
+    const detail = document.getElementById('dash-routine-policy-detail');
+    if (detail) {
+      detail.textContent = JSON.stringify(loaded.profile, null, 2);
+    }
+    routineRenderCiObservatory(
+      dashRoutineWorkspaceState.ciDetail?.summary || {},
+      dashRoutineWorkspaceState.ciDetail || null
+    );
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Load Routine';
+    }
+  }
+}
+
+function dashToggleRoutinePolicyView() {
+  const view = document.getElementById('dash-routine-policy-view');
+  const detail = document.getElementById('dash-routine-policy-detail');
+  if (!view || !detail) return;
+  
+  if (view.style.display === 'none') {
+    if (!detail.textContent) {
+      loadRoutinePolicyProfile().then(loaded => {
+        detail.textContent = JSON.stringify(loaded.profile, null, 2);
+      });
+    }
+    view.style.display = 'block';
+  } else {
+    view.style.display = 'none';
+  }
+}
+
 function routineResetChips() {
   routineSetChip(dashRoutineScopeChip, 'Scope: idle', 'neutral');
   routineSetChip(dashRoutineMultiChip, 'Multi: idle', 'neutral');
   routineSetChip(dashRoutineGatesChip, 'Gates: idle', 'neutral');
   routineSetChip(dashRoutinePushChip, 'Push: idle', 'neutral');
-  routineSetChip(dashRoutineCiChip, 'CI: idle', 'neutral');
   routineSetChip(dashRoutineEvidenceChip, 'Evidence: idle', 'neutral');
-  routineSetCiJobChips();
+  routineSetCiJobChips({});
+  dashRoutineWorkspaceState.ciCatalog = null;
+  dashRoutineWorkspaceState.ciSelectedWorkflowKey = '';
+  routineRenderCiObservatory({});
   routineSetChip(dashRoutineProfileSourceChip, 'Profile: loading', 'neutral');
   routineSetChip(dashRoutineProfileStepsChip, 'Steps: -', 'neutral');
+  routineSetLastResult('idle', 'Last Result: idle');
+  ROUTINE_STAGE_ORDER.forEach((stage) => {
+    const defaultText = stage === 'plan' ? 'Preview' : 'Idle';
+    routineSetStageState(stage, defaultText, stage === 'plan' ? 'warn' : 'neutral');
+  });
 }
 
 function routineResetTimeline() {
@@ -4420,7 +5304,7 @@ function routineResetTimeline() {
 function routineRecord(stage, status, summary, detail = '', remediation = '', actionId = '', startedAt = 0) {
   const finishedAt = Date.now();
   const durationMs = startedAt > 0 ? Math.max(0, finishedAt - startedAt) : 0;
-  dashRoutineTrace.push({
+  const entry = {
     ts: new Date(finishedAt).toISOString(),
     stage,
     status,
@@ -4429,9 +5313,16 @@ function routineRecord(stage, status, summary, detail = '', remediation = '', ac
     remediation,
     actionId,
     durationMs
-  });
+  };
+  dashRoutineTrace.push(entry);
+  if (status === 'fail') routineRecordFailure(entry);
+  if (status === 'pass' && stage === 'Reconcile') routineRecordFailure(null);
+  dashRoutineWorkspaceState.lastRunAt = entry.ts;
   routineRenderTimeline();
   routineRenderActions();
+  if (dashRoutineSelectedStage === 'reconcile' || dashRoutineSelectedStage === routineStageKey(String(stage || '').toLowerCase())) {
+    routineRenderWorkspace();
+  }
 }
 
 function routineRenderTimeline() {
@@ -4535,6 +5426,11 @@ function parseMultiScopeFromRoutine() {
   };
 }
 
+function routineStageKey(stepName) {
+  if (stepName === 'scope') return 'resolve';
+  return String(stepName || '').toLowerCase();
+}
+
 function isDepStepPass(action, data) {
   const inner = (data && data.inner && typeof data.inner === 'object') ? data.inner : data;
   if (!inner) return false;
@@ -4562,6 +5458,7 @@ function routineWriteSummary(lines) {
     }
   }
   focusResultsForA11y(dashRoutineOut);
+  routineRenderWorkspace();
 }
 
 async function dashRunPostCommitRoutine() {
@@ -4571,14 +5468,34 @@ async function dashRunPostCommitRoutine() {
     dashRoutineRunBtn.disabled = true;
     dashRoutineRunBtn.textContent = 'Running...';
   }
+  routineSyncPushControls();
   routineResetChips();
   routineResetTimeline();
+  dashRoutineWorkspaceState = {
+    loaded: null,
+    active: null,
+    scope: parseMultiScopeFromRoutine(),
+    stats: null,
+    multiSnapshot: null,
+    gateDetail: null,
+    pushDetail: null,
+    ciDetail: null,
+    evidenceDetail: null,
+    lastResult: 'running',
+    lastRunAt: new Date().toISOString(),
+    failure: null
+  };
+  routineSetLastResult('running', 'Last Result: running');
+  routineSelectStage('resolve');
+  if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
+  routineAnnounceStatus('Post-Commit Routine started.');
   const lines = [];
   lines.push('Post-Commit Routine');
   lines.push(`Started: ${new Date().toISOString()}`);
   try {
     const loaded = await loadRoutinePolicyProfile();
     routineApplyPolicyProfile(loaded);
+    await routineLoadResolveSnapshot();
     const profile = loaded.profile;
     const profileDiff = routineProfileDiff(profile);
     lines.push(`Profile: ${loaded.source} v${loaded.version} [${loaded.status}]`);
@@ -4593,8 +5510,16 @@ async function dashRunPostCommitRoutine() {
     if (!includeSet.has('multi')) routineSetChip(dashRoutineMultiChip, 'Multi: off', 'neutral');
     if (!includeSet.has('gates')) routineSetChip(dashRoutineGatesChip, 'Gates: off', 'neutral');
     if (!includeSet.has('push')) routineSetChip(dashRoutinePushChip, 'Push: off', 'neutral');
-    if (!includeSet.has('ci')) routineSetChip(dashRoutineCiChip, 'CI: off', 'neutral');
     if (!includeSet.has('evidence')) routineSetChip(dashRoutineEvidenceChip, 'Evidence: off', 'neutral');
+    if (!includeSet.has('scope')) routineSetStageState('resolve', 'Off', 'neutral');
+    if (!includeSet.has('multi')) routineSetStageState('multi', 'Off', 'neutral');
+    if (!includeSet.has('gates')) routineSetStageState('gates', 'Off', 'neutral');
+    if (!includeSet.has('push')) routineSetStageState('push', 'Off', 'neutral');
+    if (!includeSet.has('ci')) routineSetStageState('ci', 'Off', 'neutral');
+    if (!includeSet.has('evidence')) routineSetStageState('evidence', 'Off', 'neutral');
+    routineSetStageState('plan', 'Ready', 'ok');
+    routineRefreshPlanPreview();
+    routineRenderWorkspace();
 
     const context = {
       active: null,
@@ -4605,14 +5530,20 @@ async function dashRunPostCommitRoutine() {
 
     for (const stepName of stepsToRun) {
       const stageStart = Date.now();
+      const stageKey = routineStageKey(stepName);
+      routineSelectStage(stageKey);
       if (stepName === 'scope') {
         routineSetChip(dashRoutineScopeChip, 'Scope: running', 'warn');
+        routineSetStageState('resolve', 'Running', 'warn');
         const active = await fetchJsonSafe('/api/agorg/active');
         if (!active || !active.ok || !active.active || !active.active.id) {
           routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
+          routineSetStageState('resolve', 'Blocked', 'fail');
           lines.push('Scope: FAIL (no active AGOrg)');
           lines.push('Remediation: open AGOrg tab and select active scope.');
           routineRecord('Scope', 'fail', 'No active AGOrg scope selected.', JSON.stringify(active || {}, null, 2), 'Open AGOrg tab and select active scope.', 'open_agorg', stageStart);
+          routineAnnounceAlert('Routine blocked: no active AGOrg scope selected.');
+          if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
           failed = true;
           if (profile.stop_on_fail) break;
           continue;
@@ -4620,9 +5551,12 @@ async function dashRunPostCommitRoutine() {
         const scope = parseMultiScopeFromRoutine();
         if (!scope.group && (!Array.isArray(scope.tags) || scope.tags.length === 0)) {
           routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
+          routineSetStageState('resolve', 'Blocked', 'fail');
           lines.push('Scope: FAIL (Group/Tags required)');
           lines.push('Remediation: set Group or Tags in the Post-Commit Routine card.');
           routineRecord('Scope', 'fail', 'Group/Tags selector missing.', JSON.stringify(scope, null, 2), 'Set Group or Tags in routine selector.', 'open_multi', stageStart);
+          routineAnnounceAlert('Routine blocked: group or tags selector missing.');
+          if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
           failed = true;
           if (profile.stop_on_fail) break;
           continue;
@@ -4634,9 +5568,12 @@ async function dashRunPostCommitRoutine() {
         const stats = await multiSelectorStats();
         if (!stats.ok || stats.filtered <= 0) {
           routineSetChip(dashRoutineScopeChip, 'Scope: fail', 'fail');
+          routineSetStageState('resolve', 'Blocked', 'fail');
           lines.push(`Scope: FAIL (${stats.error || 'no repos matched selector'})`);
           lines.push('Remediation: register AGO(s), then adjust Group/Tags selector.');
           routineRecord('Scope', 'fail', 'No repos matched scope selector.', JSON.stringify(stats, null, 2), 'Adjust Group/Tags to match registered AGOs.', 'open_multi', stageStart);
+          routineAnnounceAlert('Routine blocked: no repos matched the current selector.');
+          if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
           failed = true;
           if (profile.stop_on_fail) break;
           continue;
@@ -4644,18 +5581,27 @@ async function dashRunPostCommitRoutine() {
         context.active = active.active;
         context.scope = scope;
         context.stats = stats;
+        dashRoutineWorkspaceState.active = active.active;
+        dashRoutineWorkspaceState.scope = scope;
+        dashRoutineWorkspaceState.stats = stats;
         routineSetChip(dashRoutineScopeChip, `Scope: pass (${stats.filtered})`, 'ok');
+        routineSetStageState('resolve', 'Ready', 'ok');
         routineRecord('Scope', 'pass', `Matched ${stats.filtered}/${stats.inScope} repos in active AGOrg.`, JSON.stringify({ scope, stats, agorg: active.active }, null, 2), '', '', stageStart);
         lines.push(`Scope: PASS (AGOrg=${active.active.name}, matched=${stats.filtered}/${stats.inScope})`);
+        routineRefreshPlanPreview();
         continue;
       }
 
       if (stepName === 'multi') {
         routineSetChip(dashRoutineMultiChip, 'Multi: running', 'warn');
+        routineSetStageState('multi', 'Running', 'warn');
         if (!context.scope) {
           routineSetChip(dashRoutineMultiChip, 'Multi: fail', 'fail');
+          routineSetStageState('multi', 'Blocked', 'fail');
           lines.push('Multi: FAIL (scope stage not satisfied)');
           routineRecord('Multi', 'fail', 'Scope step must pass before multi flow.', '', 'Run Scope stage first or keep default step order.', 'open_multi', stageStart);
+          routineAnnounceAlert('Routine blocked: Multi cannot run before Resolve passes.');
+          if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
           failed = true;
           if (profile.stop_on_fail) break;
           continue;
@@ -4680,13 +5626,20 @@ async function dashRunPostCommitRoutine() {
         }
         if (!multiOk) {
           routineSetChip(dashRoutineMultiChip, 'Multi: fail', 'fail');
+          routineSetStageState('multi', 'Fail', 'fail');
           failed = true;
           if (profile.stop_on_fail) break;
           continue;
         }
-        const snap = multiActionLast && multiActionLast.data ? multiActionLast.data.multi_snapshot : null;
+        let snap = multiActionLast && multiActionLast.data ? multiActionLast.data.multi_snapshot : null;
+        if (!snap) {
+          const snapshotRes = await routineLoadMultiSnapshot();
+          if (snapshotRes && snapshotRes.ok) snap = snapshotRes;
+        }
         const repoCount = Array.isArray(snap?.repos) ? snap.repos.length : 0;
+        dashRoutineWorkspaceState.multiSnapshot = snap;
         routineSetChip(dashRoutineMultiChip, `Multi: pass (${repoCount})`, 'ok');
+        routineSetStageState('multi', `Ready (${repoCount})`, 'ok');
         routineRecord('Multi', 'pass', `Multi preview flow completed for ${repoCount} repos.`, JSON.stringify(snap || {}, null, 2), '', '', stageStart);
         lines.push(`Multi: PASS (repos=${repoCount})`);
         continue;
@@ -4694,6 +5647,7 @@ async function dashRunPostCommitRoutine() {
 
       if (stepName === 'gates') {
         routineSetChip(dashRoutineGatesChip, 'Gates: running', 'warn');
+        routineSetStageState('gates', 'Running', 'warn');
         const gateActions = ['policy', 'hook-policy', 'drift', 'gate'];
         const gateLabelMap = {
           'policy': 'Policy',
@@ -4707,16 +5661,22 @@ async function dashRunPostCommitRoutine() {
           const stepNo = i + 1;
           const gateLabel = gateLabelMap[action] || action;
           routineSetChip(dashRoutineGatesChip, `Gates: ${stepNo}/${gateActions.length} (${gateLabel})`, 'warn');
+          routineSetStageState('gates', `${stepNo}/${gateActions.length}`, 'warn');
           routineRecord('Gates', 'running', `Running ${gateLabel} (${stepNo}/${gateActions.length})...`, '', '', '', stageStart);
           const data = await depRun(action);
           if (!isDepStepPass(action, data)) {
             gatesOk = false;
+            dashRoutineWorkspaceState.gateDetail = depEnvelopeInner(data);
             routineSetChip(dashRoutineGatesChip, `Gates: fail (${gateLabel})`, 'fail');
+            routineSetStageState('gates', 'Blocked', 'fail');
             lines.push(`Gates: FAIL at ${action}`);
             lines.push('Remediation: inspect Dashboard gate output and retry.');
             routineRecord('Gates', 'fail', `${gateLabel} failed (${stepNo}/${gateActions.length}).`, JSON.stringify(data || {}, null, 2), 'Open Dashboard and run gate controls individually.', 'open_dashboard_gate', stageStart);
+            routineAnnounceAlert(`Routine blocked: ${gateLabel} failed.`);
+            if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
             break;
           }
+          dashRoutineWorkspaceState.gateDetail = depEnvelopeInner(data);
           routineRecord('Gates', 'pass', `${gateLabel} passed (${stepNo}/${gateActions.length}).`, '', '', '', stageStart);
         }
         if (!gatesOk) {
@@ -4725,6 +5685,7 @@ async function dashRunPostCommitRoutine() {
           continue;
         }
         routineSetChip(dashRoutineGatesChip, 'Gates: pass', 'ok');
+        routineSetStageState('gates', 'Ready', 'ok');
         routineRecord('Gates', 'pass', 'Policy/Hook/Drift/Gate all passed.', '', '', '', stageStart);
         lines.push('Gates: PASS');
         continue;
@@ -4734,35 +5695,50 @@ async function dashRunPostCommitRoutine() {
         const allowPush = !!document.getElementById('dash-routine-allow-push')?.checked;
         if (!allowPush) {
           routineSetChip(dashRoutinePushChip, 'Push: blocked', 'warn');
+          routineSetStageState('push', 'Blocked', 'fail');
           routineRecord('Push', 'warn', 'Push step skipped by toggle.', '', '', '', stageStart);
           lines.push('Push: BLOCKED (allow push step is disabled)');
           continue;
         }
         routineSetChip(dashRoutinePushChip, 'Push: running', 'warn');
-        const pushRes = await depRun('push');
+        routineSetStageState('push', 'Running', 'warn');
+        const { branch, remote } = routineReadBranchRemote();
+        const pushRes = await depRun('push', { branch, remote });
+        dashRoutineWorkspaceState.pushDetail = depEnvelopeInner(pushRes);
         if (!isDepStepPass('push', pushRes)) {
           routineSetChip(dashRoutinePushChip, 'Push: fail', 'fail');
+          routineSetStageState('push', 'Fail', 'fail');
           lines.push(`Push: FAIL (${pushRes?.error || pushRes?.inner?.error || 'unknown'})`);
           routineRecord('Push', 'fail', 'Push safe failed.', JSON.stringify(pushRes || {}, null, 2), 'Open push controls and inspect gate/push diagnostics.', 'open_push', stageStart);
+          routineAnnounceAlert('Routine blocked: push failed.');
+          if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
           failed = true;
           if (profile.stop_on_fail) break;
           continue;
         }
         routineSetChip(dashRoutinePushChip, 'Push: pass', 'ok');
+        routineSetStageState('push', 'Ready', 'ok');
         routineRecord('Push', 'pass', 'Push safe passed.', JSON.stringify(pushRes || {}, null, 2), '', '', stageStart);
         lines.push('Push: PASS');
         continue;
       }
 
       if (stepName === 'ci') {
-        routineSetChip(dashRoutineCiChip, 'CI: running', 'warn');
+        await routineLoadCiCatalog();
+        routineSetStageState('ci', 'Running', 'warn');
         routineSetCiJobChips({
           docs_state: 'running',
           rust_state: 'running',
           ui_smoke_state: 'running',
           packaging_parity_state: 'running'
         });
-        const ciBranch = document.getElementById('dash-push-branch')?.value || 'main';
+        routineRenderCiObservatory({
+          docs_state: 'running',
+          rust_state: 'running',
+          ui_smoke_state: 'running',
+          packaging_parity_state: 'running'
+        });
+        const ciBranch = routineReadBranchRemote().branch;
         let ciPollDone = false;
         let ciPollBusy = false;
         let ciLastSummary = null;
@@ -4778,12 +5754,8 @@ async function dashRunPostCommitRoutine() {
             if (statusSummary) {
               ciLastSummary = statusSummary;
               routineSetCiJobChips(statusSummary);
-              const overall = String(statusSummary.overall_state || '').toLowerCase();
-              if (overall === 'running') {
-                routineSetChip(dashRoutineCiChip, 'CI: running', 'warn');
-              } else if (overall === 'fail') {
-                routineSetChip(dashRoutineCiChip, 'CI: degraded', 'fail');
-              }
+              dashRoutineWorkspaceState.ciDetail = statusInner || statusRes;
+              routineRenderCiObservatory(statusSummary, statusInner || statusRes);
             }
           } finally {
             ciPollBusy = false;
@@ -4798,10 +5770,13 @@ async function dashRunPostCommitRoutine() {
         ciPollDone = true;
         clearInterval(ciPollTimer);
         const ciInner = depEnvelopeInner(ci);
+        dashRoutineWorkspaceState.ciDetail = ciInner || ci;
         if (!ciInner || !ciInner.ok) {
-          routineSetChip(dashRoutineCiChip, 'CI: fail', 'fail');
+          routineSetStageState('ci', 'Fail', 'fail');
           lines.push(`CI: FAIL (${ciInner?.error || ci?.error || 'watch failed'})`);
           routineRecord('CI', 'fail', 'GitHub Actions watch failed.', JSON.stringify(ciInner || ci || {}, null, 2), 'Inspect run URL and failing jobs in CI summary.', 'open_ci', stageStart);
+          routineAnnounceAlert('Routine blocked: CI watch failed.');
+          if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
           failed = true;
           if (profile.stop_on_fail) break;
           continue;
@@ -4811,7 +5786,8 @@ async function dashRunPostCommitRoutine() {
           routineSetCiJobChips(ciLastSummary);
         }
         const runUrl = ciSummary.run_url || '';
-        routineSetChip(dashRoutineCiChip, 'CI: pass', 'ok');
+        routineRenderCiObservatory(ciSummary, ciInner);
+        routineSetStageState('ci', runUrl ? 'Observed' : 'Ready', 'ok');
         routineRecord('CI', 'pass', 'GitHub Actions run completed successfully.', JSON.stringify(ciInner, null, 2), '', '', stageStart);
         lines.push(`CI: PASS (${ciSummary.workflow || 'workflow'})`);
         if (runUrl) lines.push(`CI Run: ${runUrl}`);
@@ -4822,34 +5798,52 @@ async function dashRunPostCommitRoutine() {
         const exportEvidence = !!document.getElementById('dash-routine-export-evidence')?.checked;
         if (!exportEvidence) {
           routineSetChip(dashRoutineEvidenceChip, 'Evidence: skipped', 'warn');
+          routineSetStageState('evidence', 'Skipped', 'warn');
           routineRecord('Evidence', 'warn', 'Evidence export skipped by toggle.', '', '', '', stageStart);
           lines.push('Evidence: SKIPPED (toggle disabled)');
           continue;
         }
         routineSetChip(dashRoutineEvidenceChip, 'Evidence: running', 'warn');
+        routineSetStageState('evidence', 'Running', 'warn');
         const ev = await dashExportEvidence();
+        dashRoutineWorkspaceState.evidenceDetail = ev;
         if (!ev || !ev.ok) {
           routineSetChip(dashRoutineEvidenceChip, 'Evidence: fail', 'fail');
+          routineSetStageState('evidence', 'Fail', 'fail');
           lines.push(`Evidence: FAIL (${ev?.error || 'export failed'})`);
           routineRecord('Evidence', 'fail', 'Evidence export failed.', JSON.stringify(ev || {}, null, 2), 'Use Export Evidence button directly and inspect output.', 'open_dashboard_gate', stageStart);
+          routineAnnounceAlert('Routine blocked: evidence export failed.');
+          if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
           failed = true;
           if (profile.stop_on_fail) break;
           continue;
         }
         routineSetChip(dashRoutineEvidenceChip, 'Evidence: pass', 'ok');
+        routineSetStageState('evidence', 'Ready', 'ok');
         routineRecord('Evidence', 'pass', `Evidence exported: ${ev.path || 'artifact generated'}.`, JSON.stringify(ev, null, 2), '', '', stageStart);
         lines.push(`Evidence: PASS (${ev.path || 'artifact exported'})`);
       }
     }
 
+    routineSelectStage('reconcile');
+    routineSetStageState('reconcile', failed ? 'Failed' : 'Success', failed ? 'fail' : 'ok');
     if (failed) {
       lines.push('Result: FAILED');
+      dashRoutineWorkspaceState.lastResult = 'failed';
+      routineSetLastResult('failed', 'Last Result: failed');
+      routineAnnounceAlert('Post-Commit Routine failed.');
       if (!profile.stop_on_fail) {
         lines.push('Mode: Continue-on-fail (profile stop_on_fail=false)');
       }
     } else {
       lines.push('Result: SUCCESS');
+      dashRoutineWorkspaceState.lastResult = 'success';
+      routineSetLastResult('success', 'Last Result: success');
+      routineRecordFailure(null);
+      routineAnnounceStatus('Post-Commit Routine completed successfully.');
     }
+    routineRecord('Reconcile', failed ? 'fail' : 'pass', failed ? 'Routine ended with blocking failure.' : 'Routine completed successfully.', '', dashRoutineWorkspaceState.failure?.remediation || '', '', 0);
+    dashRoutineWorkspaceState.lastRunAt = new Date().toISOString();
     routineWriteSummary(lines);
   } finally {
     dashRoutineRunning = false;
@@ -4857,6 +5851,8 @@ async function dashRunPostCommitRoutine() {
       dashRoutineRunBtn.disabled = false;
       dashRoutineRunBtn.textContent = 'Run Post-Commit Routine';
     }
+    routineRenderWorkspace();
+    if (dashRoutineOut) dashRoutineOut.focus();
   }
 }
 
@@ -5622,9 +6618,76 @@ async function bootUi() {
       if (evt.target === multiScopeModal) closeMultiScopeModal();
     });
   }
+  if (dashRoutinePolicyModal) {
+    dashRoutinePolicyModal.addEventListener('click', (evt) => {
+      if (evt.target === dashRoutinePolicyModal) routinePolicyModalClose();
+    });
+  }
+  ['dash-routine-group', 'dash-routine-tags', 'dash-routine-branch', 'dash-routine-remote'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const handler = () => {
+      if (id === 'dash-routine-branch' || id === 'dash-routine-remote') routineSyncPushControls();
+      dashRoutineWorkspaceState.scope = parseMultiScopeFromRoutine();
+      routineRefreshPlanPreview();
+      routineRenderWorkspace();
+      queueUiSessionSave();
+    };
+    el.addEventListener('change', handler);
+    el.addEventListener('input', handler);
+  });
+  ['dash-routine-allow-push', 'dash-routine-export-evidence'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      routineUpdateModeChip();
+      routineRefreshPlanPreview();
+      routineRenderWorkspace();
+      queueUiSessionSave();
+    });
+  });
+  ROUTINE_STAGE_ORDER.forEach((stage) => {
+    const tab = routineStageTabEl(stage);
+    if (!tab) return;
+    tab.addEventListener('keydown', (evt) => {
+      const currentIdx = ROUTINE_STAGE_ORDER.indexOf(stage);
+      if (evt.key === 'ArrowRight' || evt.key === 'ArrowLeft') {
+        evt.preventDefault();
+        const delta = evt.key === 'ArrowRight' ? 1 : -1;
+        const nextIdx = (currentIdx + delta + ROUTINE_STAGE_ORDER.length) % ROUTINE_STAGE_ORDER.length;
+        const nextStage = ROUTINE_STAGE_ORDER[nextIdx];
+        routineSelectStage(nextStage);
+        routineStageTabEl(nextStage)?.focus();
+        return;
+      }
+      if (evt.key === 'Home') {
+        evt.preventDefault();
+        routineSelectStage(ROUTINE_STAGE_ORDER[0]);
+        routineStageTabEl(ROUTINE_STAGE_ORDER[0])?.focus();
+        return;
+      }
+      if (evt.key === 'End') {
+        evt.preventDefault();
+        const lastStage = ROUTINE_STAGE_ORDER[ROUTINE_STAGE_ORDER.length - 1];
+        routineSelectStage(lastStage);
+        routineStageTabEl(lastStage)?.focus();
+        return;
+      }
+      if (evt.key === 'Enter' || evt.key === ' ') {
+        evt.preventDefault();
+        routineSelectStage(stage);
+      }
+    });
+  });
   restoreBranchLogLimit();
   refreshBranchPreviewState();
   branchRenderLog();
+  routineSyncPushControls();
+  routineResetChips();
+  routineRefreshPlanPreview();
+  routineRenderWorkspace();
+  routineUpdateStageTabs();
+  await dashLoadRoutine();
 }
 
 /* ==========================================================================
@@ -6909,8 +7972,9 @@ async function p5OrchestrateStep(domain, action, dryRun) {
     .filter(Boolean);
   const payload = { action, dry_run: dryRun };
   if (domain === 'dependency' && action === 'push') {
-    payload.branch = (document.getElementById('dash-push-branch').value || 'main').trim() || 'main';
-    payload.remote = (document.getElementById('dash-push-remote').value || 'origin').trim() || 'origin';
+    const { branch, remote } = routineReadBranchRemote();
+    payload.branch = branch;
+    payload.remote = remote;
   }
   if (domain === 'command') {
     const group = (document.getElementById('multi-group').value || document.getElementById('branch-matrix-group').value || '').trim();

@@ -194,6 +194,13 @@ Branch tab BC-2 workflow:
 
     - Oracle + Heal quick actions for fast triage and plan/repair loops.
     - Branch + Multi quick actions for cohort branch and status operations.
+    - `Post-Commit Routine` is now the primary Dashboard control deck for pilot-for-pilot flow:
+      - set `group/tags`, `branch`, `remote`, and mutation toggles directly in the card
+      - review `Resolve` and `Plan` before mutation
+      - run the routine from the deck instead of manually stitching Dashboard + Multi + Push controls
+      - use the stage workspace to inspect `Resolve`, `Plan`, `Multi`, `Gates`, `Push`, `CI`, `Evidence`, and `Reconcile`
+      - use `Continuous Integration Observatory` to inspect discovered workflow files/jobs from `.github/workflows`, current run posture, and missing required CI coverage
+      - use `Quick Edit Policy` in the card for dashboard-native `operator_routine` draft/simulate/activate flow
     - Temporary Components Inventory shows active bridge/shim state and exit criteria (`Refresh Inventory`).
     - Use `Run Checklist` for deterministic Wave H pass/fail gates.
     - Use `Export Inventory Artifact` to persist temporary-component evidence under `~/.pilot/reports/`.

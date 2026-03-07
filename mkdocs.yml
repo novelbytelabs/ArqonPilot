@@ -55,6 +55,7 @@ nav:
   - Operations & Support:
       - Operator Runbook: "operator-runbook.md"
       - Pilot-for-Pilot Control Plane Contract: "pilot-for-pilot-control-plane-contract.md"
+      - Post-Commit Routine Ultimate Redesign: "post_commit_routine_ultimate_redesign.md"
       - Troubleshooting: "troubleshooting.md"
       - Testing Strategy: "testing-strategy.md"
       - Tech Debt: "tech-debt.md"

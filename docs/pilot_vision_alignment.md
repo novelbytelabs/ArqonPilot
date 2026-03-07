@@ -639,12 +639,12 @@ For deeper understanding, refer to these authoritative documents:
 
 | Document | Location | Purpose |
 |----------|----------|---------|
-| Governed RSI Architecture | [`docs/rsi/governed_rsi.md`](../rsi/governed_rsi.md) | RSI framework and tier definitions |
-| Operator Model | [`docs/rsi/operator_model.md`](../rsi/operator_model.md) | SAM loop formalization |
-| Entropy Wall | [`docs/rsi/entropy_wall.md`](../rsi/entropy_wall.md) | Generator-Verifier Gap |
-| Arqon Organism | [`docs/polity/arqon_organism.md`](arqon_organism.md) | Organ system architecture |
-| Federation Constitution | [`docs/polity/federation_constitution.md`](federation_constitution.md) | Constitutional framework |
-| Arqon Vision | [`docs/arqon-vision.md`](../arqon-vision.md) | Invariant definitions |
+| Governed RSI Architecture | `docs/rsi/governed_rsi.md` | RSI framework and tier definitions |
+| Operator Model | `docs/rsi/operator_model.md` | SAM loop formalization |
+| Entropy Wall | `docs/rsi/entropy_wall.md` | Generator-Verifier Gap |
+| Arqon Organism | `docs/polity/arqon_organism.md` | Organ system architecture |
+| Federation Constitution | `docs/polity/federation_constitution.md` | Constitutional framework |
+| Arqon Vision | `docs/arqon-vision.md` | Invariant definitions |
 | Federated CI Program | [`docs/polity/project_plan_pilot_federated_ci_program.md`](project_plan_pilot_federated_ci_program.md) | Implementation program |
 
 ---

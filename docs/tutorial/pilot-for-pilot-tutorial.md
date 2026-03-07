@@ -86,24 +86,28 @@ Expected result:
 
 ## Step 4: Run the Safe Routine (UI + Gate)
 
-1. Go to **Multi** first and set selectors:
+1. Go to **Dashboard** and use the **Post-Commit Routine** card as the primary surface.
+2. Set:
      - **Group**: `core`
      - **Tags**: `pilot`
-2. Click the macro button:
-     - `List > Status > Order`
-3. Optional planning macro:
-     - `DAG > PR Plan`
-4. Review results in:
-     - Multi action output (default HTML summary),
-     - Macro telemetry window (expand/collapse, copy/clear).
-5. Go to **Dashboard**.
-6. In **System Status**, click in this order:
-     - `Policy`
-     - `Hook Policy`
-     - `Drift`
-     - `Gate`
-7. Review the output panel after each click.
-8. If all pass, run push workflow (`Push Safe` in UI, or terminal push routine if your branch flow requires it).
+     - **Branch**: `main`
+     - **Remote**: `origin`
+3. Review `Resolve` and `Plan` in the stage deck before executing.
+4. Click `Run Post-Commit Routine`.
+5. Watch the command deck progress through:
+     - `Resolve`
+     - `Plan`
+     - `Multi`
+     - `Gates`
+     - `Push`
+     - `CI`
+     - `Evidence`
+     - `Reconcile`
+6. Review outcomes in:
+     - stage workspace,
+     - run ledger,
+     - transcript panel.
+7. Only drop into **Multi**, **Dependencies**, or other specialist tabs if the routine blocks and the remediation CTA points there.
 
 Expected result:
 
@@ -175,8 +179,8 @@ This should pass before commit/push.
 2. AGOrg active in header chip.
 3. ArqonPilot registered in AGOrg Management -> REPO REGISTRY.
 4. `operator_routine` policy present/active.
-5. Multi selector set (group/tags) and `List > Status > Order` macro runs cleanly.
-6. Dashboard: Policy/Hook/Drift/Gate checked.
+5. Dashboard routine selector set (`group/tags/branch/remote`) and `Resolve` shows a non-zero cohort.
+6. Dashboard routine `Plan` and `Gates` resolve cleanly.
 7. `./scripts/prepush_gate.sh` passes.
 
 When all seven are true, you are in the correct Pilot-for-Pilot operating state.

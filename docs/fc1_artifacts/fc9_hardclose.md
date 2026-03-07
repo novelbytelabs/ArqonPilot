@@ -25,8 +25,8 @@
 **Evidence**:
 - Document: [`docs/migration-playbook.md`](../migration-playbook.md)
 - Scripts:
-  - [`scripts/migration_smoke_test.sh`](../../scripts/migration_smoke_test.sh) — validates clean/warm startup and data persistence
-  - [`scripts/release_readiness_check.sh`](../../scripts/release_readiness_check.sh) — gates all required checks
+  - `scripts/migration_smoke_test.sh` — validates clean/warm startup and data persistence
+  - `scripts/release_readiness_check.sh` — gates all required checks
 - Procedures for:
   - Binary rollback (git checkout + pip reinstall)
   - Database state rollback (pg_dump + restore)
@@ -97,4 +97,4 @@ The Federated CI/CD Program is complete.
 After independent audit, additional hardening/remediation evidence was captured to resolve
 regressions found after the initial FC-9 packet:
 
-- [`docs/fc1_artifacts/fc9_post_audit_remediation_2026-03-03.md`](./fc9_post_audit_remediation_2026-03-03.md)
+- [`fc9_post_audit_remediation_2026-03-03.md`](./fc9_post_audit_remediation_2026-03-03.md)

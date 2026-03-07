@@ -7,7 +7,7 @@
 
 ### 1. Command Allowlist + Mutation Scope Controls
 
-Implemented in [`crates/pilot/src/governance/model.rs`](crates/pilot/src/governance/model.rs):
+Implemented in `crates/pilot/src/governance/model.rs`:
 
 - `CommandCategory` enum: Read, BranchCreate, BranchModify, BranchDestroy, Policy, Release, Admin
 - `CommandAllowlist` struct: enabled_categories, blocked_commands, confirmation_required
@@ -16,7 +16,7 @@ Implemented in [`crates/pilot/src/governance/model.rs`](crates/pilot/src/governa
 
 ### 2. Protected-Branch Typed Confirmations
 
-Enhanced in [`crates/pilot/src/governance/eval.rs`](crates/pilot/src/governance/eval.rs):
+Enhanced in `crates/pilot/src/governance/eval.rs`:
 
 - `required_confirmation()` function now considers:
   - Prune operations (lifecycle policy)
@@ -27,7 +27,7 @@ Enhanced in [`crates/pilot/src/governance/eval.rs`](crates/pilot/src/governance/
 
 ### 3. Secrets-Safe Logging
 
-Implemented in [`crates/pilot/src/governance/eval.rs`](crates/pilot/src/governance/eval.rs):
+Implemented in `crates/pilot/src/governance/eval.rs`:
 
 - `redact_secrets()` function: redacts patterns from evidence/logs
 - Default redaction patterns:

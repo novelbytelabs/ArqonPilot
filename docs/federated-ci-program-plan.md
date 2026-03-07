@@ -143,9 +143,9 @@ Program wave status (authoritative):
 9. FC-9: HARD-CLOSED (2026-03-03)
 
 Hard-close evidence:
-- [`docs/fc1_artifacts/fc9_hardclose.md`](docs/fc1_artifacts/fc9_hardclose.md)
+- [`fc1_artifacts/fc9_hardclose.md`](fc1_artifacts/fc9_hardclose.md)
 - Post-audit remediation packet:
-  - [`docs/fc1_artifacts/fc9_post_audit_remediation_2026-03-03.md`](docs/fc1_artifacts/fc9_post_audit_remediation_2026-03-03.md)
+  - [`fc1_artifacts/fc9_post_audit_remediation_2026-03-03.md`](fc1_artifacts/fc9_post_audit_remediation_2026-03-03.md)
 
 Immediate directive:
 

@@ -367,11 +367,11 @@ For deeper understanding, refer to these authoritative documents:
 | Document | Purpose |
 |----------|---------|
 | [`pilot_vision_alignment.md`](pilot_vision_alignment.md) | Detailed RSI framework and tier definitions |
-| [`governed_rsi.md`](../../Arqon/docs/rsi/governed_rsi.md) | RSI architecture and theory |
-| [`operator_model.md`](../../Arqon/docs/rsi/operator_model.md) | SAM loop formalization |
-| [`entropy_wall.md`](../../Arqon/docs/rsi/entropy_wall.md) | Generator-Verifier Gap |
-| [`arqon_organism.md`](../../Arqon/docs/polity/arqon_organism.md) | Organ system architecture |
-| [`vision_and_mission.md`](../../Arqon/docs/polity/vision_and_mission.md) | Arqon-wide vision |
+| `Arqon/docs/rsi/governed_rsi.md` | RSI architecture and theory |
+| `Arqon/docs/rsi/operator_model.md` | SAM loop formalization |
+| `Arqon/docs/rsi/entropy_wall.md` | Generator-Verifier Gap |
+| `Arqon/docs/polity/arqon_organism.md` | Organ system architecture |
+| `Arqon/docs/polity/vision_and_mission.md` | Arqon-wide vision |
 
 ---
 

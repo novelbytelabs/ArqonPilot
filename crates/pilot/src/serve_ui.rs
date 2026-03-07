@@ -747,6 +747,11 @@ pub async fn run_ui_server(cfg: UiConfig) -> Result<()> {
         .route("/api/multi/selectors", get(api_multi_selectors))
         .route("/api/multi/registry_stats", get(api_multi_registry_stats))
         .route("/api/multi/snapshot", get(api_multi_snapshot))
+        .route(
+            "/api/dashboard/routine/resolve",
+            get(api_dashboard_routine_resolve),
+        )
+        .route("/api/dashboard/ci/catalog", get(api_dashboard_ci_catalog))
         .route("/api/branch/run", post(api_branch_run))
         .route(
             "/api/branch/conflict-radar",
@@ -1431,6 +1436,48 @@ struct MultiSnapshotQuery {
     tags: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct DashboardRoutineResolveQuery {
+    group: Option<String>,
+    tags: Option<String>,
+    branch: Option<String>,
+    remote: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DashboardCiCatalogQuery {
+    branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct DashboardCiJobCatalogEntry {
+    id: String,
+    label: String,
+    required_by_policy: bool,
+    policy_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct DashboardCiWorkflowCatalogEntry {
+    key: String,
+    workflow_name: String,
+    workflow_path: String,
+    trigger_events: Vec<String>,
+    required_by_policy: bool,
+    policy_reason: String,
+    jobs: Vec<DashboardCiJobCatalogEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct DashboardCiRequirementGap {
+    kind: String,
+    id: String,
+    label: String,
+    workflow_key: Option<String>,
+    severity: String,
+    remediation: String,
+}
+
 async fn api_multi_selectors(State(state): State<Arc<UiState>>) -> Response {
     let scope = match require_active_scope(&state).await {
         Ok(v) => v,
@@ -1699,6 +1746,642 @@ async fn api_multi_snapshot(
         })).collect::<Vec<_>>(),
         "order": order,
         "dag": dag
+    }))
+    .into_response()
+}
+
+fn dashboard_routine_guard_summary(report: &PolicyEvalReport) -> Value {
+    let violations = report
+        .violations
+        .iter()
+        .map(|item| {
+            json!({
+                "rule": item.rule,
+                "level": item.level,
+                "input": item.input,
+                "violation": item.violation,
+                "remediation": item.fix_suggestion,
+                "source_name": item.policy_source_name,
+            })
+        })
+        .collect::<Vec<_>>();
+    let warnings = report
+        .warnings
+        .iter()
+        .map(|item| {
+            json!({
+                "rule": item.rule,
+                "level": item.level,
+                "input": item.input,
+                "violation": item.violation,
+                "remediation": item.fix_suggestion,
+                "source_name": item.policy_source_name,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "blocked": report.blocked,
+        "violation_count": report.violations.len(),
+        "warning_count": report.warnings.len(),
+        "violations": violations,
+        "warnings": warnings,
+    })
+}
+
+async fn api_dashboard_routine_resolve(
+    State(state): State<Arc<UiState>>,
+    Query(query): Query<DashboardRoutineResolveQuery>,
+) -> Response {
+    let active_scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let registry = match branch_registry() {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let roots = scope_roots(&active_scope);
+    let tags = parse_csv_tags(query.tags.as_deref());
+    let filter = multi::RepoFilter {
+        group: query.group.clone().filter(|s| !s.trim().is_empty()),
+        tags: tags.clone(),
+    };
+    let branch = query
+        .branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("main")
+        .to_string();
+    let remote = query
+        .remote
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("origin")
+        .to_string();
+
+    let repos = match registry.list_repos(&filter) {
+        Ok(v) => v
+            .into_iter()
+            .filter(|repo| path_in_any_root(&canonicalize_path_lossy(&repo.path), &roots))
+            .collect::<Vec<_>>(),
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    let statuses = match registry.status_repos(&filter) {
+        Ok(v) => v
+            .into_iter()
+            .filter(|status| path_in_any_root(&canonicalize_path_lossy(&status.repo.path), &roots))
+            .collect::<Vec<_>>(),
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    let in_scope_total = match registry.list_repos(&multi::RepoFilter::default()) {
+        Ok(v) => v
+            .into_iter()
+            .filter(|repo| path_in_any_root(&canonicalize_path_lossy(&repo.path), &roots))
+            .count(),
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err.to_string()),
+    };
+    let clean_count = statuses
+        .iter()
+        .filter(|s| s.git_clean.unwrap_or(false))
+        .count();
+    let dirty_count = statuses.len().saturating_sub(clean_count);
+    let initialized_count = statuses.iter().filter(|s| s.pilot_initialized).count();
+    let oracle_ready_count = statuses.iter().filter(|s| s.oracle_ready).count();
+
+    let cwd = match std::env::current_dir() {
+        Ok(v) => canonicalize_path_lossy(&v),
+        Err(err) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &format!("Cannot resolve current working directory: {err}"),
+            )
+        }
+    };
+    let cwd_for_lookup = cwd.display().to_string();
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    let effective = gov_store
+        .get_effective_policy_record(active_scope.id, cwd_for_lookup.as_str(), "operator_routine")
+        .await
+        .ok()
+        .flatten();
+    let (policy_json, policy_source, policy_version, policy_status) = match effective {
+        Some((record, source_name)) => (
+            record.policy_json,
+            source_name,
+            record.version,
+            record.status,
+        ),
+        None => (
+            serde_json::to_value(OperatorRoutinePolicy::default()).unwrap_or(json!({})),
+            "Built-in default".to_string(),
+            0,
+            "fallback".to_string(),
+        ),
+    };
+    let policy: OperatorRoutinePolicy = serde_json::from_value(policy_json.clone())
+        .unwrap_or_else(|_| OperatorRoutinePolicy::default());
+    let profile = policy.post_commit_profile.clone();
+    let steps = profile
+        .step_order
+        .iter()
+        .map(|step| match step.as_str() {
+            "scope" => "resolve".to_string(),
+            other => other.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let req = DependencyActionRequest {
+        action: "push".to_string(),
+        json: false,
+        branch: Some(branch.clone()),
+        remote: Some(remote.clone()),
+        preflight_steps: Some(vec![
+            "policy".to_string(),
+            "hook".to_string(),
+            "drift".to_string(),
+            "gate".to_string(),
+        ]),
+        label: None,
+        bundle_path: None,
+        ci_timeout_sec: None,
+    };
+    let guard = evaluate_operator_routine_guard(&state, &active_scope, "push", &req)
+        .await
+        .unwrap_or_default();
+    let mut plan_stages = vec!["resolve".to_string(), "plan".to_string()];
+    plan_stages.extend(steps.clone());
+    if !plan_stages.iter().any(|step| step == "reconcile") {
+        plan_stages.push("reconcile".to_string());
+    }
+
+    Json(json!({
+        "ok": true,
+        "active_scope": {
+            "id": active_scope.id,
+            "name": active_scope.name,
+            "root_path": active_scope.root_path,
+        },
+        "selector": {
+            "group": filter.group,
+            "tags": filter.tags,
+        },
+        "cohort": {
+            "filtered_count": repos.len(),
+            "in_scope_total": in_scope_total,
+            "clean_count": clean_count,
+            "dirty_count": dirty_count,
+            "pilot_initialized_count": initialized_count,
+            "oracle_ready_count": oracle_ready_count,
+        },
+        "repos": repos.iter().map(|repo| {
+            json!({
+                "name": repo.name,
+                "path": repo.path.display().to_string(),
+                "group": repo.group_name,
+                "tags": repo.tags,
+            })
+        }).collect::<Vec<_>>(),
+        "statuses": statuses.iter().map(|status| {
+            json!({
+                "name": status.repo.name,
+                "path": status.repo.path.display().to_string(),
+                "clean": status.git_clean,
+                "pilot_initialized": status.pilot_initialized,
+                "oracle_ready": status.oracle_ready,
+                "git_repo": status.is_git_repo,
+                "exists": status.path_exists,
+            })
+        }).collect::<Vec<_>>(),
+        "resolved_policy": {
+            "source": policy_source,
+            "version": policy_version,
+            "status": policy_status,
+            "profile": profile.clone(),
+            "policy_json": policy_json,
+        },
+        "plan": {
+            "stages": plan_stages,
+            "mutation_boundary": {
+                "push_enabled": profile.include_push_step,
+                "evidence_enabled": profile.export_evidence_step,
+                "stop_on_fail": profile.stop_on_fail,
+            },
+            "push_target": {
+                "branch": branch,
+                "remote": remote,
+            },
+        },
+        "guard_summary": dashboard_routine_guard_summary(&guard),
+    }))
+    .into_response()
+}
+
+fn workflow_policy_expectation(
+    file_name: &str,
+    workflow_name: &str,
+    ci_enabled: bool,
+) -> (bool, String) {
+    if !ci_enabled {
+        return (
+            false,
+            "Routine policy does not require the CI stage in the active post-commit profile."
+                .to_string(),
+        );
+    }
+    let lower_file = file_name.to_ascii_lowercase();
+    let lower_name = workflow_name.to_ascii_lowercase();
+    if lower_file == "ci.yml"
+        || lower_file == "ci.yaml"
+        || (lower_name.contains("pilot") && lower_name.contains("ci"))
+    {
+        return (
+            true,
+            "Core CI workflow required by the ArqonPilot frozen CI contract.".to_string(),
+        );
+    }
+    if lower_file == "docs.yml" || lower_file == "docs.yaml" || lower_name.contains("docs") {
+        return (
+            true,
+            "Docs workflow required to preserve Dashboard and MkDocs publication parity."
+                .to_string(),
+        );
+    }
+    if lower_file == "pypi.yml" || lower_file == "pypi.yaml" || lower_name.contains("pypi") {
+        return (
+            false,
+            "PyPI publish workflow is release-scoped and observed as optional during routine CI."
+                .to_string(),
+        );
+    }
+    (
+        false,
+        "Workflow is discovered dynamically but not currently mandated by routine CI policy."
+            .to_string(),
+    )
+}
+
+fn workflow_job_policy_expectation(
+    workflow_key: &str,
+    job_id: &str,
+    ci_enabled: bool,
+) -> (bool, String) {
+    if !ci_enabled {
+        return (
+            false,
+            "Routine policy currently disables the CI stage.".to_string(),
+        );
+    }
+    if workflow_key == "ci.yml" {
+        match job_id {
+            "rust" => {
+                return (
+                    true,
+                    "Rust lane is required by the frozen 1.82.0 core validation contract."
+                        .to_string(),
+                )
+            }
+            "ui-smoke" => {
+                return (
+                    true,
+                    "UI smoke lane is required to protect the operator surface contract."
+                        .to_string(),
+                )
+            }
+            "packaging-parity" => {
+                return (
+                    true,
+                    "Packaging parity lane is required to enforce the scoped 1.88.0 exception."
+                        .to_string(),
+                )
+            }
+            _ => {}
+        }
+    }
+    if workflow_key == "docs.yml" && job_id == "build" {
+        return (
+            true,
+            "Docs build job is required to keep MkDocs artifacts valid and publishable."
+                .to_string(),
+        );
+    }
+    (
+        false,
+        "Job is discovered dynamically and remains informational unless CI policy expands."
+            .to_string(),
+    )
+}
+
+fn parse_workflow_catalog_entry(
+    path: &Path,
+    content: &str,
+    ci_enabled: bool,
+) -> DashboardCiWorkflowCatalogEntry {
+    let workflow_key = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("workflow")
+        .to_string();
+    let workflow_path = path.to_string_lossy().to_string();
+    let mut workflow_name = workflow_key.clone();
+    let mut trigger_events = Vec::<String>::new();
+    let mut jobs: Vec<DashboardCiJobCatalogEntry> = Vec::new();
+    let mut in_on = false;
+    let mut in_jobs = false;
+    let mut current_job_idx = None::<usize>;
+
+    for raw in content.lines() {
+        let line = raw.trim_end();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = raw.chars().take_while(|c| *c == ' ').count();
+
+        if indent == 0 && trimmed.starts_with("name:") {
+            let value = trimmed.trim_start_matches("name:").trim();
+            if !value.is_empty() {
+                workflow_name = value.trim_matches('"').trim_matches('\'').to_string();
+            }
+            continue;
+        }
+
+        if indent == 0 && trimmed.starts_with("on:") {
+            in_on = true;
+            in_jobs = false;
+            current_job_idx = None;
+            let inline = trimmed.trim_start_matches("on:").trim();
+            if inline.starts_with('[') && inline.ends_with(']') {
+                let inner = inline.trim_matches(|c| c == '[' || c == ']');
+                for item in inner.split(',') {
+                    let event = item.trim().trim_matches('"').trim_matches('\'');
+                    if !event.is_empty() && !trigger_events.iter().any(|v| v == event) {
+                        trigger_events.push(event.to_string());
+                    }
+                }
+            } else if !inline.is_empty() && inline != "{}" {
+                let event = inline.trim_matches('"').trim_matches('\'');
+                if !event.is_empty() && !trigger_events.iter().any(|v| v == event) {
+                    trigger_events.push(event.to_string());
+                }
+            }
+            continue;
+        }
+
+        if indent == 0 && trimmed.starts_with("jobs:") {
+            in_jobs = true;
+            in_on = false;
+            current_job_idx = None;
+            continue;
+        }
+
+        if indent == 0 {
+            in_on = false;
+            in_jobs = false;
+            current_job_idx = None;
+        }
+
+        if in_on && indent == 2 && trimmed.ends_with(':') {
+            let key = trimmed.trim_end_matches(':').trim();
+            if !key.is_empty() && !trigger_events.iter().any(|v| v == key) {
+                trigger_events.push(key.to_string());
+            }
+            continue;
+        }
+
+        if in_jobs {
+            if indent == 2 && trimmed.ends_with(':') && !trimmed.starts_with('-') {
+                let job_id = trimmed.trim_end_matches(':').trim();
+                if !job_id.is_empty() {
+                    let (required_by_policy, policy_reason) =
+                        workflow_job_policy_expectation(&workflow_key, job_id, ci_enabled);
+                    jobs.push(DashboardCiJobCatalogEntry {
+                        id: job_id.to_string(),
+                        label: job_id.to_string(),
+                        required_by_policy,
+                        policy_reason,
+                    });
+                    current_job_idx = jobs.len().checked_sub(1);
+                }
+                continue;
+            }
+            if indent >= 4 && trimmed.starts_with("name:") {
+                if let Some(idx) = current_job_idx {
+                    let value = trimmed.trim_start_matches("name:").trim();
+                    if !value.is_empty() {
+                        jobs[idx].label = value.trim_matches('"').trim_matches('\'').to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    let (required_by_policy, policy_reason) =
+        workflow_policy_expectation(&workflow_key, &workflow_name, ci_enabled);
+    DashboardCiWorkflowCatalogEntry {
+        key: workflow_key,
+        workflow_name,
+        workflow_path,
+        trigger_events,
+        required_by_policy,
+        policy_reason,
+        jobs,
+    }
+}
+
+fn discover_dashboard_ci_catalog(
+    workflows_dir: &Path,
+    policy: &OperatorRoutinePolicy,
+) -> std::result::Result<
+    (
+        Vec<DashboardCiWorkflowCatalogEntry>,
+        Vec<DashboardCiRequirementGap>,
+        bool,
+    ),
+    String,
+> {
+    let ci_enabled = policy
+        .post_commit_profile
+        .step_order
+        .iter()
+        .any(|step| step.eq_ignore_ascii_case("ci"));
+    let mut workflow_paths = fs::read_dir(workflows_dir)
+        .map_err(|err| {
+            format!(
+                "Cannot read workflow directory '{}': {err}",
+                workflows_dir.display()
+            )
+        })?
+        .filter_map(|entry| entry.ok().map(|item| item.path()))
+        .filter(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| matches!(ext, "yml" | "yaml"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    workflow_paths.sort();
+
+    let mut workflows = Vec::new();
+    for path in workflow_paths {
+        let content = fs::read_to_string(&path)
+            .map_err(|err| format!("Cannot read workflow file '{}': {err}", path.display()))?;
+        workflows.push(parse_workflow_catalog_entry(&path, &content, ci_enabled));
+    }
+
+    let mut gaps = Vec::<DashboardCiRequirementGap>::new();
+    if ci_enabled {
+        let has_ci = workflows
+            .iter()
+            .any(|wf| wf.key == "ci.yml" || wf.key == "ci.yaml");
+        if !has_ci {
+            gaps.push(DashboardCiRequirementGap {
+                kind: "workflow".to_string(),
+                id: "ci.yml".to_string(),
+                label: "Core CI workflow".to_string(),
+                workflow_key: None,
+                severity: "high".to_string(),
+                remediation: "Restore .github/workflows/ci.yml to satisfy the frozen CI contract."
+                    .to_string(),
+            });
+        }
+        let has_docs = workflows
+            .iter()
+            .any(|wf| wf.key == "docs.yml" || wf.key == "docs.yaml");
+        if !has_docs {
+            gaps.push(DashboardCiRequirementGap {
+                kind: "workflow".to_string(),
+                id: "docs.yml".to_string(),
+                label: "Docs workflow".to_string(),
+                workflow_key: None,
+                severity: "medium".to_string(),
+                remediation:
+                    "Restore .github/workflows/docs.yml to preserve MkDocs validation and deployment."
+                        .to_string(),
+            });
+        }
+        if let Some(ci_workflow) = workflows
+            .iter()
+            .find(|wf| wf.key == "ci.yml" || wf.key == "ci.yaml")
+        {
+            for required_job in ["rust", "ui-smoke", "packaging-parity"] {
+                if !ci_workflow.jobs.iter().any(|job| job.id == required_job) {
+                    gaps.push(DashboardCiRequirementGap {
+                        kind: "job".to_string(),
+                        id: required_job.to_string(),
+                        label: format!("Required CI job '{required_job}'"),
+                        workflow_key: Some(ci_workflow.key.clone()),
+                        severity: "high".to_string(),
+                        remediation: format!(
+                            "Add job '{required_job}' back to {} to satisfy the frozen CI contract.",
+                            ci_workflow.key
+                        ),
+                    });
+                }
+            }
+        }
+        if let Some(docs_workflow) = workflows
+            .iter()
+            .find(|wf| wf.key == "docs.yml" || wf.key == "docs.yaml")
+        {
+            if !docs_workflow.jobs.iter().any(|job| job.id == "build") {
+                gaps.push(DashboardCiRequirementGap {
+                    kind: "job".to_string(),
+                    id: "build".to_string(),
+                    label: "Required docs build job".to_string(),
+                    workflow_key: Some(docs_workflow.key.clone()),
+                    severity: "medium".to_string(),
+                    remediation: format!(
+                        "Restore the 'build' job in {} so MkDocs validation remains enforced.",
+                        docs_workflow.key
+                    ),
+                });
+            }
+        }
+    }
+
+    Ok((workflows, gaps, ci_enabled))
+}
+
+async fn api_dashboard_ci_catalog(
+    State(state): State<Arc<UiState>>,
+    Query(query): Query<DashboardCiCatalogQuery>,
+) -> Response {
+    let active_scope = match require_active_scope(&state).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let branch = query
+        .branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("main")
+        .to_string();
+    let cwd = match std::env::current_dir() {
+        Ok(v) => canonicalize_path_lossy(&v),
+        Err(err) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &format!("Cannot resolve current working directory: {err}"),
+            )
+        }
+    };
+    let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    let cwd_for_lookup = cwd.display().to_string();
+    let effective = gov_store
+        .get_effective_policy_record(active_scope.id, cwd_for_lookup.as_str(), "operator_routine")
+        .await
+        .ok()
+        .flatten();
+    let (policy_json, policy_source, policy_version, policy_status) = match effective {
+        Some((record, source_name)) => (
+            record.policy_json,
+            source_name,
+            record.version,
+            record.status,
+        ),
+        None => (
+            serde_json::to_value(OperatorRoutinePolicy::default()).unwrap_or(json!({})),
+            "Built-in default".to_string(),
+            0,
+            "fallback".to_string(),
+        ),
+    };
+    let policy: OperatorRoutinePolicy =
+        serde_json::from_value(policy_json).unwrap_or_else(|_| OperatorRoutinePolicy::default());
+    let workflows_dir = cwd.join(".github").join("workflows");
+    let (workflows, gaps, ci_enabled) = match discover_dashboard_ci_catalog(&workflows_dir, &policy)
+    {
+        Ok(v) => v,
+        Err(err) => return error_response(StatusCode::BAD_REQUEST, &err),
+    };
+
+    Json(json!({
+        "ok": true,
+        "branch": branch,
+        "workflows_dir": workflows_dir.display().to_string(),
+        "policy_basis": {
+            "source": policy_source,
+            "version": policy_version,
+            "status": policy_status,
+            "ci_stage_enabled": ci_enabled,
+            "step_order": policy.post_commit_profile.step_order,
+            "frozen_contract": {
+                "core_rust": "1.82.0",
+                "packaging_rust": "1.88.0",
+                "protobuf": "4.25.8",
+                "protoc": "25.8"
+            }
+        },
+        "summary": {
+            "workflow_count": workflows.len(),
+            "required_workflow_count": workflows.iter().filter(|wf| wf.required_by_policy).count(),
+            "required_job_count": workflows.iter().flat_map(|wf| wf.jobs.iter()).filter(|job| job.required_by_policy).count(),
+            "gap_count": gaps.len()
+        },
+        "workflows": workflows,
+        "missing": gaps
     }))
     .into_response()
 }
@@ -5288,19 +5971,23 @@ mod tests {
         append_codex_contract_record, canonical_branch_payload, classify_bus_health,
         classify_db_health, command_request_from_orchestrate_payload, command_requires_cwd_scope,
         command_requires_multi_selector, command_requires_mutation, command_scope_required,
-        default_policy_json_for_kind, dependency_action_requires_cwd_scope,
-        dependency_action_scope_required, filter_prune_paths_by_class, is_bus_recoverable_error,
+        dashboard_routine_guard_summary, default_policy_json_for_kind,
+        dependency_action_requires_cwd_scope, dependency_action_scope_required,
+        discover_dashboard_ci_catalog, filter_prune_paths_by_class, is_bus_recoverable_error,
         is_safe_cli_token, load_persisted_codex_contracts, normalize_orchestrate_payload,
         orchestrate_is_preview, parse_gh_status_summary, parse_gh_watch_summary,
         parse_json_from_mixed_output, parse_release_collect_evidence_path,
-        payload_has_multi_selector, preflight_steps_from_action, prune_expired_branch_previews,
-        resolve_branch_targets, sanitize_payload_for_local_exec, scope_filter_rows,
-        should_prefer_local_command, should_use_local_command_fallback, sorted_unique_ids,
-        sorted_unique_tags, with_event_agorg_scope, BranchMatrixRow, BranchPreviewRecord,
-        BranchRunRequest, CodexContractRecord,
+        parse_workflow_catalog_entry, payload_has_multi_selector, preflight_steps_from_action,
+        prune_expired_branch_previews, resolve_branch_targets, sanitize_payload_for_local_exec,
+        scope_filter_rows, should_prefer_local_command, should_use_local_command_fallback,
+        sorted_unique_ids, sorted_unique_tags, with_event_agorg_scope, BranchMatrixRow,
+        BranchPreviewRecord, BranchRunRequest, CodexContractRecord, INDEX_HTML,
     };
     use crate::agorg::{AgorgReconcileIssue, AgorgReconcileReport};
     use crate::db_runtime::DbStatus;
+    use crate::governance::model::{
+        EnforcementLevel, OperatorRoutinePolicy, PolicyEvalReport, PolicyEvalResult,
+    };
     use pilot_multi as multi;
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -5623,6 +6310,141 @@ run_url:               https://github.com/novelbytelabs/ArqonPilot/actions/runs/
             .expect("operator_routine default policy should be a JSON object");
         assert!(!obj.is_empty());
         assert!(default_policy_json_for_kind("not-a-kind").is_err());
+    }
+
+    #[test]
+    fn test_dashboard_routine_deck_markup_is_present() {
+        assert!(INDEX_HTML.contains("dash-routine-stage-resolve-tab"));
+        assert!(INDEX_HTML.contains("dash-routine-stage-panel"));
+        assert!(INDEX_HTML.contains("dash-routine-policy-modal"));
+        assert!(INDEX_HTML.contains("dash-routine-branch"));
+        assert!(INDEX_HTML.contains("dash-routine-ci-observatory-title"));
+        assert!(INDEX_HTML.contains("dash-routine-ci-policy-summary"));
+    }
+
+    #[test]
+    fn test_dashboard_routine_guard_summary_counts() {
+        let mut report = PolicyEvalReport::default();
+        report.blocked = true;
+        report.violations.push(PolicyEvalResult {
+            rule: "operator_routine.ORT-001".to_string(),
+            level: EnforcementLevel::Block,
+            input: "push".to_string(),
+            violation: "Active scope missing".to_string(),
+            fix_suggestion: "Select an AGOrg".to_string(),
+            policy_source: "ui".to_string(),
+            policy_source_id: Some(Uuid::nil()),
+            policy_source_name: "UI".to_string(),
+            override_available: false,
+        });
+        report.warnings.push(PolicyEvalResult {
+            rule: "operator_routine.ORT-005".to_string(),
+            level: EnforcementLevel::Warn,
+            input: "main".to_string(),
+            violation: "Branch warning".to_string(),
+            fix_suggestion: "Use an allowed branch".to_string(),
+            policy_source: "ui".to_string(),
+            policy_source_id: Some(Uuid::nil()),
+            policy_source_name: "UI".to_string(),
+            override_available: false,
+        });
+        let summary = dashboard_routine_guard_summary(&report);
+        assert_eq!(summary.get("blocked").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            summary.get("violation_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            summary.get("warning_count").and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn test_parse_workflow_catalog_entry_extracts_name_triggers_and_jobs() {
+        let entry = parse_workflow_catalog_entry(
+            PathBuf::from(".github/workflows/ci.yml").as_path(),
+            r#"
+name: ArqonPilot CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+  ui-smoke:
+    runs-on: ubuntu-latest
+"#,
+            true,
+        );
+        assert_eq!(entry.key, "ci.yml");
+        assert_eq!(entry.workflow_name, "ArqonPilot CI");
+        assert!(entry.trigger_events.iter().any(|event| event == "push"));
+        assert!(entry
+            .trigger_events
+            .iter()
+            .any(|event| event == "pull_request"));
+        assert_eq!(entry.jobs.len(), 2);
+        assert_eq!(entry.jobs[0].id, "rust");
+        assert_eq!(entry.jobs[0].label, "Rust");
+        assert!(entry.jobs[0].required_by_policy);
+        assert_eq!(entry.jobs[1].id, "ui-smoke");
+    }
+
+    #[test]
+    fn test_discover_dashboard_ci_catalog_reports_missing_required_jobs() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("pilot-ci-catalog-{unique}"));
+        let workflows_dir = root.join(".github").join("workflows");
+        fs::create_dir_all(&workflows_dir).expect("workflow dir should exist");
+        fs::write(
+            workflows_dir.join("ci.yml"),
+            r#"
+name: ArqonPilot CI
+on:
+  push:
+    branches: [main]
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+"#,
+        )
+        .expect("ci.yml should be written");
+        fs::write(
+            workflows_dir.join("docs.yml"),
+            r#"
+name: Docs (MkDocs)
+on:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+"#,
+        )
+        .expect("docs.yml should be written");
+
+        let policy = OperatorRoutinePolicy::default();
+        let (workflows, gaps, ci_enabled) =
+            discover_dashboard_ci_catalog(&workflows_dir, &policy).expect("catalog should parse");
+
+        assert!(ci_enabled);
+        assert_eq!(workflows.len(), 2);
+        assert!(gaps.iter().any(|gap| gap.id == "ui-smoke"));
+        assert!(gaps.iter().any(|gap| gap.id == "packaging-parity"));
+        assert!(!gaps
+            .iter()
+            .any(|gap| gap.id == "build" && gap.kind == "job"));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -7888,7 +8710,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .chip.running { border-color: rgba(255, 215, 0, 0.26); background: rgba(255, 215, 0, 0.06); color: var(--accent); }
     .routine-jobs-row {
       margin-top: -4px;
-      margin-bottom: 14px;
+      margin-bottom: 0;
       border: 1px solid rgba(0, 245, 255, 0.16);
       border-radius: 8px;
       padding: 8px;
@@ -7902,6 +8724,508 @@ const INDEX_HTML: &str = r#"<!doctype html>
       text-transform: uppercase;
       color: var(--dim);
       margin-bottom: 6px;
+    }
+    .routine-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.9fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .routine-main-column,
+    .routine-side-column {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-width: 0;
+    }
+    .routine-meta-strip,
+    .routine-setup-strip {
+      border: 1px solid rgba(0, 245, 255, 0.16);
+      border-radius: 10px;
+      padding: 12px;
+      background: linear-gradient(135deg, rgba(0,245,255,0.04), rgba(95,111,255,0.06));
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+    }
+    .routine-meta-grid,
+    .routine-setup-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 12px;
+    }
+    .routine-control {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }
+    .routine-control label {
+      font-size: 0.68rem;
+      color: var(--dim);
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .routine-toggle-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+    .routine-inline-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .routine-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      color: #a8b9e3;
+    }
+    .routine-toggle input {
+      width: auto;
+      margin: 0;
+    }
+    .routine-command-deck {
+      border: 1px solid rgba(95,111,255,0.18);
+      border-radius: 12px;
+      padding: 14px;
+      background:
+        radial-gradient(circle at top left, rgba(0,245,255,0.08), transparent 42%),
+        linear-gradient(145deg, rgba(5, 11, 18, 0.9), rgba(10, 18, 30, 0.82));
+      position: relative;
+      overflow: hidden;
+    }
+    .routine-command-deck::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, transparent 0, rgba(255,255,255,0.03) 50%, transparent 100%);
+      opacity: 0.4;
+      pointer-events: none;
+    }
+    .routine-command-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+      margin-bottom: 12px;
+    }
+    .routine-command-header h4,
+    .routine-stage-card h4,
+    .routine-ci-card h4,
+    .routine-ledger-card h4,
+    .routine-transcript-card h4 {
+      margin: 0;
+      font-size: 0.72rem;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--primary);
+    }
+    .routine-command-spine {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+    .routine-stage-tab {
+      position: relative;
+      border: 1px solid rgba(120, 141, 255, 0.24);
+      background: rgba(255,255,255,0.03);
+      color: var(--muted);
+      border-radius: 12px;
+      padding: 10px 8px 11px;
+      text-align: left;
+      cursor: pointer;
+      min-height: 76px;
+      transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s, background 0.2s;
+    }
+    .routine-stage-tab:hover {
+      border-color: rgba(0,245,255,0.42);
+      transform: translateY(-1px);
+      box-shadow: 0 10px 20px rgba(0,0,0,0.16);
+    }
+    .routine-stage-tab[aria-selected="true"] {
+      border-color: rgba(0,245,255,0.48);
+      background: linear-gradient(135deg, rgba(0,245,255,0.12), rgba(95,111,255,0.12));
+      color: var(--text);
+      box-shadow: 0 0 0 1px rgba(0,245,255,0.16), 0 14px 26px rgba(0,0,0,0.2);
+    }
+    .routine-stage-tab::after {
+      content: '';
+      position: absolute;
+      left: calc(100% + 5px);
+      top: 50%;
+      width: 10px;
+      height: 1px;
+      background: linear-gradient(90deg, rgba(0,245,255,0.3), rgba(95,111,255,0.2));
+      pointer-events: none;
+    }
+    .routine-stage-tab:last-child::after {
+      display: none;
+    }
+    .routine-stage-tab .routine-stage-kicker {
+      display: block;
+      font-size: 0.62rem;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--dim);
+      margin-bottom: 8px;
+    }
+    .routine-stage-tab .routine-stage-name {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: inherit;
+      margin-bottom: 10px;
+    }
+    .routine-stage-tab .routine-stage-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.68rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: inherit;
+    }
+    .routine-stage-tab .routine-stage-state::before {
+      content: '';
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: currentColor;
+      opacity: 0.7;
+      box-shadow: 0 0 8px currentColor;
+    }
+    .routine-stage-tab[data-level="ok"] .routine-stage-state { color: var(--primary); }
+    .routine-stage-tab[data-level="warn"] .routine-stage-state { color: var(--accent); }
+    .routine-stage-tab[data-level="fail"] .routine-stage-state { color: var(--rose); }
+    .routine-stage-tab[data-level="neutral"] .routine-stage-state { color: var(--muted); }
+    .routine-section-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+      gap: 14px;
+      align-items: start;
+    }
+    .routine-stage-card,
+    .routine-ci-card,
+    .routine-ledger-card,
+    .routine-transcript-card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      background: rgba(255,255,255,0.02);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+      min-width: 0;
+    }
+    .routine-stage-summary {
+      font-size: 0.86rem;
+      color: var(--text);
+      line-height: 1.55;
+    }
+    .routine-metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .routine-metric {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(0,0,0,0.18);
+    }
+    .routine-metric .metric-label {
+      display: block;
+      font-size: 0.64rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--dim);
+      font-family: 'JetBrains Mono', monospace;
+      margin-bottom: 6px;
+    }
+    .routine-metric .metric-value {
+      display: block;
+      font-size: 0.88rem;
+      color: var(--text);
+      word-break: break-word;
+    }
+    .routine-subgrid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .routine-detail-box {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(0,0,0,0.18);
+      min-width: 0;
+    }
+    .routine-detail-box h5 {
+      margin: 0 0 8px;
+      font-size: 0.68rem;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+    }
+    .routine-detail-box ul {
+      margin: 0;
+      padding-left: 18px;
+      color: #b7c6ec;
+      font-size: 0.78rem;
+      line-height: 1.5;
+    }
+    .routine-detail-box li + li {
+      margin-top: 5px;
+    }
+    .routine-stage-notes {
+      margin-top: 12px;
+      border: 1px solid rgba(95,111,255,0.18);
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(8, 12, 20, 0.76);
+      font-size: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: #a8b9e3;
+      min-height: 120px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .routine-dag-view {
+      margin-top: 12px;
+      border: 1px solid rgba(0,245,255,0.16);
+      border-radius: 12px;
+      padding: 12px;
+      background:
+        radial-gradient(circle at top left, rgba(0,245,255,0.08), transparent 38%),
+        radial-gradient(circle at bottom right, rgba(95,111,255,0.10), transparent 42%),
+        rgba(4, 10, 18, 0.88);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+      display: none;
+    }
+    .routine-dag-view.active {
+      display: block;
+    }
+    .routine-dag-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .routine-dag-lanes {
+      display: grid;
+      gap: 10px;
+    }
+    .routine-dag-lane {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 10px;
+      background: linear-gradient(135deg, rgba(0,0,0,0.22), rgba(8, 16, 28, 0.45));
+      position: relative;
+      overflow: hidden;
+    }
+    .routine-dag-lane::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: linear-gradient(180deg, rgba(0,245,255,0.9), rgba(95,111,255,0.5));
+      box-shadow: 0 0 14px rgba(0,245,255,0.32);
+    }
+    .routine-dag-lane-title {
+      font-size: 0.66rem;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 8px;
+      padding-left: 8px;
+    }
+    .routine-dag-nodes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding-left: 8px;
+    }
+    .routine-dag-node {
+      min-width: 132px;
+      border: 1px solid rgba(0,245,255,0.18);
+      border-radius: 10px;
+      padding: 9px 10px;
+      background: rgba(255,255,255,0.03);
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.02), 0 10px 18px rgba(0,0,0,0.18);
+    }
+    .routine-dag-node-name {
+      font-size: 0.78rem;
+      color: var(--text);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+    .routine-dag-node-meta {
+      font-size: 0.65rem;
+      color: #a8b9e3;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.04em;
+    }
+    .routine-dag-empty {
+      border: 1px dashed rgba(255,255,255,0.14);
+      border-radius: 10px;
+      padding: 12px;
+      color: var(--dim);
+      font-size: 0.78rem;
+      text-align: center;
+    }
+    .routine-ci-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .routine-ci-dynamic-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 240px;
+      overflow: auto;
+    }
+    .routine-ci-item {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(0,0,0,0.2);
+      width: 100%;
+      text-align: left;
+      color: inherit;
+      font: inherit;
+    }
+    button.routine-ci-item {
+      cursor: pointer;
+    }
+    button.routine-ci-item:hover,
+    button.routine-ci-item:focus-visible,
+    .routine-ci-item.selected {
+      border-color: rgba(0,245,255,0.35);
+      background: linear-gradient(135deg, rgba(0,245,255,0.08), rgba(95,111,255,0.08));
+      outline: none;
+      box-shadow: 0 0 0 1px rgba(0,245,255,0.14);
+    }
+    .routine-ci-missing {
+      border-style: dashed;
+      border-color: rgba(255,215,0,0.22);
+      background: rgba(255,215,0,0.04);
+    }
+    .routine-ci-item-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 6px;
+      font-size: 0.75rem;
+    }
+    .routine-ci-item-label {
+      color: var(--text);
+      font-weight: 600;
+    }
+    .routine-ci-item-meta {
+      color: var(--dim);
+      font-size: 0.68rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .routine-ci-item-copy {
+      color: #a8b9e3;
+      font-size: 0.72rem;
+      line-height: 1.5;
+    }
+    .routine-transcript-card pre,
+    #dash-routine-policy-detail {
+      max-height: none;
+    }
+    .routine-policy-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .routine-modal-box {
+      max-width: 880px;
+    }
+    .routine-modal-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+    }
+    .routine-modal-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+      gap: 14px;
+      min-width: 0;
+    }
+    .routine-modal-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .routine-modal-side {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .routine-modal-status {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(0,0,0,0.18);
+      min-height: 120px;
+      font-size: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: #b7c6ec;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    @media (max-width: 1180px) {
+      .routine-shell,
+      .routine-section-grid,
+      .routine-modal-grid {
+        grid-template-columns: 1fr;
+      }
+      .routine-command-spine {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 860px) {
+      .routine-meta-grid,
+      .routine-setup-grid,
+      .routine-metric-grid,
+      .routine-subgrid {
+        grid-template-columns: 1fr;
+      }
+      .routine-command-spine {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .routine-stage-tab::after {
+        display: none;
+      }
     }
     .tl-item {
       border: 1px solid var(--border);
@@ -8264,52 +9588,268 @@ const INDEX_HTML: &str = r#"<!doctype html>
     </div>
     <div class="card" style="grid-column: 1 / -1;">
       <h3>Post-Commit Routine (Pilot for Pilot)</h3>
-      <div class="chip-row">
-        <span id="dash-routine-profile-source-chip" class="chip neutral" tabindex="0" role="status">Profile: loading</span>
-        <span id="dash-routine-profile-steps-chip" class="chip neutral" tabindex="0" role="status">Steps: -</span>
-      </div>
-      <div class="chip-row">
-        <span id="dash-routine-scope-chip" class="chip neutral" tabindex="0" role="status">Scope: idle</span>
-        <span id="dash-routine-multi-chip" class="chip neutral" tabindex="0" role="status">Multi: idle</span>
-        <span id="dash-routine-gates-chip" class="chip neutral" tabindex="0" role="status">Gates: idle</span>
-        <span id="dash-routine-push-chip" class="chip neutral" tabindex="0" role="status">Push: idle</span>
-        <span id="dash-routine-ci-chip" class="chip neutral" tabindex="0" role="status">CI: idle</span>
-        <span id="dash-routine-evidence-chip" class="chip neutral" tabindex="0" role="status">Evidence: idle</span>
-      </div>
-      <div class="routine-jobs-row" id="dash-routine-ci-jobs-row" role="status" aria-live="polite">
-        <div class="routine-jobs-title">Live CI Jobs</div>
-        <div class="chip-row" style="margin:0;">
-          <span id="dash-routine-ci-docs-chip" class="chip neutral" tabindex="0" role="status">Docs: idle</span>
-          <span id="dash-routine-ci-rust-chip" class="chip neutral" tabindex="0" role="status">Rust: idle</span>
-          <span id="dash-routine-ci-ui-chip" class="chip neutral" tabindex="0" role="status">UI Smoke: idle</span>
-          <span id="dash-routine-ci-packaging-chip" class="chip neutral" tabindex="0" role="status">Packaging: idle</span>
+      <div id="dash-routine-live-status" class="sr-only" role="status" aria-live="polite"></div>
+      <div id="dash-routine-live-alert" class="sr-only" role="alert" aria-live="assertive"></div>
+      <div class="routine-shell">
+        <div class="routine-main-column">
+          <div class="routine-meta-strip">
+            <div class="routine-inline-actions" style="justify-content: space-between; margin-bottom: 12px;">
+              <div class="chip-row" style="margin-bottom:0;">
+                <span id="dash-routine-profile-source-chip" class="chip neutral" tabindex="0" role="status">Profile: loading</span>
+                <span id="dash-routine-profile-steps-chip" class="chip neutral" tabindex="0" role="status">Steps: -</span>
+                <span id="dash-routine-mode-chip" class="chip neutral" tabindex="0" role="status">Mode: safe</span>
+                <span id="dash-routine-last-result-chip" class="chip neutral" tabindex="0" role="status">Last Result: idle</span>
+              </div>
+              <div class="routine-inline-actions">
+                <button class="action-btn" onclick="dashLoadRoutine()" style="padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; font-size: 0.7rem; color: var(--dim); cursor: pointer;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--dim)'">Load Routine</button>
+                <button class="action-btn" onclick="dashToggleRoutinePolicyView()" style="padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; font-size: 0.7rem; color: var(--dim); cursor: pointer;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--dim)'">View Policy</button>
+                <button class="action-btn" onclick="routinePolicyModalOpen()" style="padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; font-size: 0.7rem; color: var(--dim); cursor: pointer;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--dim)'">Quick Edit Policy</button>
+              </div>
+            </div>
+            <div class="routine-meta-grid">
+              <div class="routine-control">
+                <label for="dash-routine-scope-summary">Resolved Scope</label>
+                <input id="dash-routine-scope-summary" value="Awaiting resolve stage" readonly />
+              </div>
+              <div class="routine-control">
+                <label for="dash-routine-plan-summary">Execution Plan</label>
+                <input id="dash-routine-plan-summary" value="Resolve to compute plan" readonly />
+              </div>
+            </div>
+          </div>
+          <div id="dash-routine-policy-view" style="display: none; max-height: 300px; overflow: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 6px; padding: 10px;">
+            <pre id="dash-routine-policy-detail" style="font-size: 0.75rem; margin: 0; color: #a8b9e3;"></pre>
+          </div>
+          <div class="routine-command-deck">
+            <div class="routine-command-header">
+              <div>
+                <h4>Constitutional Development Deck</h4>
+                <div class="helper">Resolve scope, visualize the plan, execute the governed path, and reconcile the resulting state without leaving Dashboard.</div>
+              </div>
+              <span class="chip neutral" id="dash-routine-stage-status-chip" role="status" aria-live="polite">Workspace: Resolve</span>
+            </div>
+            <div id="dash-routine-stage-tabs" class="routine-command-spine" role="tablist" aria-label="Routine stages">
+              <button id="dash-routine-stage-resolve-tab" class="routine-stage-tab" type="button" role="tab" aria-selected="true" aria-controls="dash-routine-stage-panel" data-stage="resolve" data-level="neutral" onclick="routineSelectStage('resolve')">
+                <span class="routine-stage-kicker">Phase 01</span>
+                <span class="routine-stage-name">Resolve</span>
+                <span class="routine-stage-state" id="dash-routine-stage-resolve-state">Idle</span>
+              </button>
+              <button id="dash-routine-stage-plan-tab" class="routine-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="dash-routine-stage-panel" data-stage="plan" data-level="neutral" onclick="routineSelectStage('plan')">
+                <span class="routine-stage-kicker">Phase 02</span>
+                <span class="routine-stage-name">Plan</span>
+                <span class="routine-stage-state" id="dash-routine-stage-plan-state">Idle</span>
+              </button>
+              <button id="dash-routine-stage-multi-tab" class="routine-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="dash-routine-stage-panel" data-stage="multi" data-level="neutral" onclick="routineSelectStage('multi')">
+                <span class="routine-stage-kicker">Phase 03</span>
+                <span class="routine-stage-name">Multi</span>
+                <span class="routine-stage-state" id="dash-routine-stage-multi-state">Idle</span>
+              </button>
+              <button id="dash-routine-stage-gates-tab" class="routine-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="dash-routine-stage-panel" data-stage="gates" data-level="neutral" onclick="routineSelectStage('gates')">
+                <span class="routine-stage-kicker">Phase 04</span>
+                <span class="routine-stage-name">Gates</span>
+                <span class="routine-stage-state" id="dash-routine-stage-gates-state">Idle</span>
+              </button>
+              <button id="dash-routine-stage-push-tab" class="routine-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="dash-routine-stage-panel" data-stage="push" data-level="neutral" onclick="routineSelectStage('push')">
+                <span class="routine-stage-kicker">Phase 05</span>
+                <span class="routine-stage-name">Push</span>
+                <span class="routine-stage-state" id="dash-routine-stage-push-state">Idle</span>
+              </button>
+              <button id="dash-routine-stage-ci-tab" class="routine-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="dash-routine-stage-panel" data-stage="ci" data-level="neutral" onclick="routineSelectStage('ci')">
+                <span class="routine-stage-kicker">Phase 06</span>
+                <span class="routine-stage-name">CI</span>
+                <span class="routine-stage-state" id="dash-routine-stage-ci-state">Idle</span>
+              </button>
+              <button id="dash-routine-stage-evidence-tab" class="routine-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="dash-routine-stage-panel" data-stage="evidence" data-level="neutral" onclick="routineSelectStage('evidence')">
+                <span class="routine-stage-kicker">Phase 07</span>
+                <span class="routine-stage-name">Evidence</span>
+                <span class="routine-stage-state" id="dash-routine-stage-evidence-state">Idle</span>
+              </button>
+              <button id="dash-routine-stage-reconcile-tab" class="routine-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="dash-routine-stage-panel" data-stage="reconcile" data-level="neutral" onclick="routineSelectStage('reconcile')">
+                <span class="routine-stage-kicker">Phase 08</span>
+                <span class="routine-stage-name">Reconcile</span>
+                <span class="routine-stage-state" id="dash-routine-stage-reconcile-state">Idle</span>
+              </button>
+            </div>
+          </div>
+          <div class="routine-setup-strip">
+            <div class="routine-setup-grid">
+              <div class="routine-control">
+                <label for="dash-routine-group">Cohort Group</label>
+                <input id="dash-routine-group" placeholder="group (e.g. core)" value="core" />
+              </div>
+              <div class="routine-control">
+                <label for="dash-routine-tags">Cohort Tags</label>
+                <input id="dash-routine-tags" placeholder="tags (comma-separated, e.g. pilot)" value="pilot" />
+              </div>
+              <div class="routine-control">
+                <label for="dash-routine-branch">Push Branch</label>
+                <input id="dash-routine-branch" placeholder="main" value="main" />
+              </div>
+              <div class="routine-control">
+                <label for="dash-routine-remote">Push Remote</label>
+                <input id="dash-routine-remote" placeholder="origin" value="origin" />
+              </div>
+            </div>
+            <div class="routine-toggle-row" style="margin-top: 12px;">
+              <label class="routine-toggle">
+                <input id="dash-routine-allow-push" type="checkbox" checked />
+                Allow push step
+              </label>
+              <label class="routine-toggle">
+                <input id="dash-routine-export-evidence" type="checkbox" />
+                Export evidence
+              </label>
+              <button id="dash-routine-run-btn" class="btn" onclick="dashRunPostCommitRoutine()">Run Post-Commit Routine</button>
+            </div>
+          </div>
+          <div class="routine-section-grid">
+            <section id="dash-routine-stage-panel" class="routine-stage-card" role="tabpanel" aria-labelledby="dash-routine-stage-resolve-tab" tabindex="0">
+              <div class="routine-inline-actions" style="justify-content: space-between; margin-bottom: 10px;">
+                <div>
+                  <h4 id="dash-routine-workspace-title">Resolve</h4>
+                  <div id="dash-routine-workspace-summary" class="routine-stage-summary">Active scope, cohort, and execution permissions will appear here.</div>
+                </div>
+                <div id="dash-routine-workspace-chip-row" class="chip-row" style="margin-bottom:0;"></div>
+              </div>
+              <div id="dash-routine-workspace-metrics" class="routine-metric-grid"></div>
+              <div class="routine-subgrid">
+                <div class="routine-detail-box">
+                  <h5>Details</h5>
+                  <ul id="dash-routine-workspace-details">
+                    <li>Run Resolve to materialize scope and cohort data.</li>
+                  </ul>
+                </div>
+                <div class="routine-detail-box">
+                  <h5>Artifacts And Actions</h5>
+                  <ul id="dash-routine-workspace-artifacts">
+                    <li>No artifacts yet.</li>
+                  </ul>
+                </div>
+              </div>
+              <div id="dash-routine-workspace-notes" class="routine-stage-notes" role="status" aria-live="polite">Routine workspace ready.</div>
+              <div id="dash-routine-dag-view" class="routine-dag-view" aria-live="polite">
+                <div class="routine-dag-header">
+                  <div>
+                    <h4 style="margin:0;">Dependency DAG</h4>
+                    <div class="helper">Stage-banded cohort topology for the current Multi preview.</div>
+                  </div>
+                  <span id="dash-routine-dag-summary-chip" class="chip neutral">DAG: pending</span>
+                </div>
+                <div id="dash-routine-dag-lanes" class="routine-dag-lanes">
+                  <div class="routine-dag-empty">Run Multi to materialize dependency topology.</div>
+                </div>
+              </div>
+            </section>
+            <section class="routine-ci-card" aria-labelledby="dash-routine-ci-observatory-title">
+              <div class="routine-inline-actions" style="justify-content: space-between; margin-bottom: 10px;">
+                <div>
+                  <h4 id="dash-routine-ci-observatory-title">Continuous Integration Observatory</h4>
+                  <div class="helper">Live GitHub Actions posture for the current branch and routine context.</div>
+                </div>
+                <button class="action-btn" onclick="dashRefreshCiStatus()" style="padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; font-size: 0.7rem; color: var(--dim); cursor: pointer;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--dim)'">Refresh CI</button>
+              </div>
+              <div class="routine-ci-grid">
+                <div class="routine-jobs-row" id="dash-routine-cd-jobs-row" role="status" aria-live="polite">
+                  <div class="routine-jobs-title">Continuous Development Path</div>
+                  <div class="chip-row" style="margin:0;">
+                    <span id="dash-routine-scope-chip" class="chip neutral" tabindex="0" role="status">Scope: idle</span>
+                    <span id="dash-routine-multi-chip" class="chip neutral" tabindex="0" role="status">Multi: idle</span>
+                    <span id="dash-routine-gates-chip" class="chip neutral" tabindex="0" role="status">Gates: idle</span>
+                    <span id="dash-routine-push-chip" class="chip neutral" tabindex="0" role="status">Push: idle</span>
+                    <span id="dash-routine-evidence-chip" class="chip neutral" tabindex="0" role="status">Evidence: idle</span>
+                  </div>
+                </div>
+                <div class="routine-jobs-row" id="dash-routine-ci-jobs-row" role="status" aria-live="polite">
+                  <div class="routine-jobs-title">Continuous Integration Workflows</div>
+                  <div class="chip-row" style="margin:0;">
+                    <span id="dash-routine-ci-docs-chip" class="chip neutral" tabindex="0" role="status">Docs: idle</span>
+                    <span id="dash-routine-ci-rust-chip" class="chip neutral" tabindex="0" role="status">Rust: idle</span>
+                    <span id="dash-routine-ci-ui-chip" class="chip neutral" tabindex="0" role="status">UI Smoke: idle</span>
+                    <span id="dash-routine-ci-packaging-chip" class="chip neutral" tabindex="0" role="status">Packaging: idle</span>
+                  </div>
+                </div>
+                <div id="dash-routine-ci-dynamic-list" class="routine-ci-dynamic-list" role="log" aria-live="polite" aria-label="CI workflow summary">
+                  <div class="routine-ci-item">
+                    <div class="routine-ci-item-header">
+                      <span class="routine-ci-item-label">No workflow data loaded</span>
+                      <span class="chip neutral">Idle</span>
+                    </div>
+                    <div class="routine-ci-item-copy">Refresh CI to populate live GitHub Actions state for the selected branch.</div>
+                  </div>
+                </div>
+                <div class="routine-detail-box">
+                  <h5>CI Notes</h5>
+                  <div id="dash-routine-ci-policy-summary" class="helper" style="margin-bottom: 8px;">Policy coverage will appear after workflow discovery.</div>
+                  <div id="dash-routine-ci-notes" class="routine-modal-status" style="min-height: 96px;">CI observatory ready.</div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+        <div class="routine-side-column">
+          <section class="routine-ledger-card">
+            <div class="routine-inline-actions" style="justify-content: space-between; margin-bottom: 10px;">
+              <div>
+                <h4>Run Ledger</h4>
+                <div class="helper">Durations, failures, and remediation stay visible while the workspace pivots across stages.</div>
+              </div>
+              <button class="action-btn" onclick="dashRefreshCdStatus()" style="padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; font-size: 0.7rem; color: var(--dim); cursor: pointer;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--dim)'">Refresh CD</button>
+            </div>
+            <div id="dash-routine-timeline" class="timeline" role="log" aria-live="polite">
+              <div class="tl-empty">No routine run yet.</div>
+            </div>
+            <div id="dash-routine-actions" class="row"></div>
+          </section>
+          <section class="routine-transcript-card">
+            <div class="routine-inline-actions" style="justify-content: space-between; margin-bottom: 10px;">
+              <div>
+                <h4>Transcript</h4>
+                <div class="helper">Operator-readable run summary with lineage pointers and next actions.</div>
+              </div>
+              <div class="pre-actions">
+                <button class="action-btn" onclick="copyToClipboard('dash-routine-out', this)">COPY</button>
+                <button class="action-btn" onclick="clearElement('dash-routine-out')">CLEAR</button>
+              </div>
+            </div>
+            <pre id="dash-routine-out" role="status" aria-live="polite">Routine ready.</pre>
+          </section>
         </div>
       </div>
-      <div class="row">
-        <input id="dash-routine-group" placeholder="group (e.g. core)" value="core" />
-        <input id="dash-routine-tags" placeholder="tags (comma-separated, e.g. pilot)" value="pilot" />
-      </div>
-      <div class="row">
-        <label style="font-size:0.82rem;color:#a8b9e3;">
-          <input id="dash-routine-allow-push" type="checkbox" checked style="width:auto;vertical-align:middle;margin-right:6px;" />
-          allow push step
-        </label>
-        <label style="font-size:0.82rem;color:#a8b9e3;">
-          <input id="dash-routine-export-evidence" type="checkbox" style="width:auto;vertical-align:middle;margin-right:6px;" />
-          export evidence
-        </label>
-        <button id="dash-routine-run-btn" class="btn" onclick="dashRunPostCommitRoutine()">Run Post-Commit Routine</button>
-      </div>
-      <div id="dash-routine-timeline" class="timeline" role="status" aria-live="polite">
-        <div class="tl-empty">No routine run yet.</div>
-      </div>
-      <div id="dash-routine-actions" class="row"></div>
-      <div class="pre-wrap">
-        <div class="pre-actions">
-          <button class="action-btn" onclick="copyToClipboard('dash-routine-out', this)">COPY</button>
-          <button class="action-btn" onclick="clearElement('dash-routine-out')">CLEAR</button>
+    </div>
+    <div id="dash-routine-policy-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="dash-routine-policy-modal-title" aria-hidden="true">
+      <div class="modal-box routine-modal-box">
+        <div class="routine-modal-header">
+          <div>
+            <h3 id="dash-routine-policy-modal-title">Operator Routine Policy Quick Edit</h3>
+            <div class="helper">Draft, simulate, and activate `operator_routine` policy from the dashboard context without leaving the routine deck.</div>
+          </div>
+          <button class="btn secondary" type="button" onclick="routinePolicyModalClose()">Close</button>
         </div>
-        <pre id="dash-routine-out" role="status" aria-live="polite">Routine ready.</pre>
+        <div class="routine-modal-grid">
+          <div class="routine-control">
+            <label for="dash-routine-policy-editor">Policy JSON</label>
+            <textarea id="dash-routine-policy-editor" spellcheck="false" aria-describedby="dash-routine-policy-modal-title"></textarea>
+          </div>
+          <div class="routine-modal-side">
+            <div class="routine-detail-box">
+              <h5>Context</h5>
+              <ul id="dash-routine-policy-context">
+                <li>Kind: operator_routine</li>
+                <li>Target: current dashboard scope</li>
+                <li>Simulation required before activation</li>
+              </ul>
+            </div>
+            <div class="routine-detail-box">
+              <h5>Status</h5>
+              <div id="dash-routine-policy-modal-status" class="routine-modal-status" role="status" aria-live="polite">Modal ready.</div>
+            </div>
+          </div>
+        </div>
+        <div class="routine-modal-actions">
+          <button class="btn secondary" type="button" onclick="routinePolicyModalLoad()">Load</button>
+          <button class="btn secondary" type="button" onclick="routinePolicyModalSimulate()">Simulate</button>
+          <button class="btn" type="button" onclick="routinePolicyModalActivate()">Activate</button>
+        </div>
       </div>
     </div>
     <div class="card" style="grid-column: 1 / -1;">
