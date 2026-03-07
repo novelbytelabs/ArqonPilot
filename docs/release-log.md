@@ -218,5 +218,16 @@ Use this structure for every new release:
   - `./scripts/prepush_gate.sh` ✅ PASS
 - CI observatory sync:
   - terminal `ci-status` refresh after `ci-watch` completion verified by regression contract.
+  - `Refresh CI` now resolves `docs.yml`, `ci.yml`, and `pypi.yml` via workflow-specific lookups and reports Docs/PyPI run IDs, run URLs, and per-job states (`docs build/deploy`, `pypi build-and-publish`) so those rows do not collapse back to idle.
 - Docs parity:
   - pinned docs dependencies in `docs/requirements.txt` to ensure plugin availability and deterministic strict builds.
+
+### Wave D Kickoff Slice (2026-03-07)
+
+- Scope: CI observatory live-truth synchronization hardening for Dashboard runtime.
+- Key changes:
+  - Added Dashboard auto-sync loop (`15s`) for CI observatory so Docs/CI/PyPI statuses continuously reconcile to GitHub Actions truth without requiring manual refresh.
+  - `Refresh CI` now delegates to a shared sync path to avoid behavior drift between manual and automatic status updates.
+  - Added run URL/state mapping for selected workflow notes across `ci.yml`, `docs.yml`, and `pypi.yml`.
+- Regression guards:
+  - `crates/pilot/tests/ci_observatory_regression_test.rs` now validates auto-sync loop contract and Docs/PyPI state mapping contract.

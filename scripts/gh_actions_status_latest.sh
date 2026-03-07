@@ -75,14 +75,21 @@ map_state() {
 }
 
 docs_state="unknown"
+docs_build_state="unknown"
+docs_deploy_state="unknown"
 rust_state="unknown"
 ui_smoke_state="unknown"
 packaging_parity_state="unknown"
+pypi_state="unknown"
+pypi_build_and_publish_state="unknown"
 overall_state="unknown"
 overall_conclusion="unknown"
 run_url=""
 ci_run_id="unknown"
 docs_run_id="unknown"
+pypi_run_id="unknown"
+docs_run_url=""
+pypi_run_url=""
 
 # Prefer deterministic workflow-specific lookups first.
 docs_meta="$(gh run list --repo "$REPO_SLUG" --workflow docs.yml --branch "$BRANCH" --limit 1 --json databaseId,status,conclusion,url --jq '.[0] | "\(.databaseId // \"\")\t\(.status // \"\")\t\(.conclusion // \"\")\t\(.url // \"\")"' 2>/dev/null || true)"
@@ -90,7 +97,29 @@ if [[ -n "$docs_meta" && "$docs_meta" != "null" ]]; then
   docs_run_id="$(echo "$docs_meta" | cut -f1)"
   docs_status="$(echo "$docs_meta" | cut -f2)"
   docs_conclusion="$(echo "$docs_meta" | cut -f3)"
+  docs_run_url="$(echo "$docs_meta" | cut -f4)"
   docs_state="$(map_state "${docs_status:-unknown}" "${docs_conclusion:-unknown}")"
+  docs_build_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${docs_run_id}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="build") | "\(.status // \"\")\t\(.conclusion // \"\")"' 2>/dev/null || true)"
+  docs_deploy_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${docs_run_id}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="deploy") | "\(.status // \"\")\t\(.conclusion // \"\")"' 2>/dev/null || true)"
+  if [[ -n "$docs_build_job" ]]; then
+    docs_build_state="$(map_state "$(echo "$docs_build_job" | cut -f1)" "$(echo "$docs_build_job" | cut -f2)")"
+  fi
+  if [[ -n "$docs_deploy_job" ]]; then
+    docs_deploy_state="$(map_state "$(echo "$docs_deploy_job" | cut -f1)" "$(echo "$docs_deploy_job" | cut -f2)")"
+  fi
+fi
+
+pypi_meta="$(gh run list --repo "$REPO_SLUG" --workflow pypi.yml --branch "$BRANCH" --limit 1 --json databaseId,status,conclusion,url --jq '.[0] | "\(.databaseId // \"\")\t\(.status // \"\")\t\(.conclusion // \"\")\t\(.url // \"\")"' 2>/dev/null || true)"
+if [[ -n "$pypi_meta" && "$pypi_meta" != "null" ]]; then
+  pypi_run_id="$(echo "$pypi_meta" | cut -f1)"
+  pypi_status="$(echo "$pypi_meta" | cut -f2)"
+  pypi_conclusion="$(echo "$pypi_meta" | cut -f3)"
+  pypi_run_url="$(echo "$pypi_meta" | cut -f4)"
+  pypi_state="$(map_state "${pypi_status:-unknown}" "${pypi_conclusion:-unknown}")"
+  pypi_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${pypi_run_id}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="build-and-publish") | "\(.status // \"\")\t\(.conclusion // \"\")"' 2>/dev/null || true)"
+  if [[ -n "$pypi_job" ]]; then
+    pypi_build_and_publish_state="$(map_state "$(echo "$pypi_job" | cut -f1)" "$(echo "$pypi_job" | cut -f2)")"
+  fi
 fi
 
 ci_meta="$(gh run list --repo "$REPO_SLUG" --workflow ci.yml --branch "$BRANCH" --limit 1 --json databaseId,status,conclusion,url --jq '.[0] | "\(.databaseId // \"\")\t\(.status // \"\")\t\(.conclusion // \"\")\t\(.url // \"\")"' 2>/dev/null || true)"
@@ -133,7 +162,25 @@ if [[ -n "$run_ids" ]]; then
     lower_wf="$(echo "$workflow_name" | tr '[:upper:]' '[:lower:]')"
     if [[ "$docs_run_id" == "unknown" && ( "$lower_wf" == *"mkdocs"* || "$lower_wf" == *"docs"* ) ]]; then
       docs_run_id="$rid"
+      docs_run_url="$url"
       docs_state="$(map_state "${status:-unknown}" "${conclusion:-unknown}")"
+      docs_build_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${docs_run_id}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="build") | "\(.status // \"\")\t\(.conclusion // \"\")"' 2>/dev/null || true)"
+      docs_deploy_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${docs_run_id}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="deploy") | "\(.status // \"\")\t\(.conclusion // \"\")"' 2>/dev/null || true)"
+      if [[ -n "$docs_build_job" ]]; then
+        docs_build_state="$(map_state "$(echo "$docs_build_job" | cut -f1)" "$(echo "$docs_build_job" | cut -f2)")"
+      fi
+      if [[ -n "$docs_deploy_job" ]]; then
+        docs_deploy_state="$(map_state "$(echo "$docs_deploy_job" | cut -f1)" "$(echo "$docs_deploy_job" | cut -f2)")"
+      fi
+    fi
+    if [[ "$pypi_run_id" == "unknown" && "$lower_wf" == *"pypi"* ]]; then
+      pypi_run_id="$rid"
+      pypi_run_url="$url"
+      pypi_state="$(map_state "${status:-unknown}" "${conclusion:-unknown}")"
+      pypi_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${pypi_run_id}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="build-and-publish") | "\(.status // \"\")\t\(.conclusion // \"\")"' 2>/dev/null || true)"
+      if [[ -n "$pypi_job" ]]; then
+        pypi_build_and_publish_state="$(map_state "$(echo "$pypi_job" | cut -f1)" "$(echo "$pypi_job" | cut -f2)")"
+      fi
     fi
 
     if [[ "$ci_run_id" == "unknown" ]]; then
@@ -157,7 +204,7 @@ if [[ -n "$run_ids" ]]; then
       fi
     fi
 
-    if [[ "$ci_run_id" != "unknown" && "$docs_run_id" != "unknown" ]]; then
+    if [[ "$ci_run_id" != "unknown" && "$docs_run_id" != "unknown" && "$pypi_run_id" != "unknown" ]]; then
       break
     fi
   done <<< "$run_ids"
@@ -171,19 +218,37 @@ if [[ "$ci_run_id" != "unknown" ]]; then
     [[ "$packaging_parity_state" == "unknown" ]] && packaging_parity_state="running"
   fi
 fi
+if [[ "$docs_run_id" != "unknown" ]]; then
+  if [[ "$docs_state" == "running" ]]; then
+    [[ "$docs_build_state" == "unknown" ]] && docs_build_state="running"
+    [[ "$docs_deploy_state" == "unknown" ]] && docs_deploy_state="running"
+  fi
+fi
+if [[ "$pypi_run_id" != "unknown" ]]; then
+  if [[ "$pypi_state" == "running" && "$pypi_build_and_publish_state" == "unknown" ]]; then
+    pypi_build_and_publish_state="running"
+  fi
+fi
 
 echo "========== gh_status summary =========="
 echo "repo:                  ${REPO_SLUG}"
 echo "branch:                ${BRANCH}"
 echo "ci_run_id:             ${ci_run_id}"
 echo "docs_run_id:           ${docs_run_id}"
+echo "pypi_run_id:           ${pypi_run_id}"
 echo "overall_state:         ${overall_state}"
 echo "overall_conclusion:    ${overall_conclusion}"
 echo "docs_state:            ${docs_state}"
+echo "docs_build_state:      ${docs_build_state}"
+echo "docs_deploy_state:     ${docs_deploy_state}"
+echo "pypi_state:            ${pypi_state}"
+echo "pypi_build_and_publish_state: ${pypi_build_and_publish_state}"
 echo "rust_state:            ${rust_state}"
 echo "ui_smoke_state:        ${ui_smoke_state}"
 echo "packaging_parity_state: ${packaging_parity_state}"
 echo "run_url:               ${run_url:-unknown}"
+echo "docs_run_url:          ${docs_run_url:-unknown}"
+echo "pypi_run_url:          ${pypi_run_url:-unknown}"
 echo "======================================"
 
 exit 0

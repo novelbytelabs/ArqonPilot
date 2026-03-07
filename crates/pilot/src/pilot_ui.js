@@ -347,6 +347,8 @@ let dashRoutineTrace = [];
 let dashRoutineSelectedStage = 'resolve';
 let dashRoutinePolicySimulationId = '';
 let dashRoutinePolicySimulationFingerprint = '';
+let routineCiSyncTimer = null;
+let routineCiSyncBusy = false;
 const ROUTINE_HEAL_LOG_KEY = 'pilot.routine.heal.log.v1';
 const ROUTINE_HEAL_RECIPE_KEY = 'pilot.routine.heal.recipe.v1';
 const ROUTINE_SAFE_HEAL_ACTIONS = Object.freeze(new Set(['cargo-fmt', 'repair']));
@@ -409,6 +411,9 @@ function activatePanel(tabName, opts = {}) {
   }
   if (tabName === 'dashboard') {
     unifiedTimelineLoad();
+    routineStartCiSyncLoop();
+  } else {
+    routineStopCiSyncLoop();
   }
   if (tabName === 'settings') {
     settingsRefreshTargetOptions().then(() => {
@@ -4822,6 +4827,7 @@ function routineWorkspaceViewModel(stage) {
       summary: 'CI observability is dynamic: whatever GitHub Actions are configured and required by current policy should surface here.',
       chips: [
         { label: `Docs: ${summary.docs_state || 'idle'}`, level: routineCiChipLevel(summary.docs_state) },
+        { label: `PyPI: ${summary.pypi_state || 'idle'}`, level: routineCiChipLevel(summary.pypi_state) },
         { label: `Rust: ${summary.rust_state || 'idle'}`, level: routineCiChipLevel(summary.rust_state) },
         { label: `UI: ${summary.ui_smoke_state || 'idle'}`, level: routineCiChipLevel(summary.ui_smoke_state) },
         { label: `Workflows: ${workflowCount}`, level: workflowCount ? 'ok' : 'neutral' },
@@ -5007,6 +5013,9 @@ function routineCiWorkflowState(summary = {}, workflow = {}) {
   if (key === 'ci.yml' || key === 'ci.yaml' || name.includes('ci')) {
     return normalize(summary.overall_state);
   }
+  if (key === 'pypi.yml' || key === 'pypi.yaml' || name.includes('pypi')) {
+    return normalize(summary.pypi_state);
+  }
   return 'idle';
 }
 
@@ -5024,9 +5033,32 @@ function routineCiJobState(summary = {}, workflow = {}, job = {}) {
     return normalize(summary.packaging_parity_state);
   }
   if ((workflowKey === 'docs.yml' || workflowKey === 'docs.yaml') && jobId === 'build') {
+    const docsBuild = normalize(summary.docs_build_state);
+    if (docsBuild !== 'idle') return docsBuild;
     return normalize(summary.docs_state);
   }
+  if ((workflowKey === 'docs.yml' || workflowKey === 'docs.yaml') && jobId === 'deploy') {
+    const docsDeploy = normalize(summary.docs_deploy_state);
+    if (docsDeploy !== 'idle') return docsDeploy;
+    return normalize(summary.docs_state);
+  }
+  if (workflowKey === 'pypi.yml' || workflowKey === 'pypi.yaml') {
+    if (jobId === 'build-and-publish') {
+      const pypiJobState = normalize(summary.pypi_build_and_publish_state);
+      if (pypiJobState !== 'idle') return pypiJobState;
+      return normalize(summary.pypi_state);
+    }
+    return normalize(summary.pypi_state);
+  }
   return 'idle';
+}
+
+function routineWorkflowRunUrl(summary = {}, workflow = {}) {
+  const key = String(workflow.key || '').toLowerCase();
+  if (key === 'ci.yml' || key === 'ci.yaml') return String(summary.run_url || '');
+  if (key === 'docs.yml' || key === 'docs.yaml') return String(summary.docs_run_url || '');
+  if (key === 'pypi.yml' || key === 'pypi.yaml') return String(summary.pypi_run_url || '');
+  return '';
 }
 
 function routineSelectCiWorkflow(workflowKey) {
@@ -5118,7 +5150,7 @@ function routineRenderCiObservatory(summary = {}, detail = null) {
         `Triggers: ${(selectedWorkflow.trigger_events || []).join(', ') || 'manual'}`,
         `Required by policy: ${selectedWorkflow.required_by_policy ? 'yes' : 'no'}`,
         `Reason: ${selectedWorkflow.policy_reason || 'n/a'}`,
-        summary.run_url && (selectedWorkflow.key || '').toLowerCase() === 'ci.yml' ? `Run URL: ${summary.run_url}` : '',
+        routineWorkflowRunUrl(summary, selectedWorkflow) ? `Run URL: ${routineWorkflowRunUrl(summary, selectedWorkflow)}` : '',
         jobLines.length ? 'Jobs:' : '',
         ...jobLines
       ].filter(Boolean);
@@ -5338,17 +5370,17 @@ function routineSetCiJobChips(summary = {}) {
   routineSetChip(dashRoutineCiPackagingChip, `Packaging: ${packagingState}`, routineCiChipLevel(packagingState));
 }
 
-async function dashRefreshCiStatus() {
-  const btn = document.querySelector('button[onclick="dashRefreshCiStatus()"]');
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = '...';
-  }
+async function routineSyncCiFromGitHub(opts = {}) {
+  const force = !!opts.force;
+  if (routineCiSyncBusy) return;
+  if (!force && currentTab !== 'dashboard') return;
+  routineCiSyncBusy = true;
   try {
     routineSyncPushControls();
     const catalogRes = await routineLoadCiCatalog();
     if (isErrorResponse(catalogRes)) {
       routineRenderCiObservatory({}, catalogRes);
+      return;
     }
     const ciBranch = routineReadBranchRemote().branch;
     const statusRes = await depRun('ci-status', { branch: ciBranch });
@@ -5356,16 +5388,43 @@ async function dashRefreshCiStatus() {
     const statusSummary = statusInner && statusInner.summary && typeof statusInner.summary === 'object'
       ? statusInner.summary
       : null;
-    if (statusSummary) {
-      routineSetCiJobChips(statusSummary);
-      dashRoutineWorkspaceState.ciDetail = statusInner || statusRes;
-      routineRenderCiObservatory(statusSummary, statusInner || statusRes);
-      if (dashRoutineSelectedStage === 'ci') routineRenderWorkspace();
-    }
+    if (!statusSummary) return;
+    routineSetCiJobChips(statusSummary);
+    dashRoutineWorkspaceState.ciDetail = statusInner || statusRes;
+    routineRenderCiObservatory(statusSummary, statusInner || statusRes);
+    if (dashRoutineSelectedStage === 'ci') routineRenderWorkspace();
+  } finally {
+    routineCiSyncBusy = false;
+  }
+}
+
+function routineStopCiSyncLoop() {
+  if (routineCiSyncTimer) {
+    clearInterval(routineCiSyncTimer);
+    routineCiSyncTimer = null;
+  }
+}
+
+function routineStartCiSyncLoop() {
+  routineStopCiSyncLoop();
+  routineCiSyncTimer = setInterval(() => {
+    routineSyncCiFromGitHub().catch(() => {});
+  }, 15000);
+  routineSyncCiFromGitHub({ force: true }).catch(() => {});
+}
+
+async function dashRefreshCiStatus() {
+  const btn = document.querySelector('button[onclick="dashRefreshCiStatus()"]');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '...';
+  }
+  try {
+    await routineSyncCiFromGitHub({ force: true });
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = 'Refresh';
+      btn.textContent = 'Refresh CI';
     }
   }
 }
@@ -7312,6 +7371,7 @@ async function bootUi() {
   await agorgLoadPolicyReports();
   await loadRepoAgoOptions();
   await codexLoadContracts();
+  if (currentTab === 'dashboard') routineStartCiSyncLoop();
   setInterval(loadHistory, 30000);
   document.querySelectorAll('input, textarea, select').forEach((el) => {
     el.addEventListener('change', () => queueUiSessionSave());
