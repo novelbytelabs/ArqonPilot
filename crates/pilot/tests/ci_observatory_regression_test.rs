@@ -46,3 +46,17 @@ fn test_ci_watch_requires_fresh_branch_run_contract() {
         "CI watch must enforce fresh-run window and avoid stale run attachment"
     );
 }
+
+#[test]
+fn test_ci_observatory_terminal_refresh_after_watch_contract() {
+    let js_path = Path::new("src/pilot_ui.js");
+    let js_content = fs::read_to_string(js_path).expect("Failed to read pilot_ui.js");
+
+    assert!(
+        js_content.contains(
+            "const ciStatusAfterWatch = await depRun('ci-status', { branch: ciBranch });"
+        ) && js_content.contains("watch_summary: ciWatchSummary")
+            && js_content.contains("routineSetCiJobChips(ciSummary);"),
+        "CI observatory must refresh terminal per-job summary after ci-watch completes"
+    );
+}

@@ -203,6 +203,19 @@ Use this structure for every new release:
   - routine CI stage no longer treats stale historical runs as current success; missing fresh runs now fail with `likely_cause=no_fresh_run_detected`.
   - no-op push (`Everything up-to-date`) now attempts `workflow_dispatch` fallback trigger (`ci-trigger`) and then watches the fresh run.
   - `.github/workflows/ci.yml` now declares `workflow_dispatch` to support resilient CI triggering without a new push delta.
+  - after `ci-watch` completion, Dashboard now performs a terminal `ci-status` refresh to keep CI observatory job chips in sync with the run ledger and GitHub Actions truth.
 - Regression guards added:
   - `crates/pilot/tests/routine_autoheal_regression_test.rs`
   - `scripts/test_matrix.sh` includes `--test routine_autoheal_regression_test`
+
+### Wave C Hard-Close Re-Verification (2026-03-07)
+
+- Scope: Final hard-close evidence for Post-Commit Routine Wave C hardening (auto-heal/resume/CI observatory/docs parity).
+- Verification:
+  - `conda run -n helios-gpu-118 bash scripts/test_matrix.sh all` ✅ PASS
+  - `conda run -n helios-gpu-118 python -m mkdocs build --strict` ✅ PASS
+  - `./scripts/prepush_gate.sh` ✅ PASS
+- CI observatory sync:
+  - terminal `ci-status` refresh after `ci-watch` completion verified by regression contract.
+- Docs parity:
+  - pinned docs dependencies in `docs/requirements.txt` to ensure plugin availability and deterministic strict builds.

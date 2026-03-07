@@ -5319,8 +5319,9 @@ function routineCiSummaryInFlight(summary = null) {
 function routineNormalizeCiState(raw, summary = null) {
   let s = String(raw || 'idle').toLowerCase();
   if (s === 'unknown' || s === 'null' || s === '') s = 'idle';
-  const ciInFlight = dashRoutineWorkspaceState.ciInFlight || routineCiSummaryInFlight(summary);
-  if (ciInFlight) {
+  const workspaceInFlight = !!dashRoutineWorkspaceState.ciInFlight;
+  const summaryInFlight = routineCiSummaryInFlight(summary);
+  if (workspaceInFlight && summaryInFlight) {
     if (s === 'pass' || s === 'passed' || s === 'success' || s === 'succeeded' || s === 'completed' || s === 'ok') s = 'running';
   }
   return s;
@@ -6481,7 +6482,25 @@ async function dashRunPostCommitRoutine(options = {}) {
           if (profile.stop_on_fail) break;
           continue;
         }
-        const ciSummary = (ciInner.summary && typeof ciInner.summary === 'object') ? ciInner.summary : {};
+        const ciWatchSummary = (ciInner.summary && typeof ciInner.summary === 'object') ? ciInner.summary : {};
+        const ciStatusAfterWatch = await depRun('ci-status', { branch: ciBranch });
+        const ciStatusInner = depEnvelopeInner(ciStatusAfterWatch);
+        const ciStatusSummary = (ciStatusInner && ciStatusInner.summary && typeof ciStatusInner.summary === 'object')
+          ? ciStatusInner.summary
+          : null;
+        const ciSummary = ciStatusSummary
+          ? {
+            ...ciStatusSummary,
+            run_id: ciWatchSummary.run_id || ciStatusSummary.run_id || ciStatusSummary.ci_run_id || '',
+            run_url: ciWatchSummary.run_url || ciStatusSummary.run_url || '',
+            workflow: ciWatchSummary.workflow || ciStatusSummary.workflow || 'workflow',
+            status: ciWatchSummary.status || ciStatusSummary.status || '',
+            conclusion: ciWatchSummary.conclusion || ciStatusSummary.conclusion || ''
+          }
+          : ciWatchSummary;
+        dashRoutineWorkspaceState.ciDetail = ciStatusSummary
+          ? { ...(ciStatusInner || {}), watch_summary: ciWatchSummary, summary: ciSummary }
+          : (ciInner || ci);
         dashRoutineWorkspaceState.ciInFlight = false;
         routineSetCiJobChips(ciSummary);
         const runUrl = ciSummary.run_url || '';
