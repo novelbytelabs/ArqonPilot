@@ -204,6 +204,7 @@ Use this structure for every new release:
   - no-op push (`Everything up-to-date`) now attempts `workflow_dispatch` fallback trigger (`ci-trigger`) and then watches the fresh run.
   - `.github/workflows/ci.yml` now declares `workflow_dispatch` to support resilient CI triggering without a new push delta.
   - after `ci-watch` completion, Dashboard now performs a terminal `ci-status` refresh to keep CI observatory job chips in sync with the run ledger and GitHub Actions truth.
+  - `ci-status` now uses deterministic workflow-specific lookup (`--workflow ci.yml` and `--workflow docs.yml`) before fallback scanning, preventing Docs terminal state from regressing to idle.
 - Regression guards added:
   - `crates/pilot/tests/routine_autoheal_regression_test.rs`
   - `scripts/test_matrix.sh` includes `--test routine_autoheal_regression_test`

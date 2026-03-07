@@ -84,6 +84,38 @@ run_url=""
 ci_run_id="unknown"
 docs_run_id="unknown"
 
+# Prefer deterministic workflow-specific lookups first.
+docs_meta="$(gh run list --repo "$REPO_SLUG" --workflow docs.yml --branch "$BRANCH" --limit 1 --json databaseId,status,conclusion,url --jq '.[0] | "\(.databaseId // \"\")\t\(.status // \"\")\t\(.conclusion // \"\")\t\(.url // \"\")"' 2>/dev/null || true)"
+if [[ -n "$docs_meta" && "$docs_meta" != "null" ]]; then
+  docs_run_id="$(echo "$docs_meta" | cut -f1)"
+  docs_status="$(echo "$docs_meta" | cut -f2)"
+  docs_conclusion="$(echo "$docs_meta" | cut -f3)"
+  docs_state="$(map_state "${docs_status:-unknown}" "${docs_conclusion:-unknown}")"
+fi
+
+ci_meta="$(gh run list --repo "$REPO_SLUG" --workflow ci.yml --branch "$BRANCH" --limit 1 --json databaseId,status,conclusion,url --jq '.[0] | "\(.databaseId // \"\")\t\(.status // \"\")\t\(.conclusion // \"\")\t\(.url // \"\")"' 2>/dev/null || true)"
+if [[ -n "$ci_meta" && "$ci_meta" != "null" ]]; then
+  ci_run_id="$(echo "$ci_meta" | cut -f1)"
+  ci_status="$(echo "$ci_meta" | cut -f2)"
+  ci_conclusion="$(echo "$ci_meta" | cut -f3)"
+  ci_url="$(echo "$ci_meta" | cut -f4)"
+  run_url="$ci_url"
+  overall_state="$(map_state "${ci_status:-unknown}" "${ci_conclusion:-unknown}")"
+  overall_conclusion="${ci_conclusion:-unknown}"
+  rust_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${ci_run_id}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="rust") | "\(.status // "")\t\(.conclusion // "")"' 2>/dev/null || true)"
+  ui_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${ci_run_id}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="ui-smoke") | "\(.status // "")\t\(.conclusion // "")"' 2>/dev/null || true)"
+  pkg_job="$(gh api "repos/${REPO_SLUG}/actions/runs/${ci_run_id}/jobs?per_page=100" --jq '.jobs[]? | select((.name|ascii_downcase)=="packaging-parity") | "\(.status // "")\t\(.conclusion // "")"' 2>/dev/null || true)"
+  if [[ -n "$rust_job" ]]; then
+    rust_state="$(map_state "$(echo "$rust_job" | cut -f1)" "$(echo "$rust_job" | cut -f2)")"
+  fi
+  if [[ -n "$ui_job" ]]; then
+    ui_smoke_state="$(map_state "$(echo "$ui_job" | cut -f1)" "$(echo "$ui_job" | cut -f2)")"
+  fi
+  if [[ -n "$pkg_job" ]]; then
+    packaging_parity_state="$(map_state "$(echo "$pkg_job" | cut -f1)" "$(echo "$pkg_job" | cut -f2)")"
+  fi
+fi
+
 run_ids="$(gh run list --repo "$REPO_SLUG" --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch==\"${BRANCH}\") | .databaseId" 2>/dev/null || true)"
 if [[ -z "$run_ids" ]]; then
   # Compatibility fallback for older gh/jq combos.

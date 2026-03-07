@@ -60,3 +60,16 @@ fn test_ci_observatory_terminal_refresh_after_watch_contract() {
         "CI observatory must refresh terminal per-job summary after ci-watch completes"
     );
 }
+
+#[test]
+fn test_ci_status_prefers_workflow_specific_lookup_contract() {
+    let script_path = Path::new("../../scripts/gh_actions_status_latest.sh");
+    let script = fs::read_to_string(script_path).expect("Failed to read gh_actions_status_latest.sh");
+
+    assert!(
+        script.contains("--workflow docs.yml")
+            && script.contains("--workflow ci.yml")
+            && script.contains("Prefer deterministic workflow-specific lookups first."),
+        "CI status must query workflow-specific latest runs for docs and ci before mixed fallback scan"
+    );
+}
