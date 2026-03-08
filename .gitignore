@@ -6,4 +6,15 @@ site/
 .contract_state/
 .p1db/
 .pilot_test_tmp/
- 
+
+# Python type checking cache
+.mypy_cache/
+
+# Runtime/provenance data
+.provenance_archive/
+
+# Editor-specific files
+.vscode/
+
+# Local cargo config
+.cargo/ 
