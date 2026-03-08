@@ -9195,8 +9195,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
       display: flex;
       flex-direction: column;
       gap: 8px;
-      max-height: 240px;
-      overflow: auto;
+      max-height: none;
+      overflow: visible;
     }
     .routine-ci-item {
       border: 1px solid rgba(255,255,255,0.08);
@@ -9218,6 +9218,19 @@ const INDEX_HTML: &str = r#"<!doctype html>
       background: linear-gradient(135deg, rgba(0,245,255,0.08), rgba(95,111,255,0.08));
       outline: none;
       box-shadow: 0 0 0 1px rgba(0,245,255,0.14);
+    }
+    .routine-ci-item.state-running {
+      border-color: rgba(255, 215, 0, 0.34);
+      background: linear-gradient(135deg, rgba(255,215,0,0.08), rgba(255,159,10,0.08));
+      box-shadow: 0 0 0 1px rgba(255, 215, 0, 0.12);
+    }
+    .routine-ci-item.state-pass {
+      border-color: rgba(0,245,255,0.28);
+      background: linear-gradient(135deg, rgba(0,245,255,0.05), rgba(34,211,238,0.05));
+    }
+    .routine-ci-item.state-fail {
+      border-color: rgba(255, 78, 146, 0.36);
+      background: linear-gradient(135deg, rgba(255,78,146,0.10), rgba(255,99,71,0.08));
     }
     .routine-ci-missing {
       border-style: dashed;

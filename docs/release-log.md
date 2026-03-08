@@ -287,4 +287,7 @@ Use this structure for every new release:
   - `Continuous Integration Workflows`
 - Preserved dynamic workflow cards + CI notes as the canonical observability surface.
 - Docs workflow tracking hardening:
-  - when Docs run identity (`docs_run_id` or `docs_run_url`) is present but raw docs state normalizes to idle, UI now treats workflow/job state as `running` instead of regressing to `idle`.
+  - workflow/job state now derives from docs job states (`docs_build_state`, `docs_deploy_state`) first, then falls back to aggregate docs state.
+  - added docs deploy job mapping for `github-pages`/`pages` IDs so Docs completion transitions are reflected correctly.
+  - workflow card now receives explicit state class (`state-running`/`state-pass`/`state-fail`) so background color reflects live status.
+  - removed fixed-height clipping in dynamic workflow list so all configured workflows remain visible without inner scroll.

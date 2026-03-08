@@ -5021,10 +5021,13 @@ function routineCiWorkflowState(summary = {}, workflow = {}) {
   const key = String(workflow.key || '').toLowerCase();
   const name = String(workflow.workflow_name || '').toLowerCase();
   if (key === 'docs.yml' || key === 'docs.yaml' || name.includes('docs')) {
+    const docsBuild = normalize(summary.docs_build_state);
+    const docsDeploy = normalize(summary.docs_deploy_state);
     const docsState = normalize(summary.docs_state);
-    const docsRunKnown = String(summary.docs_run_id || '').toLowerCase() !== 'unknown'
-      || String(summary.docs_run_url || '').startsWith('http');
-    if (docsState === 'idle' && docsRunKnown) return 'running';
+    const docsJobStates = [docsBuild, docsDeploy];
+    if (docsJobStates.some((s) => s === 'fail')) return 'fail';
+    if (docsJobStates.some((s) => s === 'running' || s === 'queued' || s === 'in_progress')) return 'running';
+    if (docsJobStates.some((s) => s === 'pass' || s === 'success' || s === 'completed')) return 'pass';
     return docsState;
   }
   if (key === 'ci.yml' || key === 'ci.yaml' || name.includes('ci')) {
@@ -5052,20 +5055,12 @@ function routineCiJobState(summary = {}, workflow = {}, job = {}) {
   if ((workflowKey === 'docs.yml' || workflowKey === 'docs.yaml') && jobId === 'build') {
     const docsBuild = normalize(summary.docs_build_state);
     if (docsBuild !== 'idle') return docsBuild;
-    const docsState = normalize(summary.docs_state);
-    const docsRunKnown = String(summary.docs_run_id || '').toLowerCase() !== 'unknown'
-      || String(summary.docs_run_url || '').startsWith('http');
-    if (docsState === 'idle' && docsRunKnown) return 'running';
-    return docsState;
+    return normalize(summary.docs_state);
   }
-  if ((workflowKey === 'docs.yml' || workflowKey === 'docs.yaml') && jobId === 'deploy') {
+  if ((workflowKey === 'docs.yml' || workflowKey === 'docs.yaml') && (jobId === 'deploy' || jobId === 'github-pages' || jobId === 'pages')) {
     const docsDeploy = normalize(summary.docs_deploy_state);
     if (docsDeploy !== 'idle') return docsDeploy;
-    const docsState = normalize(summary.docs_state);
-    const docsRunKnown = String(summary.docs_run_id || '').toLowerCase() !== 'unknown'
-      || String(summary.docs_run_url || '').startsWith('http');
-    if (docsState === 'idle' && docsRunKnown) return 'running';
-    return docsState;
+    return normalize(summary.docs_state);
   }
   if (workflowKey === 'pypi.yml' || workflowKey === 'pypi.yaml') {
     if (jobId === 'build-and-publish') {
@@ -5124,7 +5119,7 @@ function routineRenderCiObservatory(summary = {}, detail = null) {
           }).join(' ')
           : '<span class="chip neutral">No jobs parsed</span>';
         return `
-          <button type="button" class="routine-ci-item${selected ? ' selected' : ''}" onclick="routineSelectCiWorkflow('${routineEscapeHtml(workflow.key)}')" aria-pressed="${selected ? 'true' : 'false'}">
+          <button type="button" class="routine-ci-item state-${routineEscapeHtml(workflowState)}${selected ? ' selected' : ''}" onclick="routineSelectCiWorkflow('${routineEscapeHtml(workflow.key)}')" aria-pressed="${selected ? 'true' : 'false'}">
             <div class="routine-ci-item-header">
               <span class="routine-ci-item-label">${routineEscapeHtml(workflow.workflow_name || workflow.key)}</span>
               <span class="chip ${routineCiChipLevel(workflowState)}">${routineEscapeHtml(workflowState)}</span>

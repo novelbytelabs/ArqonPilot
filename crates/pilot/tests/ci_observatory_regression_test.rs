@@ -85,8 +85,21 @@ fn test_ci_observatory_maps_pypi_and_docs_job_states_contract() {
         js_content.contains("summary.pypi_state")
             && js_content.contains("summary.pypi_build_and_publish_state")
             && js_content.contains("summary.docs_build_state")
-            && js_content.contains("summary.docs_deploy_state"),
+            && js_content.contains("summary.docs_deploy_state")
+            && js_content.contains("jobId === 'github-pages'"),
         "CI observatory must map docs and pypi workflow/job states from ci-status summary"
+    );
+}
+
+#[test]
+fn test_ci_observatory_removes_legacy_chip_rows_contract() {
+    let rs_path = Path::new("src/serve_ui.rs");
+    let rs_content = fs::read_to_string(rs_path).expect("Failed to read serve_ui.rs");
+
+    assert!(
+        !rs_content.contains("dash-routine-cd-jobs-row")
+            && !rs_content.contains("dash-routine-ci-jobs-row"),
+        "CI observatory should not render legacy top chip rows once dynamic workflow cards are primary"
     );
 }
 
