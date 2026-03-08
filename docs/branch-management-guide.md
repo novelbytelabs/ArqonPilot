@@ -44,7 +44,7 @@ This document establishes the branch management standards and workflows for all 
 4. For cross-repo features, use the same branch name across all affected repos.
 
 > [!NOTE]
-> **Enforcement**: Arqon Pilot now actively enforces these rules via its **Governance Engine**. Trying to create or sync an out-of-policy branch from the Pilot UI or CLI will be explicitly blocked unless a signed Exception exists. Please refer to the [Governance & Policy Guide](governance-guide.md) for exception requests.
+> **Enforcement**: Arqon Pilot now actively enforces these rules via its **Governance Engine**. Trying to create or sync an out-of-policy branch from the Pilot UI or CLI will be explicitly blocked unless a signed Exception exists. Please refer to the [Governance & Policy Guide](governance-guide.md) for exception requests. 
 
 ### Branch TTL and cleanup SLA
 
