@@ -68,6 +68,27 @@ fn test_routine_autoheal_and_codex_escalation_contract() {
             && js_content.contains("cmd = 'pilot.dependency.push'"),
         "Routine->Codex escalation must map stage failures to actionable dependency commands"
     );
+    assert!(
+        js_content.contains("let codexActionBusy = false;")
+            && js_content.contains("let codexActionQueue = Promise.resolve();")
+            && js_content.contains("Non-JSON response")
+            && js_content.contains("await codexLoadSelectedContract();")
+            && js_content.contains("codexActionQueue = codexActionQueue.then(() => codexRunNow(mode), () => codexRunNow(mode));")
+            && js_content.contains("if (status === 'approved') {")
+            && js_content.contains("await codexRun('execute');"),
+        "Codex run flow must serialize rapid clicks, auto-execute approved contracts before reconcile, and surface errors"
+    );
+    assert!(
+        js_content.contains("function routineAutoCodexEnabled()")
+            && js_content.contains("dash-routine-auto-codex")
+            && js_content.contains("routineRunCodexLifecycleForFailure(")
+            && js_content.contains("function routineRenderCodexAutoStatus()")
+            && js_content.contains("Codex Auto Progress")
+            && js_content.contains("cmd = 'pilot.dependency.ci-trigger';")
+            && js_content.contains("verify = 'pilot.dependency.ci-watch';")
+            && js_content.contains("if (failed && routineAutoCodexEnabled())"),
+        "Routine must support auto-Codex remediation with CI second pass and auto-run failure escalation"
+    );
 
     let push_script = fs::read_to_string(Path::new("../../scripts/push_main.sh"))
         .expect("Failed to read push_main.sh");

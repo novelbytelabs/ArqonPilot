@@ -350,6 +350,10 @@ let dashRoutinePolicySimulationFingerprint = '';
 let routineCiSyncTimer = null;
 let routineCiSyncBusy = false;
 let routineCiAutoResumeBusy = false;
+let codexActionBusy = false;
+let codexActionQueue = Promise.resolve();
+let routineCodexAutoRunning = false;
+let dashRoutineCodexAuto = { active: false, entries: [], summary: '' };
 const ROUTINE_HEAL_LOG_KEY = 'pilot.routine.heal.log.v1';
 const ROUTINE_HEAL_RECIPE_KEY = 'pilot.routine.heal.recipe.v1';
 const ROUTINE_CI_CONTINUATION_KEY = 'pilot.routine.ci.continuation.v1';
@@ -527,6 +531,7 @@ function collectUiSessionState() {
     routine_allow_push: readInputChecked('dash-routine-allow-push'),
     routine_export_evidence: readInputChecked('dash-routine-export-evidence'),
     routine_auto_heal: readInputChecked('dash-routine-auto-heal'),
+    routine_auto_codex: readInputChecked('dash-routine-auto-codex'),
     branch_matrix_advanced_open: !!(branchMatrixAdvanced && branchMatrixAdvanced.open),
     branch_log_limit: readInputValue('branch-log-limit'),
     codex_contract_id: readInputValue('codex-contract-id'),
@@ -573,6 +578,7 @@ function applyUiSessionState(session) {
   setCheck('dash-routine-allow-push', session.routine_allow_push);
   setCheck('dash-routine-export-evidence', session.routine_export_evidence);
   setCheck('dash-routine-auto-heal', session.routine_auto_heal);
+  setCheck('dash-routine-auto-codex', session.routine_auto_codex);
   if (branchMatrixAdvanced && session.branch_matrix_advanced_open !== undefined && session.branch_matrix_advanced_open !== null) {
     branchMatrixAdvanced.open = !!session.branch_matrix_advanced_open;
   }
@@ -4535,13 +4541,18 @@ function routineUpdateModeChip() {
   const allowPush = !!document.getElementById('dash-routine-allow-push')?.checked;
   const exportEvidence = !!document.getElementById('dash-routine-export-evidence')?.checked;
   const autoHeal = !!document.getElementById('dash-routine-auto-heal')?.checked;
+  const autoCodex = !!document.getElementById('dash-routine-auto-codex')?.checked;
   const mode = allowPush ? 'mutating' : 'safe';
-  const suffix = `${exportEvidence ? ' + evidence' : ''}${autoHeal ? ' + auto-heal' : ''}`;
+  const suffix = `${exportEvidence ? ' + evidence' : ''}${autoHeal ? ' + auto-heal' : ''}${autoCodex ? ' + auto-codex' : ''}`;
   routineSetChip(dashRoutineModeChip, `Mode: ${mode}${suffix}`, allowPush ? 'warn' : 'neutral');
 }
 
 function routineAutoHealEnabled() {
   return !!document.getElementById('dash-routine-auto-heal')?.checked;
+}
+
+function routineAutoCodexEnabled() {
+  return !!document.getElementById('dash-routine-auto-codex')?.checked;
 }
 
 function routineSetLastResult(status, label = '') {
@@ -5512,6 +5523,7 @@ function routineResetChips() {
   dashRoutineWorkspaceState.ciCatalog = null;
   dashRoutineWorkspaceState.ciSelectedWorkflowKey = '';
   dashRoutineWorkspaceState.healStatus = '';
+  dashRoutineCodexAuto = { active: false, entries: [], summary: '' };
   dashRoutineWorkspaceState.pushNoop = false;
   dashRoutineAutoHealAttempted = false;
   dashRoutineCanResume = false;
@@ -5625,6 +5637,7 @@ function routineRenderActions() {
   const statusBlock = dashRoutineWorkspaceState.healStatus
     ? `<pre style="margin:6px 0 0; max-height:160px; overflow:auto; font-size:0.72rem;">${routineEscapeHtml(dashRoutineWorkspaceState.healStatus)}</pre>`
     : '';
+  const codexAutoBlock = routineRenderCodexAutoStatus();
   const healStats = routineHealLogStats();
   dashRoutineActions.innerHTML = `
     <div class="row" style="gap:8px; align-items:center; flex-wrap:wrap;">
@@ -5638,7 +5651,48 @@ function routineRenderActions() {
       <button class="btn secondary" onclick="routineClearHealRecipes()">Clear Recipes</button>
     </div>
     ${statusBlock}
+    ${codexAutoBlock}
   `;
+}
+
+function routineCodexAutoRecord(label, status, detail = '') {
+  const entry = {
+    ts: new Date().toISOString(),
+    label: String(label || ''),
+    status: String(status || 'neutral'),
+    detail: String(detail || '')
+  };
+  dashRoutineCodexAuto.entries.push(entry);
+  if (dashRoutineCodexAuto.entries.length > 18) {
+    dashRoutineCodexAuto.entries = dashRoutineCodexAuto.entries.slice(-18);
+  }
+  routineRenderActions();
+  routineRenderWorkspace();
+}
+
+function routineCodexAutoStart(context = '') {
+  dashRoutineCodexAuto = { active: true, entries: [], summary: '' };
+  routineCodexAutoRecord('Codex Auto Start', 'running', context);
+}
+
+function routineCodexAutoFinish(ok, summary = '') {
+  dashRoutineCodexAuto.active = false;
+  dashRoutineCodexAuto.summary = String(summary || '');
+  routineCodexAutoRecord('Codex Auto Finish', ok ? 'pass' : 'fail', summary);
+}
+
+function routineRenderCodexAutoStatus() {
+  const hasEntries = Array.isArray(dashRoutineCodexAuto.entries) && dashRoutineCodexAuto.entries.length > 0;
+  const hasSummary = !!String(dashRoutineCodexAuto.summary || '').trim();
+  if (!hasEntries && !hasSummary) return '';
+  const rows = (dashRoutineCodexAuto.entries || []).map((e) => {
+    const level = e.status === 'pass' ? 'ok' : (e.status === 'fail' ? 'fail' : (e.status === 'running' ? 'warn' : 'neutral'));
+    const safeLabel = routineEscapeHtml(e.label || '');
+    const safeDetail = routineEscapeHtml(e.detail || '');
+    return `<div class="tl-head" style="margin-top:4px;"><span>${safeLabel}</span><span class="chip ${level}">${String(e.status || '').toUpperCase()}</span></div>${safeDetail ? `<div class="muted" style="margin-top:3px;">${safeDetail}</div>` : ''}`;
+  }).join('');
+  const summary = hasSummary ? `<div class="muted" style="margin-top:6px;">${routineEscapeHtml(dashRoutineCodexAuto.summary)}</div>` : '';
+  return `<div role="status" aria-live="polite" style="margin-top:8px; padding:8px; border:1px solid var(--border); border-radius:6px; background: rgba(3,12,20,0.45);"><b>Codex Auto Progress</b>${rows}${summary}</div>`;
 }
 
 function routineLatestFailureEntry() {
@@ -5946,8 +6000,9 @@ async function routineAutoHealAndRetry(options = {}) {
       reason: 'no_safe_playbook'
     });
     routineRenderActions();
-    await routineEscalateFailureToCodex();
-    return { attempted: false, ok: false, escalated: true };
+    const codexAuto = routineAutoCodexEnabled();
+    await routineEscalateFailureToCodex({ autoRun: codexAuto, autoResume: codexAuto });
+    return { attempted: false, ok: false, escalated: true, codexAuto };
   }
 
   dashRoutineAutoHealAttempted = true;
@@ -6013,8 +6068,9 @@ async function routineAutoHealAndRetry(options = {}) {
   routineRenderWorkspace();
   if (!ok) {
     routineAnnounceAlert('Auto-heal failed. Escalating to Codex.');
-    await routineEscalateFailureToCodex();
-    return { attempted: true, ok: false, escalated: true };
+    const codexAuto = routineAutoCodexEnabled();
+    await routineEscalateFailureToCodex({ autoRun: codexAuto, autoResume: codexAuto });
+    return { attempted: true, ok: false, escalated: true, codexAuto };
   }
   routineAnnounceStatus('Auto-heal completed successfully.');
   return { attempted: true, ok: true, escalated: false };
@@ -6033,14 +6089,15 @@ async function dashResumePostCommitRoutine() {
   await dashRunPostCommitRoutine({ resumeFromStep });
 }
 
-async function routineEscalateFailureToCodex() {
-  const fail = routineLatestFailureEntry();
-  if (!fail) return;
+function routineBuildCodexEscalationPacket(fail, options = {}) {
+  if (!fail) return null;
   const classified = routineClassifyFailureForHeal(fail);
   const parsed = routineParseFailureDetail(fail);
-  activatePanel('codex');
+  const branchRemote = routineReadBranchRemote();
+  const branch = options.branch || branchRemote.branch;
+  const remote = options.remote || branchRemote.remote;
+  const secondPass = !!options.secondPass;
   const intent = `Resolve routine failure (${fail.stage}): ${classified.signature}`;
-  const { branch, remote } = routineReadBranchRemote();
   const payload = {
     stage: fail.stage,
     summary: fail.summary,
@@ -6053,7 +6110,13 @@ async function routineEscalateFailureToCodex() {
   };
   let cmd = 'pilot.multi.status';
   let verify = 'pilot.multi.status';
-  if (fail.stage === 'CI') {
+  if (fail.stage === 'CI' && secondPass) {
+    cmd = 'pilot.dependency.ci-trigger';
+    verify = 'pilot.dependency.ci-watch';
+    payload.branch = branch;
+    payload.ci_timeout_sec = 1800;
+    payload.summary = `CI remediation pass (trigger + watch): ${fail.summary || classified.summary}`;
+  } else if (fail.stage === 'CI') {
     cmd = 'pilot.dependency.ci-status';
     verify = 'pilot.dependency.ci-status';
     payload.branch = branch;
@@ -6067,27 +6130,178 @@ async function routineEscalateFailureToCodex() {
     payload.branch = branch;
     payload.remote = remote;
   }
-  const expected = `Root cause identified and minimal safe remediation applied; failed stage (${fail.stage}) verifies PASS.`;
+  const expected = secondPass
+    ? `CI remediation pass triggers and verifies a fresh successful workflow run for ${branch}.`
+    : `Root cause identified and minimal safe remediation applied; failed stage (${fail.stage}) verifies PASS.`;
   const rollback = 'If mutation is unsafe, revert to last clean branch state and rerun in preview mode.';
+  return { intent, cmd, payload, expected, rollback, verify };
+}
 
+function routineApplyCodexPacket(packet) {
+  if (!packet) return;
+  activatePanel('codex');
   const setVal = (id, value) => {
     const el = document.getElementById(id);
     if (el) el.value = value;
   };
-  setVal('codex-intent', intent);
-  setVal('codex-command', cmd);
-  setVal('codex-payload', JSON.stringify(payload, null, 2));
-  setVal('codex-expected', expected);
-  setVal('codex-rollback', rollback);
-  setVal('codex-verify', verify);
+  setVal('codex-intent', packet.intent);
+  setVal('codex-command', packet.cmd);
+  setVal('codex-payload', JSON.stringify(packet.payload, null, 2));
+  setVal('codex-expected', packet.expected);
+  setVal('codex-rollback', packet.rollback);
+  setVal('codex-verify', packet.verify);
   if (codexOut) {
-    codexOut.textContent = `Codex escalation packet prepared.\n\n${JSON.stringify(payload, null, 2)}`;
+    codexOut.textContent = `Codex escalation packet prepared.\n\n${JSON.stringify(packet.payload, null, 2)}`;
   }
+}
+
+function routineCodexIsHealthyForStage(fail, contract) {
+  if (!contract) return false;
+  const command = String(contract.command || '').trim();
+  const action = command.startsWith('pilot.dependency.')
+    ? command.slice('pilot.dependency.'.length)
+    : '';
+  const response = (contract.verify_response && typeof contract.verify_response === 'object')
+    ? contract.verify_response
+    : ((contract.execute_response && typeof contract.execute_response === 'object') ? contract.execute_response : null);
+  if (!response) return false;
+
+  if (action === 'ci-status') {
+    const summary = response.summary && typeof response.summary === 'object' ? response.summary : {};
+    const overallState = String(summary.overall_state || '').toLowerCase();
+    const conclusion = String(summary.overall_conclusion || '').toLowerCase();
+    if (overallState === 'fail' || conclusion === 'failure') return false;
+    if (overallState === 'success' || overallState === 'pass' || conclusion === 'success') return true;
+    return false;
+  }
+  if (action === 'ci-watch') {
+    const summary = response.summary && typeof response.summary === 'object' ? response.summary : {};
+    const result = String(summary.result || '').toUpperCase();
+    return !!response.ok && (result === '' || result === 'SUCCESS');
+  }
+  if (action) return isDepStepPass(action, response);
+  if (String(fail?.stage || '') === 'CI') return false;
+  return !!response.ok;
+}
+
+async function routineRunCodexLifecycleForFailure(fail, options = {}) {
+  if (!fail) return { ok: false, reason: 'no_failure' };
+  if (routineCodexAutoRunning) return { ok: false, reason: 'busy' };
+  routineCodexAutoRunning = true;
+  const allowSecondPass = options.allowSecondPass !== false;
+  routineCodexAutoStart(`Stage=${fail.stage}${allowSecondPass && String(fail.stage || '') === 'CI' ? ' | second-pass enabled' : ''}`);
   try {
-    await codexRun('preview');
-  } catch (_) {
-    // Keep packet populated even if preview call fails.
+    const runCycle = async (packet, passLabel) => {
+      routineCodexAutoRecord(`${passLabel}: preview`, 'running');
+      routineApplyCodexPacket(packet);
+      const preview = await codexRun('preview');
+      if (!preview || !preview.ok) {
+        routineCodexAutoRecord(`${passLabel}: preview`, 'fail', preview?.error || 'preview failed');
+        return { ok: false, phase: 'preview', preview };
+      }
+      routineCodexAutoRecord(`${passLabel}: preview`, 'pass');
+      routineCodexAutoRecord(`${passLabel}: approve`, 'running');
+      const approve = await codexRun('approve');
+      if (!approve || !approve.ok) {
+        routineCodexAutoRecord(`${passLabel}: approve`, 'fail', approve?.error || 'approve failed');
+        return { ok: false, phase: 'approve', approve };
+      }
+      routineCodexAutoRecord(`${passLabel}: approve`, 'pass');
+      routineCodexAutoRecord(`${passLabel}: execute`, 'running');
+      const execute = await codexRun('execute');
+      if (!execute || !execute.ok) {
+        routineCodexAutoRecord(`${passLabel}: execute`, 'fail', execute?.error || 'execute failed');
+        return { ok: false, phase: 'execute', execute };
+      }
+      routineCodexAutoRecord(`${passLabel}: execute`, 'pass');
+      routineCodexAutoRecord(`${passLabel}: reconcile`, 'running');
+      const reconcile = await codexRun('reconcile');
+      if (!reconcile || !reconcile.ok) {
+        routineCodexAutoRecord(`${passLabel}: reconcile`, 'fail', reconcile?.error || 'reconcile failed');
+        return { ok: false, phase: 'reconcile', reconcile };
+      }
+      routineCodexAutoRecord(`${passLabel}: reconcile`, 'pass');
+      const contractId = String(
+        reconcile?.contract?.contract_id
+        || execute?.contract?.contract_id
+        || approve?.contract?.contract_id
+        || preview?.contract?.contract_id
+        || ''
+      );
+      let contract = reconcile?.contract || null;
+      if (contractId) {
+        const fetched = await codexFetchContract(contractId);
+        if (fetched && fetched.contract) contract = fetched.contract;
+      }
+      const healthy = routineCodexIsHealthyForStage(fail, contract);
+      routineCodexAutoRecord(`${passLabel}: verify`, healthy ? 'pass' : 'fail', healthy ? 'Verification passed.' : 'Verification still failing.');
+      return { ok: true, healthy, contract, contractId };
+    };
+
+    const primary = await runCycle(routineBuildCodexEscalationPacket(fail), 'Pass 1');
+    if (!primary.ok) {
+      routineCodexAutoFinish(false, 'Primary Codex pass failed.');
+      return { ok: false, phase: primary.phase, attempted: 1 };
+    }
+    if (primary.healthy) {
+      routineCodexAutoFinish(true, 'Primary Codex pass verified success.');
+      return { ok: true, healthy: true, contract: primary.contract, attempted: 1 };
+    }
+    if (!(allowSecondPass && String(fail.stage || '') === 'CI')) {
+      routineCodexAutoFinish(false, 'Codex pass completed but verification still failing.');
+      return { ok: true, healthy: false, contract: primary.contract, attempted: 1 };
+    }
+    const secondary = await runCycle(routineBuildCodexEscalationPacket(fail, { secondPass: true }), 'Pass 2');
+    if (!secondary.ok) {
+      routineCodexAutoFinish(false, 'Second Codex pass failed.');
+      return { ok: false, phase: secondary.phase, attempted: 2 };
+    }
+    routineCodexAutoFinish(!!secondary.healthy, secondary.healthy ? 'Second Codex pass verified success.' : 'Second Codex pass still unresolved.');
+    return { ok: true, healthy: !!secondary.healthy, contract: secondary.contract, attempted: 2 };
+  } finally {
+    routineCodexAutoRunning = false;
   }
+}
+
+async function routineEscalateFailureToCodex() {
+  const options = (arguments && arguments[0] && typeof arguments[0] === 'object') ? arguments[0] : {};
+  const fail = options.failureEntry || routineLatestFailureEntry();
+  if (!fail) return { ok: false, reason: 'no_failure' };
+  const packet = routineBuildCodexEscalationPacket(fail, options);
+  if (!packet) return { ok: false, reason: 'no_packet' };
+  routineApplyCodexPacket(packet);
+  if (!options.autoRun) {
+    try {
+      await codexRun('preview');
+    } catch (_) {
+      // Keep packet populated even if preview call fails.
+    }
+    return { ok: true, prepared: true, automated: false };
+  }
+
+  const outcome = await routineRunCodexLifecycleForFailure(fail, {
+    allowSecondPass: options.allowSecondPass !== false
+  });
+  const resumeFromStep = routineFailureStageToStep(fail);
+  if (outcome.ok && outcome.healthy && options.autoResume && resumeFromStep && !dashRoutineRunning) {
+    dashRoutineCanResume = true;
+    const prior = String(dashRoutineWorkspaceState.healStatus || '');
+    const line = `Codex auto-remediation: SUCCESS (${outcome.attempted || 1} pass${(outcome.attempted || 1) > 1 ? 'es' : ''}).`;
+    dashRoutineWorkspaceState.healStatus = prior ? `${prior}\n${line}` : line;
+    routineRenderActions();
+    routineRenderWorkspace();
+    routineCodexAutoRecord('Resume', 'running', `Resuming routine from ${resumeFromStep}.`);
+    setTimeout(() => {
+      dashRunPostCommitRoutine({ resumeFromStep, autoResumeDepth: 1 });
+    }, 60);
+  }
+  return {
+    ok: !!outcome.ok,
+    prepared: true,
+    automated: true,
+    healthy: !!outcome.healthy,
+    attempts: outcome.attempted || 0
+  };
 }
 
 function routineRunAction(actionId) {
@@ -6745,6 +6959,20 @@ async function dashRunPostCommitRoutine(options = {}) {
           lines.push('Auto-Heal: no safe playbook matched.');
         }
       }
+      if (failed && routineAutoCodexEnabled()) {
+        lines.push('Codex Auto: escalating and running guided remediation.');
+        const codexResult = await routineEscalateFailureToCodex({ autoRun: true, autoResume: true });
+        if (codexResult?.ok && codexResult?.healthy) {
+          lines.push(`Codex Auto: SUCCESS (${codexResult.attempts || 1} pass${(codexResult.attempts || 1) > 1 ? 'es' : ''}).`);
+          failed = false;
+          dashRoutineWorkspaceState.lastResult = 'recovered';
+          routineSetLastResult('success', 'Last Result: recovered');
+          routineSetStageState('reconcile', 'Recovered', 'ok');
+          routineAnnounceStatus('Post-Commit Routine recovered via Codex automation.');
+        } else {
+          lines.push('Codex Auto: unresolved; review Codex panel output.');
+        }
+      }
       if (!profile.stop_on_fail) {
         lines.push('Mode: Continue-on-fail (profile stop_on_fail=false)');
       }
@@ -7315,6 +7543,12 @@ function codexPayloadFromUi() {
 }
 
 async function codexRun(mode) {
+  codexActionQueue = codexActionQueue.then(() => codexRunNow(mode), () => codexRunNow(mode));
+  return codexActionQueue;
+}
+
+async function codexRunNow(mode) {
+  codexActionBusy = true;
   let payload;
   try {
     payload = codexPayloadFromUi();
@@ -7322,7 +7556,8 @@ async function codexRun(mode) {
     const msg = 'Invalid JSON payload: ' + e.message;
     codexOut.textContent = msg;
     out.textContent = msg;
-    return;
+    codexActionBusy = false;
+    return null;
   }
   const req = {
     contract_id: document.getElementById('codex-contract-id').value.trim(),
@@ -7335,23 +7570,52 @@ async function codexRun(mode) {
     verify_command: document.getElementById('codex-verify').value.trim(),
     reconcile_notes: document.getElementById('codex-reconcile-notes').value.trim()
   };
-  const res = await fetch('/api/codex/action', {
-    method: 'POST',
-    headers: {'content-type':'application/json'},
-    body: JSON.stringify(req)
-  });
-  const data = await res.json();
-  const text = JSON.stringify(data, null, 2);
-  codexOut.textContent = text;
-  out.textContent = text;
-  if (dashStatusOut) dashStatusOut.textContent = text;
-  if (data && data.contract && data.contract.contract_id) {
-    latestCodexContractId = data.contract.contract_id;
-    document.getElementById('codex-contract-id').value = latestCodexContractId;
+  try {
+    const res = await fetch('/api/codex/action', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify(req)
+    });
+    const raw = await res.text();
+    let data;
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch (_) {
+      data = { ok: false, error: `Non-JSON response (${res.status})`, raw };
+    }
+    if (!res.ok && !data.error) {
+      data.error = `HTTP ${res.status}`;
+      data.ok = false;
+    }
+    const text = JSON.stringify(data, null, 2);
+    codexOut.textContent = text;
+    out.textContent = text;
+    if (dashStatusOut) dashStatusOut.textContent = text;
+    if (data && data.contract && data.contract.contract_id) {
+      latestCodexContractId = data.contract.contract_id;
+      document.getElementById('codex-contract-id').value = latestCodexContractId;
+    }
+    appendLive({ source: 'codex_ui', mode, command: req.command, ok: !!data.ok });
+    if (mode === 'execute' || mode === 'reconcile' || mode === 'approve') await loadHistory();
+    if (mode === 'execute' || mode === 'reconcile' || mode === 'approve' || mode === 'preview') await codexLoadContracts();
+    if (data && data.contract && data.contract.contract_id) await codexLoadSelectedContract();
+    return data;
+  } catch (err) {
+    const msg = {
+      ok: false,
+      error: err?.message || 'Codex action request failed',
+      mode,
+      request: req
+    };
+    const text = JSON.stringify(msg, null, 2);
+    codexOut.textContent = text;
+    out.textContent = text;
+    if (dashStatusOut) dashStatusOut.textContent = text;
+    appendLive({ source: 'codex_ui', mode, command: req.command, ok: false, error: msg.error });
+    return msg;
+  } finally {
+    codexActionBusy = false;
   }
-  appendLive({ source: 'codex_ui', mode, command: req.command, ok: !!data.ok });
-  if (mode === 'execute' || mode === 'reconcile' || mode === 'approve') loadHistory();
-  if (mode === 'execute' || mode === 'reconcile' || mode === 'approve' || mode === 'preview') codexLoadContracts();
 }
 
 function codexPreview() { codexRun('preview'); }
@@ -7361,12 +7625,22 @@ function codexApprove() {
   }
   codexRun('approve');
 }
-function codexExecute() { codexRun('execute'); }
-function codexReconcile() {
+async function codexExecute() { return codexRun('execute'); }
+async function codexReconcile() {
   if (!document.getElementById('codex-contract-id').value.trim() && latestCodexContractId) {
     document.getElementById('codex-contract-id').value = latestCodexContractId;
   }
-  codexRun('reconcile');
+  const activeId = document.getElementById('codex-contract-id').value.trim();
+  if (activeId) {
+    const selected = await codexFetchContract(activeId);
+    const status = (selected && selected.contract && selected.contract.status)
+      ? String(selected.contract.status).toLowerCase()
+      : '';
+    if (status === 'approved') {
+      await codexRun('execute');
+    }
+  }
+  return codexRun('reconcile');
 }
 
 async function codexLoadContracts() {
@@ -7409,6 +7683,12 @@ async function codexLoadSelectedContract() {
     latestCodexContractId = c.contract_id || latestCodexContractId;
   }
   codexContractsOut.textContent = JSON.stringify(data, null, 2);
+}
+
+async function codexFetchContract(contractId) {
+  if (!contractId) return null;
+  const res = await fetch('/api/codex/contract?contract_id=' + encodeURIComponent(contractId));
+  return res.json();
 }
 
 async function codexRetryFailedContract() {
@@ -7557,7 +7837,7 @@ async function bootUi() {
     el.addEventListener('change', handler);
     el.addEventListener('input', handler);
   });
-  ['dash-routine-allow-push', 'dash-routine-export-evidence', 'dash-routine-auto-heal'].forEach((id) => {
+  ['dash-routine-allow-push', 'dash-routine-export-evidence', 'dash-routine-auto-heal', 'dash-routine-auto-codex'].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('change', () => {

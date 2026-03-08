@@ -5954,7 +5954,11 @@ async fn run_local_dependency_contract_command(
     if action.trim().is_empty() {
         return Err(miette::miette!("dependency action suffix cannot be empty"));
     }
-    let mut req_payload = if payload.is_object() { payload } else { json!({}) };
+    let mut req_payload = if payload.is_object() {
+        payload
+    } else {
+        json!({})
+    };
     req_payload["action"] = json!(action);
     if req_payload.get("json").is_none() {
         req_payload["json"] = json!(true);
@@ -9800,6 +9804,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
               <label class="routine-toggle">
                 <input id="dash-routine-auto-heal" type="checkbox" checked />
                 Auto-heal known-safe failures
+              </label>
+              <label class="routine-toggle">
+                <input id="dash-routine-auto-codex" type="checkbox" checked />
+                Auto-run Codex remediation
               </label>
               <button id="dash-routine-run-btn" class="btn" onclick="dashRunPostCommitRoutine()">Run Post-Commit Routine</button>
             </div>

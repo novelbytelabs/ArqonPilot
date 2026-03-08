@@ -245,3 +245,37 @@ Use this structure for every new release:
   - `Gates` failures map to `pilot.dependency.gate`
   - `Push` failures map to `pilot.dependency.push`
 - Codex backend now supports `pilot.dependency.*` commands and executes them through local dependency action routing, so preview/approve/execute/reconcile can run actionable gate/push/CI commands instead of a generic `pilot.multi.status` fallback.
+
+### Wave D Slice 4 (Codex Guided Flow Hardening)
+
+- Codex guided actions are now serialized through a client-side queue, preventing rapid-click races where `Approve -> Execute -> Reconcile` could drop `execute` and leave the contract in `approved`.
+- Reconcile preflight now auto-executes when the selected contract is still `approved`, then continues reconcile, so Step 4 no longer dead-ends with `contract must be executed or failed before reconcile`.
+- Regression contract extended in `crates/pilot/tests/routine_autoheal_regression_test.rs` to enforce:
+  - queued Codex action execution (`codexActionQueue`)
+  - auto-execute-before-reconcile behavior
+  - existing non-JSON/HTTP error surfacing guarantees.
+
+### Wave D Slice 5 (Hands-Free Codex Automation)
+
+- Added Dashboard routine toggle `Auto-run Codex remediation` (enabled by default) so Codex buttons are optional, not mandatory.
+- On unrecovered routine failures, Dashboard now automatically:
+  - escalates failure context to Codex,
+  - runs `preview -> approve -> execute -> reconcile`,
+  - validates contract health against failed stage semantics,
+  - and resumes routine from the failed stage on verified success.
+- CI-specific second-pass remediation added:
+  - if first Codex pass still reports CI failure, a second pass runs `pilot.dependency.ci-trigger` with `pilot.dependency.ci-watch` verification before final resume decision.
+- Added a live Reconcile visual block `Codex Auto Progress` (ARIA live status) showing per-step execution state for each automated Codex pass and resume handoff.
+
+### Wave D Hard-Close Re-Verification (2026-03-08)
+
+- Scope: Post-Commit Routine Wave D hard-close verification (CI observatory sync, Codex automation, and live remediation tracking).
+- Verification:
+  - `conda run -n helios-gpu-118 bash scripts/test_matrix.sh all` ✅ PASS (unit, integration, e2e, regression, adversarial)
+  - `conda run -n helios-gpu-118 python -m mkdocs build --strict` ✅ PASS
+  - `conda run -n helios-gpu-118 cargo check -p pilot --locked` ✅ PASS
+- Evidence bundle:
+  - `/home/irbsurfer/.pilot/release_evidence/release_wave-d-hard-close_20260308T013651Z`
+  - `/home/irbsurfer/.pilot/release_evidence/release_wave-d-hard-close_20260308T013651Z/verify_bundle.sh` ✅ PASS
+- Outcome:
+  - Wave D capabilities are verified with reproducible command evidence and archived release artifacts.
