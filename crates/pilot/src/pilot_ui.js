@@ -5368,6 +5368,44 @@ function routineCiSummaryInFlight(summary = null) {
   return overallState === 'running' || overallState === 'queued' || overallState === 'in_progress' || overallState === 'pending';
 }
 
+function routineCiIsTerminalState(state) {
+  const s = String(state || '').toLowerCase();
+  return s === 'pass' || s === 'success' || s === 'completed' || s === 'ok' || s === 'fail' || s === 'failure' || s === 'cancelled' || s === 'timed_out';
+}
+
+function routineCiMergeStickySummary(prevSummary = null, nextSummary = null) {
+  if (!nextSummary || typeof nextSummary !== 'object') return nextSummary;
+  if (!prevSummary || typeof prevSummary !== 'object') return nextSummary;
+  const merged = { ...nextSummary };
+
+  const mergeWorkflowSticky = (prefix, runIdKey, runUrlKey, stateKeys) => {
+    const prevRunId = String(prevSummary[runIdKey] || '').toLowerCase();
+    const nextRunId = String(merged[runIdKey] || '').toLowerCase();
+    const sameRun = prevRunId && nextRunId && prevRunId === nextRunId;
+    const nextUnknownRun = !nextRunId || nextRunId === 'unknown';
+    if ((sameRun || nextUnknownRun) && (!merged[runUrlKey] || String(merged[runUrlKey]).toLowerCase() === 'unknown')) {
+      if (prevSummary[runUrlKey]) merged[runUrlKey] = prevSummary[runUrlKey];
+    }
+    if (nextUnknownRun && prevRunId && prevRunId !== 'unknown') {
+      merged[runIdKey] = prevSummary[runIdKey];
+    }
+    if (!(sameRun || nextUnknownRun)) return;
+    stateKeys.forEach((key) => {
+      const nextState = routineNormalizeCiState(merged[key], merged);
+      const prevState = routineNormalizeCiState(prevSummary[key], prevSummary);
+      if ((nextState === 'idle' || nextState === 'unknown') && routineCiIsTerminalState(prevState)) {
+        merged[key] = prevSummary[key];
+      }
+    });
+  };
+
+  mergeWorkflowSticky('docs', 'docs_run_id', 'docs_run_url', ['docs_state', 'docs_build_state', 'docs_deploy_state']);
+  mergeWorkflowSticky('pypi', 'pypi_run_id', 'pypi_run_url', ['pypi_state', 'pypi_build_and_publish_state']);
+  mergeWorkflowSticky('ci', 'ci_run_id', 'run_url', ['overall_state', 'rust_state', 'ui_smoke_state', 'packaging_parity_state']);
+
+  return merged;
+}
+
 function routineNormalizeCiState(raw, summary = null) {
   let s = String(raw || 'idle').toLowerCase();
   if (s === 'unknown' || s === 'null' || s === '') s = 'idle';
@@ -5409,9 +5447,12 @@ async function routineSyncCiFromGitHub(opts = {}) {
       ? statusInner.summary
       : null;
     if (!statusSummary) return;
-    routineSetCiJobChips(statusSummary);
-    dashRoutineWorkspaceState.ciDetail = statusInner || statusRes;
-    routineRenderCiObservatory(statusSummary, statusInner || statusRes);
+    const mergedSummary = routineCiMergeStickySummary(dashRoutineWorkspaceState.ciDetail?.summary || null, statusSummary);
+    routineSetCiJobChips(mergedSummary);
+    dashRoutineWorkspaceState.ciDetail = statusInner
+      ? { ...statusInner, summary: mergedSummary }
+      : { ...(statusRes || {}), summary: mergedSummary };
+    routineRenderCiObservatory(mergedSummary, dashRoutineWorkspaceState.ciDetail);
     if (dashRoutineSelectedStage === 'ci') routineRenderWorkspace();
     routineMaybeAutoContinueFromCi(statusSummary);
   } finally {
@@ -5726,6 +5767,19 @@ function routineParseFailureDetail(entry) {
   }
 }
 
+function routineIsCiAuthErrorPayload(detail) {
+  const inner = detail && detail.inner && typeof detail.inner === 'object' ? detail.inner : detail;
+  const out = String(inner?.stdout || '');
+  const err = String(inner?.stderr || '');
+  const merged = `${out}\n${err}`.toLowerCase();
+  const exitCode = Number(inner?.exit_code);
+  return (
+    merged.includes('gh authentication')
+    || merged.includes('gh auth login')
+    || (Number.isFinite(exitCode) && exitCode === 6)
+  );
+}
+
 function routineClassifyFailureForHeal(entry) {
   const parsed = routineParseFailureDetail(entry);
   const inner = parsed && parsed.inner && typeof parsed.inner === 'object' ? parsed.inner : parsed;
@@ -5792,13 +5846,13 @@ function routineClassifyFailureForHeal(entry) {
   }
 
   if (entry?.stage === 'CI') {
-    if (merged.includes('gh authentication') || merged.includes('gh auth login') || merged.includes('not installed')) {
+    if (routineIsCiAuthErrorPayload(parsed || entry?.detail || null) || merged.includes('not installed')) {
       return {
         signature: 'ci_cli_auth',
         confidence: 'high',
         playbook: [],
         verifyAction: 'ci-status',
-        summary: 'Detected CI watcher environment/auth issue; Codex escalation recommended.'
+        summary: 'Detected CI observer environment/auth issue; run gh auth login in pilot runtime context.'
       };
     }
     return {
@@ -6193,6 +6247,13 @@ function routineCodexIsHealthyForStage(fail, contract) {
 
 async function routineRunCodexLifecycleForFailure(fail, options = {}) {
   if (!fail) return { ok: false, reason: 'no_failure' };
+  const classified = routineClassifyFailureForHeal(fail);
+  if (classified.signature === 'ci_cli_auth') {
+    routineCodexAutoStart(`Stage=${fail.stage} | observer-auth blocked`);
+    routineCodexAutoRecord('Pass 1: preview', 'fail', 'Skipped: gh auth is not configured in pilot runtime context.');
+    routineCodexAutoFinish(false, 'Skipped auto-remediation: run gh auth login, then rerun routine.');
+    return { ok: true, healthy: false, attempted: 0, skipped: true, reason: 'ci_cli_auth' };
+  }
   if (routineCodexAutoRunning) return { ok: false, reason: 'busy' };
   routineCodexAutoRunning = true;
   const allowSecondPass = options.allowSecondPass !== false;
@@ -6823,9 +6884,12 @@ async function dashRunPostCommitRoutine(options = {}) {
               ? statusInner.summary
               : null;
             if (statusSummary) {
-              routineSetCiJobChips(statusSummary);
-              dashRoutineWorkspaceState.ciDetail = statusInner || statusRes;
-              routineRenderCiObservatory(statusSummary, statusInner || statusRes);
+              const mergedSummary = routineCiMergeStickySummary(dashRoutineWorkspaceState.ciDetail?.summary || null, statusSummary);
+              routineSetCiJobChips(mergedSummary);
+              dashRoutineWorkspaceState.ciDetail = statusInner
+                ? { ...statusInner, summary: mergedSummary }
+                : { ...(statusRes || {}), summary: mergedSummary };
+              routineRenderCiObservatory(mergedSummary, dashRoutineWorkspaceState.ciDetail);
             }
           } finally {
             ciPollBusy = false;
@@ -6842,24 +6906,35 @@ async function dashRunPostCommitRoutine(options = {}) {
         const ciInner = depEnvelopeInner(ci);
         dashRoutineWorkspaceState.ciDetail = ciInner || ci;
         if (!ciInner || !ciInner.ok) {
+          const ciAuthFailure = routineIsCiAuthErrorPayload(ciInner || ci || null);
           const likelyCause = String(ciInner?.summary?.likely_cause || '').toLowerCase();
           const noFreshRun = likelyCause === 'no_fresh_run_detected';
           dashRoutineWorkspaceState.ciInFlight = false;
           routineClearCiContinuation();
           routineSetStageState('ci', 'Fail', 'fail');
-          lines.push(`CI: FAIL (${ciInner?.error || ci?.error || 'watch failed'})`);
+          lines.push(ciAuthFailure
+            ? 'CI: BLOCKED (local gh auth unavailable; GitHub workflow may still be healthy)'
+            : `CI: FAIL (${ciInner?.error || ci?.error || 'watch failed'})`);
           routineRecord(
             'CI',
             'fail',
-            noFreshRun ? 'No fresh CI run was detected for this routine window.' : 'GitHub Actions watch failed.',
+            ciAuthFailure
+              ? 'CI observer authentication failed in local pilot runtime (gh auth not configured).'
+              : (noFreshRun ? 'No fresh CI run was detected for this routine window.' : 'GitHub Actions watch failed.'),
             JSON.stringify(ciInner || ci || {}, null, 2),
-            noFreshRun
+            ciAuthFailure
+              ? 'Run gh auth login in the same shell/runtime context as pilot serve, then rerun CI/watch.'
+              : noFreshRun
               ? 'No new workflow run was triggered. Confirm a new commit was pushed, then retry Push/CI.'
               : 'Inspect run URL and failing jobs in CI summary.',
             'open_ci',
             stageStart
           );
-          routineAnnounceAlert(noFreshRun ? 'Routine blocked: no fresh CI run detected.' : 'Routine blocked: CI watch failed.');
+          routineAnnounceAlert(
+            ciAuthFailure
+              ? 'Routine blocked: local gh auth is missing for CI observation.'
+              : (noFreshRun ? 'Routine blocked: no fresh CI run detected.' : 'Routine blocked: CI watch failed.')
+          );
           if (dashRoutineStagePanel) dashRoutineStagePanel.focus();
           failed = true;
           if (profile.stop_on_fail) break;
@@ -6871,7 +6946,7 @@ async function dashRunPostCommitRoutine(options = {}) {
         const ciStatusSummary = (ciStatusInner && ciStatusInner.summary && typeof ciStatusInner.summary === 'object')
           ? ciStatusInner.summary
           : null;
-        const ciSummary = ciStatusSummary
+        const ciSummaryRaw = ciStatusSummary
           ? {
             ...ciStatusSummary,
             run_id: ciWatchSummary.run_id || ciStatusSummary.run_id || ciStatusSummary.ci_run_id || '',
@@ -6881,6 +6956,7 @@ async function dashRunPostCommitRoutine(options = {}) {
             conclusion: ciWatchSummary.conclusion || ciStatusSummary.conclusion || ''
           }
           : ciWatchSummary;
+        const ciSummary = routineCiMergeStickySummary(dashRoutineWorkspaceState.ciDetail?.summary || null, ciSummaryRaw);
         if (nextStepAfterCi) {
           routineWriteCiContinuation({
             branch: ciSummary.branch || routineReadBranchRemote().branch,
@@ -6967,17 +7043,23 @@ async function dashRunPostCommitRoutine(options = {}) {
         }
       }
       if (failed && routineAutoCodexEnabled()) {
-        lines.push('Codex Auto: escalating and running guided remediation.');
-        const codexResult = await routineEscalateFailureToCodex({ autoRun: true, autoResume: true });
-        if (codexResult?.ok && codexResult?.healthy) {
-          lines.push(`Codex Auto: SUCCESS (${codexResult.attempts || 1} pass${(codexResult.attempts || 1) > 1 ? 'es' : ''}).`);
-          failed = false;
-          dashRoutineWorkspaceState.lastResult = 'recovered';
-          routineSetLastResult('success', 'Last Result: recovered');
-          routineSetStageState('reconcile', 'Recovered', 'ok');
-          routineAnnounceStatus('Post-Commit Routine recovered via Codex automation.');
+        const failureForCodex = dashRoutineWorkspaceState.failure || routineLatestFailureEntry();
+        const codexClassified = routineClassifyFailureForHeal(failureForCodex);
+        if (codexClassified.signature === 'ci_cli_auth') {
+          lines.push('Codex Auto: skipped (ci_cli_auth requires local gh auth login first).');
         } else {
-          lines.push('Codex Auto: unresolved; review Codex panel output.');
+          lines.push('Codex Auto: escalating and running guided remediation.');
+          const codexResult = await routineEscalateFailureToCodex({ autoRun: true, autoResume: true });
+          if (codexResult?.ok && codexResult?.healthy) {
+            lines.push(`Codex Auto: SUCCESS (${codexResult.attempts || 1} pass${(codexResult.attempts || 1) > 1 ? 'es' : ''}).`);
+            failed = false;
+            dashRoutineWorkspaceState.lastResult = 'recovered';
+            routineSetLastResult('success', 'Last Result: recovered');
+            routineSetStageState('reconcile', 'Recovered', 'ok');
+            routineAnnounceStatus('Post-Commit Routine recovered via Codex automation.');
+          } else {
+            lines.push('Codex Auto: unresolved; review Codex panel output.');
+          }
         }
       }
       if (!profile.stop_on_fail) {
@@ -6991,7 +7073,12 @@ async function dashRunPostCommitRoutine(options = {}) {
       routineClearCiContinuation();
       routineAnnounceStatus('Post-Commit Routine completed successfully.');
     }
-    routineRecord('Reconcile', failed ? 'fail' : 'pass', failed ? 'Routine ended with blocking failure.' : 'Routine completed successfully.', '', dashRoutineWorkspaceState.failure?.remediation || '', '', 0);
+    const finalFailure = failed ? (dashRoutineWorkspaceState.failure || routineLatestFailureEntry()) : null;
+    const finalClassified = finalFailure ? routineClassifyFailureForHeal(finalFailure) : null;
+    const reconcileFailSummary = finalClassified?.signature === 'ci_cli_auth'
+      ? 'Routine blocked by local gh auth for CI observation; GitHub workflow state may differ.'
+      : 'Routine ended with blocking failure.';
+    routineRecord('Reconcile', failed ? 'fail' : 'pass', failed ? reconcileFailSummary : 'Routine completed successfully.', '', dashRoutineWorkspaceState.failure?.remediation || '', '', 0);
     dashRoutineWorkspaceState.lastRunAt = new Date().toISOString();
     routineWriteSummary(lines);
   } finally {

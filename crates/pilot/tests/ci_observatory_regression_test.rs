@@ -11,6 +11,13 @@ fn test_ci_observatory_inflight_pass_suppression_contract() {
         "Missing CI summary in-flight detector"
     );
     assert!(
+        js_content.contains("function routineCiMergeStickySummary(prevSummary = null, nextSummary = null)")
+            && js_content.contains("mergeWorkflowSticky('docs'")
+            && js_content.contains("docs_run_id")
+            && js_content.contains("docs_build_state"),
+        "CI observatory must preserve sticky workflow state across transient idle/unknown refreshes"
+    );
+    assert!(
         js_content.contains("dashRoutineWorkspaceState.ciInFlight")
             && js_content.contains("routineCiSummaryInFlight(summary)"),
         "Missing combined in-flight guard (workspace + summary)"
