@@ -9822,25 +9822,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
                 <button class="action-btn" onclick="dashRefreshCiStatus()" style="padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; font-size: 0.7rem; color: var(--dim); cursor: pointer;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--dim)'">Refresh CI</button>
               </div>
               <div class="routine-ci-grid">
-                <div class="routine-jobs-row" id="dash-routine-cd-jobs-row" role="status" aria-live="polite">
-                  <div class="routine-jobs-title">Continuous Development Path</div>
-                  <div class="chip-row" style="margin:0;">
-                    <span id="dash-routine-scope-chip" class="chip neutral" tabindex="0" role="status">Scope: idle</span>
-                    <span id="dash-routine-multi-chip" class="chip neutral" tabindex="0" role="status">Multi: idle</span>
-                    <span id="dash-routine-gates-chip" class="chip neutral" tabindex="0" role="status">Gates: idle</span>
-                    <span id="dash-routine-push-chip" class="chip neutral" tabindex="0" role="status">Push: idle</span>
-                    <span id="dash-routine-evidence-chip" class="chip neutral" tabindex="0" role="status">Evidence: idle</span>
-                  </div>
-                </div>
-                <div class="routine-jobs-row" id="dash-routine-ci-jobs-row" role="status" aria-live="polite">
-                  <div class="routine-jobs-title">Continuous Integration Workflows</div>
-                  <div class="chip-row" style="margin:0;">
-                    <span id="dash-routine-ci-docs-chip" class="chip neutral" tabindex="0" role="status">Docs: idle</span>
-                    <span id="dash-routine-ci-rust-chip" class="chip neutral" tabindex="0" role="status">Rust: idle</span>
-                    <span id="dash-routine-ci-ui-chip" class="chip neutral" tabindex="0" role="status">UI Smoke: idle</span>
-                    <span id="dash-routine-ci-packaging-chip" class="chip neutral" tabindex="0" role="status">Packaging: idle</span>
-                  </div>
-                </div>
                 <div id="dash-routine-ci-dynamic-list" class="routine-ci-dynamic-list" role="log" aria-live="polite" aria-label="CI workflow summary">
                   <div class="routine-ci-item">
                     <div class="routine-ci-item-header">

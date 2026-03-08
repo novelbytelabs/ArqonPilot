@@ -279,3 +279,12 @@ Use this structure for every new release:
   - `/home/irbsurfer/.pilot/release_evidence/release_wave-d-hard-close_20260308T013651Z/verify_bundle.sh` ✅ PASS
 - Outcome:
   - Wave D capabilities are verified with reproducible command evidence and archived release artifacts.
+
+### Wave D Slice 6 (CI Observatory UI Simplification + Docs Tracking Fallback)
+
+- Removed the two top chip-card rows from the **Continuous Integration Observatory** panel:
+  - `Continuous Development Path`
+  - `Continuous Integration Workflows`
+- Preserved dynamic workflow cards + CI notes as the canonical observability surface.
+- Docs workflow tracking hardening:
+  - when Docs run identity (`docs_run_id` or `docs_run_url`) is present but raw docs state normalizes to idle, UI now treats workflow/job state as `running` instead of regressing to `idle`.

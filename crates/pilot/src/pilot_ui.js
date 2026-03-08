@@ -5021,7 +5021,11 @@ function routineCiWorkflowState(summary = {}, workflow = {}) {
   const key = String(workflow.key || '').toLowerCase();
   const name = String(workflow.workflow_name || '').toLowerCase();
   if (key === 'docs.yml' || key === 'docs.yaml' || name.includes('docs')) {
-    return normalize(summary.docs_state);
+    const docsState = normalize(summary.docs_state);
+    const docsRunKnown = String(summary.docs_run_id || '').toLowerCase() !== 'unknown'
+      || String(summary.docs_run_url || '').startsWith('http');
+    if (docsState === 'idle' && docsRunKnown) return 'running';
+    return docsState;
   }
   if (key === 'ci.yml' || key === 'ci.yaml' || name.includes('ci')) {
     return normalize(summary.overall_state);
@@ -5048,12 +5052,20 @@ function routineCiJobState(summary = {}, workflow = {}, job = {}) {
   if ((workflowKey === 'docs.yml' || workflowKey === 'docs.yaml') && jobId === 'build') {
     const docsBuild = normalize(summary.docs_build_state);
     if (docsBuild !== 'idle') return docsBuild;
-    return normalize(summary.docs_state);
+    const docsState = normalize(summary.docs_state);
+    const docsRunKnown = String(summary.docs_run_id || '').toLowerCase() !== 'unknown'
+      || String(summary.docs_run_url || '').startsWith('http');
+    if (docsState === 'idle' && docsRunKnown) return 'running';
+    return docsState;
   }
   if ((workflowKey === 'docs.yml' || workflowKey === 'docs.yaml') && jobId === 'deploy') {
     const docsDeploy = normalize(summary.docs_deploy_state);
     if (docsDeploy !== 'idle') return docsDeploy;
-    return normalize(summary.docs_state);
+    const docsState = normalize(summary.docs_state);
+    const docsRunKnown = String(summary.docs_run_id || '').toLowerCase() !== 'unknown'
+      || String(summary.docs_run_url || '').startsWith('http');
+    if (docsState === 'idle' && docsRunKnown) return 'running';
+    return docsState;
   }
   if (workflowKey === 'pypi.yml' || workflowKey === 'pypi.yaml') {
     if (jobId === 'build-and-publish') {
