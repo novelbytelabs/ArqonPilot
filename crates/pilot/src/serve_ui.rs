@@ -9966,7 +9966,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button class="btn secondary" type="button" onclick="routinePolicyModalLoad()">Load</button>
           <button class="btn secondary" type="button" onclick="routinePolicyModalLoadLatestActive()">Load Latest Active</button>
           <button class="btn secondary" type="button" onclick="routinePolicyModalSimulate()">Simulate</button>
-          <button class="btn" type="button" onclick="routinePolicyModalActivate()">Activate</button>
+          <button id="dash-routine-policy-activate-btn" class="btn" type="button" onclick="routinePolicyModalActivate()">Activate</button>
         </div>
       </div>
     </div>
@@ -11203,7 +11203,7 @@ Recommended flow:
            <button class="btn secondary" onclick="settingsLoadPolicy()">Refresh Active Policy</button>
            <button class="btn" onclick="settingsDraftPolicy()">Save Draft</button>
            <button class="btn secondary" onclick="settingsSimulatePolicy()">Simulate Draft</button>
-           <button class="btn action-btn" onclick="settingsActivatePolicy()" style="color:var(--rose);border-color:var(--rose)">Activate Policy</button>
+           <button id="settings-activate-policy-btn" class="btn action-btn" onclick="settingsActivatePolicy()" style="color:var(--rose);border-color:var(--rose)">Activate Policy</button>
         </div>
         <label class="field-label" for="settings-status-out">Settings Status</label>
         <div id="settings-status-panel" class="pre-wrap">

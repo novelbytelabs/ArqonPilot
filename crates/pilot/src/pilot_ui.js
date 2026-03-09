@@ -5562,6 +5562,15 @@ function policyChecklistHtml(items) {
   return `<ul style="margin:0; padding-left:18px;">${rows || '<li style="color:var(--muted);">No checks.</li>'}</ul>`;
 }
 
+function policySetActivationButtonState(buttonId, enabled, reason) {
+  const btn = document.getElementById(buttonId);
+  if (!btn) return;
+  btn.disabled = !enabled;
+  btn.title = enabled ? 'Ready to activate' : String(reason || 'Activation blocked');
+  btn.style.opacity = enabled ? '1' : '0.55';
+  btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+}
+
 function policyDiffHtml(lines, emptyLabel) {
   if (!Array.isArray(lines) || !lines.length) {
     return `<div class="helper">${routineEscapeHtml(emptyLabel || 'No differences detected.')}</div>`;
@@ -5604,13 +5613,17 @@ function routinePolicyModalRefreshInsights(policyJson = null, loaded = null) {
   if (diffEl) diffEl.innerHTML = policyDiffHtml(lines, 'Draft matches loaded policy.');
   if (checklistEl) {
     const draftFingerprint = normalized ? policyFingerprint(normalized) : '';
+    const unchangedSinceSimulation = !!dashRoutinePolicySimulationId && !!dashRoutinePolicySimulationFingerprint && draftFingerprint === dashRoutinePolicySimulationFingerprint;
     const checklist = [
       { label: 'Draft JSON is valid for operator_routine', ok: !!validation.ok },
       { label: 'Simulation evidence is present', ok: !!dashRoutinePolicySimulationId },
-      { label: 'Draft unchanged since last simulation', ok: !!dashRoutinePolicySimulationId && !!dashRoutinePolicySimulationFingerprint && draftFingerprint === dashRoutinePolicySimulationFingerprint },
+      { label: 'Draft unchanged since last simulation', ok: unchangedSinceSimulation },
       { label: 'Draft differs from loaded policy', ok: lines.length > 0 }
     ];
     checklistEl.innerHTML = policyChecklistHtml(checklist);
+    const canActivate = checklist.every((item) => item.ok);
+    const reason = canActivate ? '' : checklist.find((item) => !item.ok)?.label || 'Checklist not satisfied';
+    policySetActivationButtonState('dash-routine-policy-activate-btn', canActivate, reason);
   }
 }
 
@@ -5647,13 +5660,17 @@ function settingsPolicyRefreshInsights(policyJson = null) {
   if (diffEl) diffEl.innerHTML = policyDiffHtml(lines, 'Draft matches loaded policy.');
   if (checklistEl) {
     const fp = parsed ? policyFingerprint(parsed) : '';
+    const unchangedSinceSimulation = !!settingsActiveSimulationId && !!settingsLastSimulatedFingerprint && fp === settingsLastSimulatedFingerprint;
     const checklist = [
       { label: 'Draft JSON parses successfully', ok: !!parsed },
       { label: 'Simulation evidence is present', ok: !!settingsActiveSimulationId },
-      { label: 'Draft unchanged since last simulation', ok: !!settingsActiveSimulationId && !!settingsLastSimulatedFingerprint && fp === settingsLastSimulatedFingerprint },
+      { label: 'Draft unchanged since last simulation', ok: unchangedSinceSimulation },
       { label: 'Draft differs from loaded policy', ok: lines.length > 0 }
     ];
     checklistEl.innerHTML = policyChecklistHtml(checklist);
+    const canActivate = checklist.every((item) => item.ok);
+    const reason = canActivate ? '' : checklist.find((item) => !item.ok)?.label || 'Checklist not satisfied';
+    policySetActivationButtonState('settings-activate-policy-btn', canActivate, reason);
   }
 }
 
