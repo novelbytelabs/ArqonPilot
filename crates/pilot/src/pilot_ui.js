@@ -4457,24 +4457,32 @@ function routineProfileDiff(profile) {
 async function loadRoutinePolicyProfile() {
   const res = await fetchJsonSafe('/api/settings/policy/operator_routine');
   if (!res || res.ok === false || !res.policy_json || typeof res.policy_json !== 'object') {
+    const fallbackPolicy = policyCanonicalizeTopLevel(
+      { kind: 'operator_routine', version: 1, post_commit_profile: { ...ROUTINE_DEFAULT_PROFILE } },
+      { fallbackKind: 'operator_routine', fallbackName: 'Operator Routine', fallbackVersion: 1 }
+    );
     return {
       ok: false,
       source: 'Built-in default',
       version: 0,
       status: 'fallback',
       profile: { ...ROUTINE_DEFAULT_PROFILE },
-      policy_json: { kind: 'operator_routine', version: 1, post_commit_profile: { ...ROUTINE_DEFAULT_PROFILE } },
+      policy_json: fallbackPolicy,
       diff: []
     };
   }
   const profile = normalizeRoutineProfile(res.policy_json.post_commit_profile);
+  const canonicalPolicy = policyCanonicalizeTopLevel(
+    { ...res.policy_json, post_commit_profile: profile },
+    { fallbackKind: 'operator_routine', fallbackName: 'Operator Routine', fallbackVersion: res.version }
+  );
   return {
     ok: true,
     source: String(res.source || 'Unknown'),
     version: Number.isFinite(res.version) ? res.version : 0,
     status: String(res.status || 'unknown'),
     profile,
-    policy_json: { ...res.policy_json, post_commit_profile: profile },
+    policy_json: canonicalPolicy,
     diff: routineProfileDiff(profile)
   };
 }
@@ -5225,6 +5233,35 @@ function policyApplyDisplayName(policyJson, name) {
   return policyJson;
 }
 
+function policyCanonicalizeTopLevel(policyJson, opts = {}) {
+  if (!policyJson || typeof policyJson !== 'object' || Array.isArray(policyJson)) return policyJson;
+  const fallbackKind = String(opts.fallbackKind || policyJson.kind || '').trim();
+  const fallbackName = String(opts.fallbackName || '').trim();
+  const fallbackVersionRaw = opts.fallbackVersion;
+  const source = { ...policyJson };
+  const ordered = {};
+  const displayName = String(source.display_name || fallbackName || '').trim();
+  if (displayName) ordered.display_name = displayName;
+  let version = null;
+  if (typeof source.version === 'number' && Number.isFinite(source.version)) {
+    version = source.version;
+  } else if (typeof source.version === 'string' && source.version.trim().length > 0) {
+    const parsed = Number.parseInt(source.version, 10);
+    if (Number.isFinite(parsed)) version = parsed;
+  } else if (typeof fallbackVersionRaw === 'number' && Number.isFinite(fallbackVersionRaw)) {
+    version = fallbackVersionRaw;
+  } else {
+    version = 1;
+  }
+  ordered.version = version;
+  if (fallbackKind) ordered.kind = fallbackKind;
+  Object.keys(source).forEach((key) => {
+    if (key === 'display_name' || key === 'version' || key === 'kind') return;
+    ordered[key] = source[key];
+  });
+  return ordered;
+}
+
 function policyNormalizeForFingerprint(value) {
   if (Array.isArray(value)) return value.map((item) => policyNormalizeForFingerprint(item));
   if (value && typeof value === 'object') {
@@ -5243,57 +5280,6 @@ function policyFingerprint(value) {
   } catch (_) {
     return '';
   }
-}
-
-function policySourceClass(source, isOverride = false) {
-  if (isOverride) return 'ago';
-  const normalized = String(source || '').toLowerCase();
-  if (normalized.includes('default')) return 'default';
-  return 'agorg';
-}
-
-function policyDiffLines(base, next, path = '') {
-  const lines = [];
-  const currentPath = path || '(root)';
-  if (Array.isArray(base) || Array.isArray(next)) {
-    const left = Array.isArray(base) ? base : [];
-    const right = Array.isArray(next) ? next : [];
-    if (JSON.stringify(left) !== JSON.stringify(right)) {
-      lines.push(`~ ${currentPath}: [${left.length}] -> [${right.length}]`);
-    }
-    return lines;
-  }
-  const baseObj = (base && typeof base === 'object') ? base : {};
-  const nextObj = (next && typeof next === 'object') ? next : {};
-  const keys = Array.from(new Set([...Object.keys(baseObj), ...Object.keys(nextObj)])).sort();
-  keys.forEach((key) => {
-    const childPath = path ? `${path}.${key}` : key;
-    const hasBase = Object.prototype.hasOwnProperty.call(baseObj, key);
-    const hasNext = Object.prototype.hasOwnProperty.call(nextObj, key);
-    if (!hasBase && hasNext) {
-      lines.push(`+ ${childPath}`);
-      return;
-    }
-    if (hasBase && !hasNext) {
-      lines.push(`- ${childPath}`);
-      return;
-    }
-    const left = baseObj[key];
-    const right = nextObj[key];
-    const bothObjects = left && right
-      && typeof left === 'object'
-      && typeof right === 'object'
-      && !Array.isArray(left)
-      && !Array.isArray(right);
-    if (bothObjects) {
-      lines.push(...policyDiffLines(left, right, childPath));
-      return;
-    }
-    if (JSON.stringify(left) !== JSON.stringify(right)) {
-      lines.push(`~ ${childPath}`);
-    }
-  });
-  return lines;
 }
 
 function policyPathRead(root, path) {
@@ -5501,7 +5487,8 @@ function policySyncFormChangeToEditor(event, editorEl, nameEl, statusSetter) {
   }
   policyPathWrite(policyJson, path, nextValue);
   policyApplyDisplayName(policyJson, nameEl ? nameEl.value : '');
-  editorEl.value = JSON.stringify(policyJson, null, 2);
+  const canonical = policyCanonicalizeTopLevel(policyJson);
+  editorEl.value = JSON.stringify(canonical, null, 2);
 }
 
 function routinePolicyDraftValidate(policyJson) {
@@ -5553,126 +5540,6 @@ function routinePolicyDraftStatusSummary(validation, loaded) {
   return lines.join('\n');
 }
 
-function policyChecklistHtml(items) {
-  const rows = (items || []).map((item) => {
-    const ok = !!item.ok;
-    return `<li style="color:${ok ? '#10B981' : '#F87171'};">${ok ? 'PASS' : 'FAIL'}: ${routineEscapeHtml(item.label || '')}</li>`;
-  }).join('');
-  return `<ul style="margin:0; padding-left:18px;">${rows || '<li style="color:var(--muted);">No checks.</li>'}</ul>`;
-}
-
-function policySetActivationButtonState(buttonId, enabled, reason) {
-  const btn = document.getElementById(buttonId);
-  if (!btn) return;
-  btn.disabled = !enabled;
-  btn.title = enabled ? 'Ready to activate' : String(reason || 'Activation blocked');
-  btn.style.opacity = enabled ? '1' : '0.55';
-  btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
-}
-
-function policyDiffHtml(lines, emptyLabel) {
-  if (!Array.isArray(lines) || !lines.length) {
-    return `<div class="helper">${routineEscapeHtml(emptyLabel || 'No differences detected.')}</div>`;
-  }
-  const capped = lines.slice(0, 60);
-  const more = lines.length > capped.length ? `<div class="helper" style="margin-top:6px;">+${lines.length - capped.length} more</div>` : '';
-  return `<pre style="margin:0; max-height:160px; overflow:auto; font-size:0.72rem;">${routineEscapeHtml(capped.join('\n'))}</pre>${more}`;
-}
-
-function routinePolicyModalRefreshInsights(policyJson = null, loaded = null) {
-  const sourceEl = document.getElementById('dash-routine-policy-source');
-  const diffEl = document.getElementById('dash-routine-policy-diff');
-  const checklistEl = document.getElementById('dash-routine-policy-checklist');
-  const parsed = policyJson || (() => {
-    try {
-      return JSON.parse(document.getElementById('dash-routine-policy-editor')?.value || '{}');
-    } catch (_) {
-      return null;
-    }
-  })();
-  const activeLoaded = loaded || dashRoutineWorkspaceState.loaded || null;
-  if (sourceEl) {
-    const source = activeLoaded?.source || 'Unknown';
-    const status = activeLoaded?.status || 'unknown';
-    const version = activeLoaded?.version ?? 0;
-    const scope = dashRoutineWorkspaceState.scope?.id || dashRoutineWorkspaceState.active?.id || 'unknown';
-    const sourceClass = policySourceClass(source, source.toLowerCase().includes('override'));
-    sourceEl.innerHTML = `
-      <div class="inheritance-trace">
-        Source: <span class="source-pill ${sourceClass}">${routineEscapeHtml(source)}</span>
-        <div style="font-size:0.7rem; margin-top:4px;">Version: ${routineEscapeHtml(String(version))} | Status: ${routineEscapeHtml(String(status))}</div>
-        <div style="font-size:0.7rem; margin-top:4px;">Scope: ${routineEscapeHtml(String(scope))} | Kind: operator_routine</div>
-      </div>
-    `;
-  }
-  const validation = parsed ? routinePolicyDraftValidate(parsed) : { ok: false, errors: ['Invalid JSON draft.'] };
-  const normalized = validation.ok ? validation.normalizedPolicy : null;
-  const baseline = activeLoaded?.policy_json || {};
-  const lines = normalized ? policyDiffLines(baseline, normalized) : [];
-  if (diffEl) diffEl.innerHTML = policyDiffHtml(lines, 'Draft matches loaded policy.');
-  if (checklistEl) {
-    const draftFingerprint = normalized ? policyFingerprint(normalized) : '';
-    const unchangedSinceSimulation = !!dashRoutinePolicySimulationId && !!dashRoutinePolicySimulationFingerprint && draftFingerprint === dashRoutinePolicySimulationFingerprint;
-    const checklist = [
-      { label: 'Draft JSON is valid for operator_routine', ok: !!validation.ok },
-      { label: 'Simulation evidence is present', ok: !!dashRoutinePolicySimulationId },
-      { label: 'Draft unchanged since last simulation', ok: unchangedSinceSimulation },
-      { label: 'Draft differs from loaded policy', ok: lines.length > 0 }
-    ];
-    checklistEl.innerHTML = policyChecklistHtml(checklist);
-    const canActivate = checklist.every((item) => item.ok);
-    const reason = canActivate ? '' : checklist.find((item) => !item.ok)?.label || 'Checklist not satisfied';
-    policySetActivationButtonState('dash-routine-policy-activate-btn', canActivate, reason);
-  }
-}
-
-function settingsPolicyRefreshInsights(policyJson = null) {
-  const contextEl = document.getElementById('settings-policy-context');
-  const diffEl = document.getElementById('settings-policy-diff');
-  const checklistEl = document.getElementById('settings-policy-checklist');
-  const kind = document.getElementById('settings-policy-kind')?.value || 'branch';
-  const target = settingsTargetValue();
-  const parsed = policyJson || (() => {
-    try {
-      return JSON.parse(settingsPolicyEditorEl()?.value || '{}');
-    } catch (_) {
-      return null;
-    }
-  })();
-  const meta = settingsLoadedPolicyMeta || {};
-  if (contextEl) {
-    const source = meta.source || 'Unknown';
-    const version = meta.version ?? '?';
-    const status = meta.status || 'unknown';
-    const sourceClass = policySourceClass(source, !!meta.is_override);
-    contextEl.innerHTML = `
-      <div class="inheritance-trace">
-        Source: <span class="source-pill ${sourceClass}">${routineEscapeHtml(source)}</span>
-        ${meta.is_override ? '<span class="override-tag">AGO Override</span>' : ''}
-        <div style="font-size:0.7rem; margin-top:4px;">Version: ${routineEscapeHtml(String(version))} | Status: ${routineEscapeHtml(String(status))}</div>
-        <div style="font-size:0.7rem; margin-top:4px;">Kind: ${routineEscapeHtml(kind)} | Target: ${routineEscapeHtml(target || 'AGOrg')}</div>
-      </div>
-    `;
-  }
-  const baseline = settingsLoadedPolicyJson || {};
-  const lines = parsed ? policyDiffLines(baseline, parsed) : [];
-  if (diffEl) diffEl.innerHTML = policyDiffHtml(lines, 'Draft matches loaded policy.');
-  if (checklistEl) {
-    const fp = parsed ? policyFingerprint(parsed) : '';
-    const unchangedSinceSimulation = !!settingsActiveSimulationId && !!settingsLastSimulatedFingerprint && fp === settingsLastSimulatedFingerprint;
-    const checklist = [
-      { label: 'Draft JSON parses successfully', ok: !!parsed },
-      { label: 'Simulation evidence is present', ok: !!settingsActiveSimulationId },
-      { label: 'Draft unchanged since last simulation', ok: unchangedSinceSimulation },
-      { label: 'Draft differs from loaded policy', ok: lines.length > 0 }
-    ];
-    checklistEl.innerHTML = policyChecklistHtml(checklist);
-    const canActivate = checklist.every((item) => item.ok);
-    const reason = canActivate ? '' : checklist.find((item) => !item.ok)?.label || 'Checklist not satisfied';
-    policySetActivationButtonState('settings-activate-policy-btn', canActivate, reason);
-  }
-}
-
 function routinePolicyModalOpen() {
   if (!dashRoutinePolicyModal) return;
   dashRoutinePolicyModal.classList.add('active');
@@ -5700,7 +5567,12 @@ function routinePolicyModalSyncNameToEditor() {
   try {
     const parsed = JSON.parse(editor.value || '{}');
     policyApplyDisplayName(parsed, nameEl.value);
-    editor.value = JSON.stringify(parsed, null, 2);
+    const canonical = policyCanonicalizeTopLevel(parsed, {
+      fallbackKind: 'operator_routine',
+      fallbackName: 'Operator Routine',
+      fallbackVersion: dashRoutineWorkspaceState.loaded?.version
+    });
+    editor.value = JSON.stringify(canonical, null, 2);
   } catch (_) {}
 }
 
@@ -5718,7 +5590,6 @@ function routinePolicyModalRenderForm() {
   }
   if (nameEl) nameEl.value = policyGetDisplayName(parsed, 'Operator Routine');
   policyRenderFormInto(form, parsed);
-  routinePolicyModalRefreshInsights(parsed);
 }
 
 function routinePolicyModalOnFormInput(event) {
@@ -5736,7 +5607,15 @@ async function routinePolicyModalLoad() {
   const editor = document.getElementById('dash-routine-policy-editor');
   const nameEl = document.getElementById('dash-routine-policy-name');
   const form = document.getElementById('dash-routine-policy-form');
-  if (editor) editor.value = JSON.stringify(loaded.policy_json || { post_commit_profile: loaded.profile }, null, 2);
+  if (editor) {
+    const basePolicy = loaded.policy_json || { post_commit_profile: loaded.profile };
+    const canonical = policyCanonicalizeTopLevel(basePolicy, {
+      fallbackKind: 'operator_routine',
+      fallbackName: 'Operator Routine',
+      fallbackVersion: loaded.version
+    });
+    editor.value = JSON.stringify(canonical, null, 2);
+  }
   if (nameEl) nameEl.value = policyGetDisplayName(loaded.policy_json || {}, 'Operator Routine');
   if (form && !form.dataset.bound) {
     form.addEventListener('input', routinePolicyModalOnFormInput);
@@ -5744,14 +5623,12 @@ async function routinePolicyModalLoad() {
     form.dataset.bound = '1';
   }
   if (editor && !editor.dataset.boundPolicy) {
-    editor.addEventListener('input', () => routinePolicyModalRefreshInsights());
     editor.dataset.boundPolicy = '1';
   }
   routinePolicyModalRenderForm();
   routinePolicyModalViewRaw(false);
   dashRoutinePolicySimulationId = '';
   dashRoutinePolicySimulationFingerprint = '';
-  routinePolicyModalRefreshInsights(loaded.policy_json || null, loaded);
   routinePolicyModalSetStatus(`Loaded operator_routine policy (${loaded.source} v${loaded.version} [${loaded.status}])`);
 }
 
@@ -5779,7 +5656,11 @@ async function routinePolicyModalLoadLatestActive() {
   }
   const editor = document.getElementById('dash-routine-policy-editor');
   const nameEl = document.getElementById('dash-routine-policy-name');
-  const loadedPolicy = res.policy_json || {};
+  const loadedPolicy = policyCanonicalizeTopLevel(res.policy_json || {}, {
+    fallbackKind: 'operator_routine',
+    fallbackName: 'Operator Routine',
+    fallbackVersion: res.version ?? activeItem.version
+  });
   if (editor) editor.value = JSON.stringify(loadedPolicy, null, 2);
   if (nameEl) nameEl.value = policyGetDisplayName(res.policy_json || {}, 'Operator Routine');
   const loadedProfile = normalizeRoutineProfile((loadedPolicy.post_commit_profile || {}));
@@ -5810,6 +5691,12 @@ async function routinePolicyModalSimulate() {
     return;
   }
   const loaded = dashRoutineWorkspaceState.loaded || await loadRoutinePolicyProfile();
+  policyJson = policyCanonicalizeTopLevel(policyJson, {
+    fallbackKind: 'operator_routine',
+    fallbackName: 'Operator Routine',
+    fallbackVersion: loaded?.version
+  });
+  dashRoutinePolicyEditor.value = JSON.stringify(policyJson, null, 2);
   const validation = routinePolicyDraftValidate(policyJson);
   if (!validation.ok) {
     routinePolicyModalSetStatus(routinePolicyDraftStatusSummary(validation, loaded));
@@ -5823,12 +5710,10 @@ async function routinePolicyModalSimulate() {
   });
   if (isErrorResponse(res)) {
     routinePolicyModalSetStatus(`${draftSummary}\n\nSimulation failed:\n${JSON.stringify(res, null, 2)}`);
-    routinePolicyModalRefreshInsights(validation.normalizedPolicy, loaded);
     return;
   }
   dashRoutinePolicySimulationId = res.evidence_id || '';
   dashRoutinePolicySimulationFingerprint = policyFingerprint(validation.normalizedPolicy);
-  routinePolicyModalRefreshInsights(validation.normalizedPolicy, loaded);
   routinePolicyModalSetStatus(`${draftSummary}\n\nSimulation evidence: ${dashRoutinePolicySimulationId || 'missing'}`);
 }
 
@@ -5847,6 +5732,12 @@ async function routinePolicyModalActivate() {
     return;
   }
   const loaded = dashRoutineWorkspaceState.loaded || await loadRoutinePolicyProfile();
+  policyJson = policyCanonicalizeTopLevel(policyJson, {
+    fallbackKind: 'operator_routine',
+    fallbackName: 'Operator Routine',
+    fallbackVersion: loaded?.version
+  });
+  dashRoutinePolicyEditor.value = JSON.stringify(policyJson, null, 2);
   const validation = routinePolicyDraftValidate(policyJson);
   if (!validation.ok) {
     routinePolicyModalSetStatus(routinePolicyDraftStatusSummary(validation, loaded));
@@ -5857,7 +5748,6 @@ async function routinePolicyModalActivate() {
     routinePolicyModalSetStatus(
       `${routinePolicyDraftStatusSummary(validation, loaded)}\n\nDraft changed since last simulation. Re-run Simulate before Activate.`
     );
-    routinePolicyModalRefreshInsights(validation.normalizedPolicy, loaded);
     return;
   }
   const res = await fetchJsonSafe('/api/settings/policy/operator_routine/activate', {
@@ -5867,12 +5757,10 @@ async function routinePolicyModalActivate() {
   });
   if (isErrorResponse(res)) {
     routinePolicyModalSetStatus(res);
-    routinePolicyModalRefreshInsights(validation.normalizedPolicy, loaded);
     return;
   }
   dashRoutinePolicySimulationId = '';
   dashRoutinePolicySimulationFingerprint = '';
-  routinePolicyModalRefreshInsights(validation.normalizedPolicy, loaded);
   routinePolicyModalSetStatus(`Activation succeeded:\n${JSON.stringify(res, null, 2)}`);
   await dashLoadRoutine();
 }
@@ -8537,7 +8425,6 @@ async function bootUi() {
 
 let settingsActiveSimulationId = "";
 let settingsLastSimulatedFingerprint = "";
-let settingsLoadedPolicyJson = null;
 let settingsLoadedPolicyMeta = null;
 
 function settingsSetStatus(data, level = 'info') {
@@ -8673,7 +8560,12 @@ function settingsPolicySyncNameToEditor() {
   try {
     const parsed = JSON.parse(editor.value || '{}');
     policyApplyDisplayName(parsed, nameEl.value);
-    editor.value = JSON.stringify(parsed, null, 2);
+    const canonical = policyCanonicalizeTopLevel(parsed, {
+      fallbackKind: document.getElementById('settings-policy-kind')?.value || '',
+      fallbackName: nameEl.value || 'Policy',
+      fallbackVersion: settingsLoadedPolicyMeta?.version
+    });
+    editor.value = JSON.stringify(canonical, null, 2);
   } catch (_) {}
 }
 
@@ -8691,7 +8583,6 @@ function settingsPolicyRenderForm() {
   }
   if (nameEl) nameEl.value = policyGetDisplayName(parsed, 'Policy');
   policyRenderFormInto(form, parsed);
-  settingsPolicyRefreshInsights(parsed);
 }
 
 function settingsPolicyOnFormInput(event) {
@@ -8828,9 +8719,11 @@ async function settingsLoadSelectedPolicyVersion() {
     return;
   }
   const editor = document.getElementById('settings-policy-editor');
-  const loadedJson = res.policy_json || {};
+  const loadedJson = policyCanonicalizeTopLevel(res.policy_json || {}, {
+    fallbackKind: kind,
+    fallbackVersion: res.version
+  });
   editor.value = JSON.stringify(loadedJson, null, 2);
-  settingsLoadedPolicyJson = JSON.parse(JSON.stringify(loadedJson));
   settingsLoadedPolicyMeta = {
     source: res.source || 'Unknown',
     version: res.version ?? '?',
@@ -8848,7 +8741,6 @@ async function settingsLoadSelectedPolicyVersion() {
     form.dataset.bound = '1';
   }
   if (editor && !editor.dataset.boundPolicy) {
-    editor.addEventListener('input', () => settingsPolicyRefreshInsights());
     editor.dataset.boundPolicy = '1';
   }
   settingsPolicyRenderForm();
@@ -8896,9 +8788,11 @@ async function settingsLoadPolicy() {
   const res = await fetchJsonSafe(url);
   if (isErrorResponse(res)) {
     if (res.error === "Policy not found") {
-       const fallbackJson = { note: "No policy specific to this scope. Draft here to create one." };
+       const fallbackJson = policyCanonicalizeTopLevel(
+         { note: "No policy specific to this scope. Draft here to create one." },
+         { fallbackKind: kind, fallbackVersion: 1 }
+       );
        editor.value = JSON.stringify(fallbackJson, null, 2);
-       settingsLoadedPolicyJson = {};
        settingsLoadedPolicyMeta = {
          source: 'Fallback/Inherited',
          version: 0,
@@ -8907,7 +8801,6 @@ async function settingsLoadPolicy() {
        };
        settingsActiveSimulationId = "";
        settingsLastSimulatedFingerprint = "";
-       settingsPolicyRefreshInsights(fallbackJson);
        settingsSetStatus("No policy found for this target. Editor is in fallback/inherit mode.", 'warn');
     } else {
        settingsShowError('Error loading policy: ' + (res.error || 'unknown error'), res);
@@ -8918,8 +8811,11 @@ async function settingsLoadPolicy() {
     settingsShowError('Error loading policy: malformed response payload', res);
     return;
   }
-  editor.value = JSON.stringify(res.policy_json, null, 2);
-  settingsLoadedPolicyJson = JSON.parse(JSON.stringify(res.policy_json || {}));
+  const loadedJson = policyCanonicalizeTopLevel(res.policy_json || {}, {
+    fallbackKind: kind,
+    fallbackVersion: Object.prototype.hasOwnProperty.call(res, 'version') ? res.version : 1
+  });
+  editor.value = JSON.stringify(loadedJson, null, 2);
   settingsLoadedPolicyMeta = {
     source: res.source || 'Unknown',
     version: Object.prototype.hasOwnProperty.call(res, 'version') ? res.version : '?',
@@ -8937,7 +8833,6 @@ async function settingsLoadPolicy() {
     form.dataset.bound = '1';
   }
   if (editor && !editor.dataset.boundPolicy) {
-    editor.addEventListener('input', () => settingsPolicyRefreshInsights());
     editor.dataset.boundPolicy = '1';
   }
   settingsPolicyRenderForm();
@@ -8947,7 +8842,6 @@ async function settingsLoadPolicy() {
   const status = res.status || 'unknown';
   settingsSetStatus(`Loaded ${kind} policy (${source}) v${version} [${status}]`, 'success');
   logActivity('Loaded Policy', `Kind: ${kind}\nID: ${res.id}\nStatus: ${res.status}`);
-  settingsPolicyRefreshInsights(res.policy_json || {});
 }
 
 async function settingsDraftPolicy() {
@@ -8963,6 +8857,13 @@ async function settingsDraftPolicy() {
     settingsShowError("Invalid JSON in editor");
     return;
   }
+
+  policyJson = policyCanonicalizeTopLevel(policyJson, {
+    fallbackKind: kind,
+    fallbackName: settingsPolicyNameEl()?.value || `${kind} policy`,
+    fallbackVersion: settingsLoadedPolicyMeta?.version
+  });
+  editor.value = JSON.stringify(policyJson, null, 2);
 
   const res = await fetchJsonSafe(`/api/settings/policy/${kind}/draft`, {
     method: 'POST',
@@ -8997,6 +8898,13 @@ async function settingsSimulatePolicy() {
     return;
   }
 
+  policyJson = policyCanonicalizeTopLevel(policyJson, {
+    fallbackKind: kind,
+    fallbackName: settingsPolicyNameEl()?.value || `${kind} policy`,
+    fallbackVersion: settingsLoadedPolicyMeta?.version
+  });
+  editor.value = JSON.stringify(policyJson, null, 2);
+
   const res = await fetchJsonSafe(`/api/settings/policy/${kind}/simulate`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -9015,7 +8923,6 @@ async function settingsSimulatePolicy() {
   settingsActiveSimulationId = res.evidence_id;
   settingsLastSimulatedFingerprint = policyFingerprint(policyJson);
   settingsSetStatus(res, 'success');
-  settingsPolicyRefreshInsights(policyJson);
   logActivity('Policy Simulation', JSON.stringify(res, null, 2));
 }
 
@@ -9034,10 +8941,17 @@ async function settingsActivatePolicy() {
     settingsShowError("Invalid JSON in editor");
     return;
   }
+  policyJson = policyCanonicalizeTopLevel(policyJson, {
+    fallbackKind: kind,
+    fallbackName: settingsPolicyNameEl()?.value || `${kind} policy`,
+    fallbackVersion: settingsLoadedPolicyMeta?.version
+  });
+  const settingsEditor = settingsPolicyEditorEl();
+  if (settingsEditor) settingsEditor.value = JSON.stringify(policyJson, null, 2);
+
   const fingerprint = policyFingerprint(policyJson);
   if (!settingsLastSimulatedFingerprint || fingerprint !== settingsLastSimulatedFingerprint) {
     settingsShowError("Draft changed since last simulation. Re-run Simulate before Activate.");
-    settingsPolicyRefreshInsights(policyJson);
     return;
   }
 

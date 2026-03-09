@@ -9946,15 +9946,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <div class="routine-modal-side">
             <div class="routine-detail-box">
               <h5>Context</h5>
-              <div id="dash-routine-policy-source" class="routine-modal-status" style="min-height: 100px;">Context pending.</div>
-            </div>
-            <div class="routine-detail-box">
-              <h5>Draft vs Loaded Diff</h5>
-              <div id="dash-routine-policy-diff" class="routine-modal-status" style="min-height: 120px;">No differences yet.</div>
-            </div>
-            <div class="routine-detail-box">
-              <h5>Activation Checklist</h5>
-              <div id="dash-routine-policy-checklist" class="routine-modal-status" style="min-height: 96px;">Checklist pending.</div>
+              <ul>
+                <li>Kind: operator_routine</li>
+                <li>Target: current dashboard scope</li>
+                <li>Simulation required before activation</li>
+              </ul>
             </div>
             <div class="routine-detail-box">
               <h5>Status</h5>
@@ -9966,7 +9962,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button class="btn secondary" type="button" onclick="routinePolicyModalLoad()">Load</button>
           <button class="btn secondary" type="button" onclick="routinePolicyModalLoadLatestActive()">Load Latest Active</button>
           <button class="btn secondary" type="button" onclick="routinePolicyModalSimulate()">Simulate</button>
-          <button id="dash-routine-policy-activate-btn" class="btn" type="button" onclick="routinePolicyModalActivate()">Activate</button>
+          <button class="btn" type="button" onclick="routinePolicyModalActivate()">Activate</button>
         </div>
       </div>
     </div>
@@ -11203,7 +11199,7 @@ Recommended flow:
            <button class="btn secondary" onclick="settingsLoadPolicy()">Refresh Active Policy</button>
            <button class="btn" onclick="settingsDraftPolicy()">Save Draft</button>
            <button class="btn secondary" onclick="settingsSimulatePolicy()">Simulate Draft</button>
-           <button id="settings-activate-policy-btn" class="btn action-btn" onclick="settingsActivatePolicy()" style="color:var(--rose);border-color:var(--rose)">Activate Policy</button>
+           <button class="btn action-btn" onclick="settingsActivatePolicy()" style="color:var(--rose);border-color:var(--rose)">Activate Policy</button>
         </div>
         <label class="field-label" for="settings-status-out">Settings Status</label>
         <div id="settings-status-panel" class="pre-wrap">
@@ -11240,21 +11236,6 @@ Recommended flow:
           <button class="btn action-btn" onclick="settingsDeleteSelectedPolicyVersion()" style="color:var(--rose);border-color:var(--rose)">Delete Selected Version</button>
         </div>
 
-        <hr style="border-color:var(--border);margin:16px 0;" />
-        <h4>Policy Control Tower</h4>
-        <p class="helper">Track resolved source, draft deltas, and activation readiness before mutating governance state.</p>
-        <div class="routine-detail-box">
-          <h5>Context</h5>
-          <div id="settings-policy-context" class="routine-modal-status" style="min-height:82px;">Context pending.</div>
-        </div>
-        <div class="routine-detail-box">
-          <h5>Draft vs Loaded Diff</h5>
-          <div id="settings-policy-diff" class="routine-modal-status" style="min-height:120px;">No differences yet.</div>
-        </div>
-        <div class="routine-detail-box">
-          <h5>Activation Checklist</h5>
-          <div id="settings-policy-checklist" class="routine-modal-status" style="min-height:96px;">Checklist pending.</div>
-        </div>
       </div>
 
       <div class="card">
@@ -11495,7 +11476,70 @@ fn default_policy_json_for_kind(kind: &str) -> std::result::Result<Value, String
         _ => return Err(format!("Unsupported policy kind '{}'", kind)),
     }
     .map_err(|e| e.to_string())?;
-    Ok(value)
+    Ok(canonicalize_policy_json_for_ui(kind, value))
+}
+
+fn title_case_policy_kind(kind: &str) -> String {
+    let mut out = String::new();
+    for (idx, part) in kind.split('_').filter(|p| !p.is_empty()).enumerate() {
+        if idx > 0 {
+            out.push(' ');
+        }
+        let mut chars = part.chars();
+        if let Some(first) = chars.next() {
+            out.push(first.to_ascii_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+    if out.is_empty() {
+        "Policy".to_string()
+    } else {
+        out
+    }
+}
+
+fn canonicalize_policy_json_for_ui(kind: &str, policy_json: Value) -> Value {
+    let map = match policy_json {
+        Value::Object(m) => m,
+        other => return other,
+    };
+    let display_name = map
+        .get("display_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| title_case_policy_kind(kind));
+
+    let version = map
+        .get("version")
+        .and_then(|v| match v {
+            Value::Number(n) => n.as_i64().or_else(|| n.as_u64().map(|u| u as i64)),
+            Value::String(s) => s.trim().parse::<i64>().ok(),
+            _ => None,
+        })
+        .unwrap_or(1);
+
+    let kind_value = map
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(kind)
+        .to_string();
+
+    let mut ordered = serde_json::Map::new();
+    ordered.insert("display_name".to_string(), Value::String(display_name));
+    ordered.insert("version".to_string(), Value::Number(version.into()));
+    ordered.insert("kind".to_string(), Value::String(kind_value));
+
+    for (k, v) in map {
+        if k == "display_name" || k == "version" || k == "kind" {
+            continue;
+        }
+        ordered.insert(k, v);
+    }
+    Value::Object(ordered)
 }
 
 async fn api_settings_get_policy(
@@ -11522,14 +11566,15 @@ async fn api_settings_get_policy(
             .await
         {
             Ok(Some((record, source_name))) => {
-                let hash = compute_policy_hash(&record.policy_json);
+                let policy_json = canonicalize_policy_json_for_ui(&params.kind, record.policy_json);
+                let hash = compute_policy_hash(&policy_json);
                 return Json(json!({
                     "id": record.id.to_string(),
                     "agorg_id": record.agorg_id.to_string(),
                     "ago_path": record.ago_path,
                     "version": record.version,
                     "status": record.status,
-                    "policy_json": record.policy_json,
+                    "policy_json": policy_json,
                     "hash": hash,
                     "source": source_name,
                     "is_override": record.ago_path.is_some()
@@ -11559,15 +11604,16 @@ async fn api_settings_get_policy(
     }
 
     match gov_store.get_policy(active_scope.id, &params.kind).await {
-        Ok(Some(record)) => {
-            let hash = compute_policy_hash(&record.policy_json);
+            Ok(Some(record)) => {
+            let policy_json = canonicalize_policy_json_for_ui(&params.kind, record.policy_json);
+            let hash = compute_policy_hash(&policy_json);
             Json(json!({
                 "id": record.id.to_string(),
                 "agorg_id": record.agorg_id.to_string(),
                 "ago_path": record.ago_path,
                 "version": record.version,
                 "status": record.status,
-                "policy_json": record.policy_json,
+                "policy_json": policy_json,
                 "hash": hash,
                 "source": "AGOrg",
                 "is_override": false
@@ -11660,14 +11706,15 @@ async fn api_settings_load_policy_version(
         .await
     {
         Ok(Some(record)) => {
-            let hash = compute_policy_hash(&record.policy_json);
+            let policy_json = canonicalize_policy_json_for_ui(&params.kind, record.policy_json);
+            let hash = compute_policy_hash(&policy_json);
             Json(json!({
                 "id": record.id.to_string(),
                 "agorg_id": record.agorg_id.to_string(),
                 "ago_path": record.ago_path,
                 "version": record.version,
                 "status": record.status,
-                "policy_json": record.policy_json,
+                "policy_json": policy_json,
                 "hash": hash,
                 "source": if req.ago_path.is_some() { "AGO Override" } else { "AGOrg" },
                 "is_override": req.ago_path.is_some()
@@ -11752,13 +11799,14 @@ async fn api_settings_draft_policy(
     };
 
     let gov_store = GovernanceStore::new(state.agorg_store.dsn());
+    let canonical_policy_json = canonicalize_policy_json_for_ui(&params.kind, req.policy_json.clone());
 
     let saved = match gov_store
         .save_policy(
             active_scope.id,
             req.ago_path.as_deref(),
             &params.kind,
-            &req.policy_json,
+            &canonical_policy_json,
             "draft",
             "pilot_ui",
         )
@@ -11768,14 +11816,15 @@ async fn api_settings_draft_policy(
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    let hash = compute_policy_hash(&saved.policy_json);
+    let policy_json = canonicalize_policy_json_for_ui(&params.kind, saved.policy_json);
+    let hash = compute_policy_hash(&policy_json);
     let resp = PolicyResponse {
         id: saved.id.to_string(),
         agorg_id: saved.agorg_id.to_string(),
         ago_path: saved.ago_path,
         version: saved.version,
         status: saved.status,
-        policy_json: saved.policy_json,
+        policy_json,
         hash,
     };
 
@@ -12071,12 +12120,13 @@ async fn api_settings_activate_policy(
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
+    let canonical_policy_json = canonicalize_policy_json_for_ui(&params.kind, current.policy_json);
     let saved = match gov_store
         .save_policy(
             active_scope.id,
             req.ago_path.as_deref(),
             &params.kind,
-            &current.policy_json,
+            &canonical_policy_json,
             "active",
             "pilot_ui",
         )
@@ -12086,14 +12136,15 @@ async fn api_settings_activate_policy(
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    let hash = compute_policy_hash(&saved.policy_json);
+    let policy_json = canonicalize_policy_json_for_ui(&params.kind, saved.policy_json);
+    let hash = compute_policy_hash(&policy_json);
     let resp = PolicyResponse {
         id: saved.id.to_string(),
         agorg_id: saved.agorg_id.to_string(),
         ago_path: saved.ago_path,
         version: saved.version,
         status: saved.status,
-        policy_json: saved.policy_json,
+        policy_json,
         hash,
     };
 
