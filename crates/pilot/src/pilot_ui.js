@@ -5420,11 +5420,10 @@ function policyRenderFormNode(value, path, label, depth = 0) {
   }
   if (typeof value === 'boolean') {
     return `
-      <div class="routine-control" style="margin-left:${depth * 10}px;display:flex;align-items:center;justify-content:flex-start;gap:10px;">
-        <label style="display:flex;align-items:center;gap:8px;margin:0;">
-          <input style="width:auto;margin:0;" type="checkbox" data-policy-form-path="${pathAttr}" data-policy-form-kind="boolean" ${value ? 'checked' : ''} />
-          <span style="font-size:0.72rem;letter-spacing:0.14em;color:var(--dim);text-transform:uppercase;">${safeLabel}</span>
-          <span class="helper" style="margin:0;">${value ? 'TRUE' : 'FALSE'}</span>
+      <div class="routine-control" style="margin-left:${depth * 10}px;text-align:left;">
+        <label style="display:flex;justify-content:flex-start;align-items:flex-start;gap:8px;margin:0;text-align:left;">
+          <input style="width:auto;margin:2px 0 0 0;" type="checkbox" data-policy-form-path="${pathAttr}" data-policy-form-kind="boolean" ${value ? 'checked' : ''} />
+          <span style="font-size:0.72rem;letter-spacing:0.14em;color:var(--dim);text-transform:uppercase;text-align:left;">${safeLabel}</span>
         </label>
       </div>
     `;
