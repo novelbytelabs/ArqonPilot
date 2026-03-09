@@ -9719,6 +9719,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
                 <button class="action-btn" onclick="dashLoadRoutine()" style="padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; font-size: 0.7rem; color: var(--dim); cursor: pointer;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--dim)'">Load Routine</button>
                 <button class="action-btn" onclick="dashToggleRoutinePolicyView()" style="padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; font-size: 0.7rem; color: var(--dim); cursor: pointer;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--dim)'">View Policy</button>
                 <button class="action-btn" onclick="routinePolicyModalOpen()" style="padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; font-size: 0.7rem; color: var(--dim); cursor: pointer;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--dim)'">Quick Edit Policy</button>
+                <button class="action-btn" onclick="dashRefreshRoutinePolicy()" style="padding: 2px 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; font-size: 0.7rem; color: var(--dim); cursor: pointer;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--dim)'">Refresh Policy</button>
               </div>
             </div>
             <div class="routine-meta-grid">
@@ -9931,17 +9932,29 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <div class="routine-modal-grid">
           <div class="routine-control">
+            <label for="dash-routine-policy-name">Policy Display Name (stored in JSON as <code>display_name</code>)</label>
+            <input id="dash-routine-policy-name" type="text" placeholder="Operator Routine" oninput="routinePolicyModalSyncNameToEditor()" />
+            <div class="row" style="margin:8px 0 10px; gap:8px;">
+              <button class="btn secondary" type="button" onclick="routinePolicyModalViewRaw(false)">Form View</button>
+              <button class="btn secondary" type="button" onclick="routinePolicyModalViewRaw(true)">Raw JSON View</button>
+              <button class="btn secondary" type="button" onclick="routinePolicyModalRenderForm()">Refresh Form</button>
+            </div>
+            <div id="dash-routine-policy-form" class="routine-detail-box" style="max-height: 420px; overflow: auto;"></div>
             <label for="dash-routine-policy-editor">Policy JSON</label>
             <textarea id="dash-routine-policy-editor" spellcheck="false" aria-describedby="dash-routine-policy-modal-title"></textarea>
           </div>
           <div class="routine-modal-side">
             <div class="routine-detail-box">
               <h5>Context</h5>
-              <ul id="dash-routine-policy-context">
-                <li>Kind: operator_routine</li>
-                <li>Target: current dashboard scope</li>
-                <li>Simulation required before activation</li>
-              </ul>
+              <div id="dash-routine-policy-source" class="routine-modal-status" style="min-height: 100px;">Context pending.</div>
+            </div>
+            <div class="routine-detail-box">
+              <h5>Draft vs Loaded Diff</h5>
+              <div id="dash-routine-policy-diff" class="routine-modal-status" style="min-height: 120px;">No differences yet.</div>
+            </div>
+            <div class="routine-detail-box">
+              <h5>Activation Checklist</h5>
+              <div id="dash-routine-policy-checklist" class="routine-modal-status" style="min-height: 96px;">Checklist pending.</div>
             </div>
             <div class="routine-detail-box">
               <h5>Status</h5>
@@ -9951,6 +9964,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <div class="routine-modal-actions">
           <button class="btn secondary" type="button" onclick="routinePolicyModalLoad()">Load</button>
+          <button class="btn secondary" type="button" onclick="routinePolicyModalLoadLatestActive()">Load Latest Active</button>
           <button class="btn secondary" type="button" onclick="routinePolicyModalSimulate()">Simulate</button>
           <button class="btn" type="button" onclick="routinePolicyModalActivate()">Activate</button>
         </div>
@@ -11200,6 +11214,15 @@ Recommended flow:
           <pre id="settings-status-out">ready</pre>
         </div>
 
+        <label class="field-label" for="settings-policy-name">Policy Display Name (stored in JSON as <code>display_name</code>)</label>
+        <input id="settings-policy-name" type="text" placeholder="Policy name" oninput="settingsPolicyApplyName()" />
+        <div class="row" style="margin:8px 0 10px; gap:8px;">
+          <button class="btn secondary" onclick="settingsPolicyViewRaw(false)">Form View</button>
+          <button class="btn secondary" onclick="settingsPolicyViewRaw(true)">Raw JSON View</button>
+          <button class="btn secondary" onclick="settingsPolicyRenderForm()">Refresh Form</button>
+        </div>
+        <div id="settings-policy-form" class="routine-detail-box" style="max-height: 420px; overflow: auto; margin-bottom: 10px;"></div>
+
         <label class="field-label" for="settings-policy-editor">Policy JSON (Draft / Active)</label>
         <textarea id="settings-policy-editor" placeholder="JSON policy definition" style="min-height:200px;"></textarea>
         
@@ -11209,11 +11232,28 @@ Recommended flow:
         <div class="row">
           <button class="btn secondary" onclick="settingsLoadPolicyVersions()">Refresh Versions</button>
           <button class="btn secondary" onclick="settingsLoadSelectedPolicyVersion()">Load Selected Version</button>
+          <button class="btn secondary" onclick="settingsLoadLatestActiveVersion()">Load Latest Active</button>
         </div>
-        <select id="settings-policy-versions" size="6" style="height:auto; min-height:120px;"></select>
+        <select id="settings-policy-versions" size="6" onchange="settingsLoadSelectedPolicyVersion()" style="height:auto; min-height:120px;"></select>
         <div class="grid" style="grid-template-columns: 1fr auto; gap: 8px; margin-top: 10px;">
           <input id="settings-policy-delete-confirm" placeholder="Type DELETE to enable deletion" />
           <button class="btn action-btn" onclick="settingsDeleteSelectedPolicyVersion()" style="color:var(--rose);border-color:var(--rose)">Delete Selected Version</button>
+        </div>
+
+        <hr style="border-color:var(--border);margin:16px 0;" />
+        <h4>Policy Control Tower</h4>
+        <p class="helper">Track resolved source, draft deltas, and activation readiness before mutating governance state.</p>
+        <div class="routine-detail-box">
+          <h5>Context</h5>
+          <div id="settings-policy-context" class="routine-modal-status" style="min-height:82px;">Context pending.</div>
+        </div>
+        <div class="routine-detail-box">
+          <h5>Draft vs Loaded Diff</h5>
+          <div id="settings-policy-diff" class="routine-modal-status" style="min-height:120px;">No differences yet.</div>
+        </div>
+        <div class="routine-detail-box">
+          <h5>Activation Checklist</h5>
+          <div id="settings-policy-checklist" class="routine-modal-status" style="min-height:96px;">Checklist pending.</div>
         </div>
       </div>
 

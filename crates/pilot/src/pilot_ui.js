@@ -4463,6 +4463,7 @@ async function loadRoutinePolicyProfile() {
       version: 0,
       status: 'fallback',
       profile: { ...ROUTINE_DEFAULT_PROFILE },
+      policy_json: { kind: 'operator_routine', version: 1, post_commit_profile: { ...ROUTINE_DEFAULT_PROFILE } },
       diff: []
     };
   }
@@ -4473,6 +4474,7 @@ async function loadRoutinePolicyProfile() {
     version: Number.isFinite(res.version) ? res.version : 0,
     status: String(res.status || 'unknown'),
     profile,
+    policy_json: { ...res.policy_json, post_commit_profile: profile },
     diff: routineProfileDiff(profile)
   };
 }
@@ -5205,8 +5207,302 @@ function routinePolicyModalSetStatus(value) {
   }
 }
 
-function routinePolicyDraftFingerprint(profile) {
-  return JSON.stringify(normalizeRoutineProfile(profile));
+function policyGetDisplayName(policyJson, fallback = '') {
+  if (!policyJson || typeof policyJson !== 'object' || Array.isArray(policyJson)) return String(fallback || '');
+  const direct = String(policyJson.display_name || '').trim();
+  if (direct) return direct;
+  return String(fallback || '');
+}
+
+function policyApplyDisplayName(policyJson, name) {
+  if (!policyJson || typeof policyJson !== 'object' || Array.isArray(policyJson)) return policyJson;
+  const normalized = String(name || '').trim();
+  if (normalized) {
+    policyJson.display_name = normalized;
+  } else if (Object.prototype.hasOwnProperty.call(policyJson, 'display_name')) {
+    delete policyJson.display_name;
+  }
+  return policyJson;
+}
+
+function policyNormalizeForFingerprint(value) {
+  if (Array.isArray(value)) return value.map((item) => policyNormalizeForFingerprint(item));
+  if (value && typeof value === 'object') {
+    const out = {};
+    Object.keys(value).sort().forEach((key) => {
+      out[key] = policyNormalizeForFingerprint(value[key]);
+    });
+    return out;
+  }
+  return value;
+}
+
+function policyFingerprint(value) {
+  try {
+    return JSON.stringify(policyNormalizeForFingerprint(value ?? null));
+  } catch (_) {
+    return '';
+  }
+}
+
+function policySourceClass(source, isOverride = false) {
+  if (isOverride) return 'ago';
+  const normalized = String(source || '').toLowerCase();
+  if (normalized.includes('default')) return 'default';
+  return 'agorg';
+}
+
+function policyDiffLines(base, next, path = '') {
+  const lines = [];
+  const currentPath = path || '(root)';
+  if (Array.isArray(base) || Array.isArray(next)) {
+    const left = Array.isArray(base) ? base : [];
+    const right = Array.isArray(next) ? next : [];
+    if (JSON.stringify(left) !== JSON.stringify(right)) {
+      lines.push(`~ ${currentPath}: [${left.length}] -> [${right.length}]`);
+    }
+    return lines;
+  }
+  const baseObj = (base && typeof base === 'object') ? base : {};
+  const nextObj = (next && typeof next === 'object') ? next : {};
+  const keys = Array.from(new Set([...Object.keys(baseObj), ...Object.keys(nextObj)])).sort();
+  keys.forEach((key) => {
+    const childPath = path ? `${path}.${key}` : key;
+    const hasBase = Object.prototype.hasOwnProperty.call(baseObj, key);
+    const hasNext = Object.prototype.hasOwnProperty.call(nextObj, key);
+    if (!hasBase && hasNext) {
+      lines.push(`+ ${childPath}`);
+      return;
+    }
+    if (hasBase && !hasNext) {
+      lines.push(`- ${childPath}`);
+      return;
+    }
+    const left = baseObj[key];
+    const right = nextObj[key];
+    const bothObjects = left && right
+      && typeof left === 'object'
+      && typeof right === 'object'
+      && !Array.isArray(left)
+      && !Array.isArray(right);
+    if (bothObjects) {
+      lines.push(...policyDiffLines(left, right, childPath));
+      return;
+    }
+    if (JSON.stringify(left) !== JSON.stringify(right)) {
+      lines.push(`~ ${childPath}`);
+    }
+  });
+  return lines;
+}
+
+function policyPathRead(root, path) {
+  let node = root;
+  for (const part of path) {
+    if (node == null) return undefined;
+    node = node[part];
+  }
+  return node;
+}
+
+function policyPathWrite(root, path, value) {
+  if (!path.length) return;
+  let node = root;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const key = path[i];
+    const nextKey = path[i + 1];
+    if (typeof node[key] !== 'object' || node[key] === null) {
+      node[key] = Number.isInteger(nextKey) ? [] : {};
+    }
+    node = node[key];
+  }
+  node[path[path.length - 1]] = value;
+}
+
+function policyParsePath(pathStr) {
+  const out = [];
+  const raw = String(pathStr || '').trim();
+  if (!raw) return out;
+  const parts = raw.split('.');
+  for (const part of parts) {
+    if (!part) continue;
+    const m = part.match(/^(.+)\[(\d+)\]$/);
+    if (m) {
+      out.push(m[1]);
+      out.push(Number.parseInt(m[2], 10));
+    } else {
+      out.push(part);
+    }
+  }
+  return out;
+}
+
+function policyFormInferArrayKind(arr) {
+  if (!Array.isArray(arr)) return 'string';
+  for (const v of arr) {
+    if (typeof v === 'number') return 'number';
+    if (typeof v === 'boolean') return 'boolean';
+    if (typeof v === 'string') return 'string';
+  }
+  return 'string';
+}
+
+function policyFormEncodeArray(arr) {
+  if (!Array.isArray(arr) || !arr.length) return '';
+  return arr.map((v) => String(v)).join(', ');
+}
+
+function policyFormDecodeArray(text, kind) {
+  const parts = String(text || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (kind === 'number') {
+    return parts.map((s) => Number.parseFloat(s)).filter((n) => Number.isFinite(n));
+  }
+  if (kind === 'boolean') {
+    return parts
+      .map((s) => s.toLowerCase())
+      .filter((s) => s === 'true' || s === 'false')
+      .map((s) => s === 'true');
+  }
+  return parts;
+}
+
+function policyEnumOptionsFor(path, label) {
+  const p = String(path || '').toLowerCase();
+  const l = String(label || '').toLowerCase();
+  if (p.endsWith('.level') || l === 'level') return ['off', 'info', 'warn', 'block', 'auto-fix'];
+  if (p.endsWith('.kind') || l === 'kind') {
+    return ['operator_routine', 'branch', 'dependency', 'release', 'security', 'quality', 'runtime'];
+  }
+  if (p.endsWith('.confirmation_type') || p.endsWith('.prune_confirmation_type')) {
+    return ['none', 'standard', 'typed_phrase', 'double_confirm'];
+  }
+  if (p.endsWith('.default_scope')) return ['local', 'dryrun', 'full'];
+  return null;
+}
+
+function policyRenderFormNode(value, path, label, depth = 0) {
+  const pathAttr = routineEscapeHtml(path);
+  const rawPath = String(path || '');
+  const safeLabel = routineEscapeHtml(label || '(root)');
+  if (Array.isArray(value)) {
+    const simple = value.every((v) => ['string', 'number', 'boolean'].includes(typeof v));
+    if (simple) {
+      const kind = policyFormInferArrayKind(value);
+      return `
+        <div class="routine-control" style="margin-left:${depth * 10}px;">
+          <label>${safeLabel}</label>
+          <input type="text" data-policy-form-path="${pathAttr}" data-policy-form-kind="array" data-policy-array-kind="${kind}" value="${routineEscapeHtml(policyFormEncodeArray(value))}" />
+          <div class="helper">Comma-separated ${kind} values</div>
+        </div>
+      `;
+    }
+    return `
+      <div class="routine-control" style="margin-left:${depth * 10}px;">
+        <label>${safeLabel}</label>
+        <textarea data-policy-form-path="${pathAttr}" data-policy-form-kind="json" style="min-height:90px;">${routineEscapeHtml(JSON.stringify(value, null, 2))}</textarea>
+      </div>
+    `;
+  }
+  if (value && typeof value === 'object') {
+    const rows = Object.keys(value).map((key) => {
+      const childPath = path ? `${path}.${key}` : key;
+      return policyRenderFormNode(value[key], childPath, key, depth + 1);
+    }).join('');
+    return `
+      <div class="routine-detail-box" style="margin-left:${depth * 10}px;">
+        <h5>${safeLabel}</h5>
+        ${rows || '<div class="helper">Empty object</div>'}
+      </div>
+    `;
+  }
+  if (typeof value === 'boolean') {
+    return `
+      <div class="routine-control" style="margin-left:${depth * 10}px;display:flex;align-items:center;justify-content:flex-start;gap:10px;">
+        <label style="display:flex;align-items:center;gap:8px;margin:0;">
+          <input style="width:auto;margin:0;" type="checkbox" data-policy-form-path="${pathAttr}" data-policy-form-kind="boolean" ${value ? 'checked' : ''} />
+          <span style="font-size:0.72rem;letter-spacing:0.14em;color:var(--dim);text-transform:uppercase;">${safeLabel}</span>
+          <span class="helper" style="margin:0;">${value ? 'TRUE' : 'FALSE'}</span>
+        </label>
+      </div>
+    `;
+  }
+  if (typeof value === 'number') {
+    return `
+      <div class="routine-control" style="margin-left:${depth * 10}px;">
+        <label>${safeLabel}</label>
+        <input type="number" step="any" data-policy-form-path="${pathAttr}" data-policy-form-kind="number" value="${value}" />
+      </div>
+    `;
+  }
+  if (typeof value === 'string') {
+    const enumOptions = policyEnumOptionsFor(rawPath, label);
+    if (Array.isArray(enumOptions) && enumOptions.length) {
+      const selected = String(value || '').toLowerCase();
+      const options = enumOptions.map((opt) => `<option value="${opt}"${selected === opt ? ' selected' : ''}>${opt}</option>`).join('');
+      return `
+      <div class="routine-control" style="margin-left:${depth * 10}px;">
+        <label>${safeLabel}</label>
+        <select data-policy-form-path="${pathAttr}" data-policy-form-kind="string">
+          ${options}
+        </select>
+      </div>
+    `;
+    }
+  }
+  return `
+    <div class="routine-control" style="margin-left:${depth * 10}px;">
+      <label>${safeLabel}</label>
+      <input type="text" data-policy-form-path="${pathAttr}" data-policy-form-kind="string" value="${routineEscapeHtml(String(value ?? ''))}" />
+    </div>
+  `;
+}
+
+function policyRenderFormInto(containerEl, policyJson) {
+  if (!containerEl) return;
+  if (!policyJson || typeof policyJson !== 'object' || Array.isArray(policyJson)) {
+    containerEl.innerHTML = '<div class="helper">Valid policy JSON object required to render form.</div>';
+    return;
+  }
+  const html = Object.keys(policyJson).map((key) => policyRenderFormNode(policyJson[key], key, key, 0)).join('');
+  containerEl.innerHTML = html || '<div class="helper">Policy object is empty.</div>';
+}
+
+function policySyncFormChangeToEditor(event, editorEl, nameEl, statusSetter) {
+  const target = event?.target;
+  if (!target || !target.dataset || !target.dataset.policyFormPath || !editorEl) return;
+  let policyJson;
+  try {
+    policyJson = JSON.parse(editorEl.value || '{}');
+  } catch (err) {
+    if (statusSetter) statusSetter(`Invalid JSON in editor: ${err.message}`);
+    return;
+  }
+  const path = policyParsePath(target.dataset.policyFormPath || '');
+  const kind = String(target.dataset.policyFormKind || 'string');
+  let nextValue = '';
+  if (kind === 'boolean') {
+    nextValue = !!target.checked;
+  } else if (kind === 'number') {
+    const n = Number.parseFloat(String(target.value || ''));
+    nextValue = Number.isFinite(n) ? n : 0;
+  } else if (kind === 'array') {
+    nextValue = policyFormDecodeArray(target.value, target.dataset.policyArrayKind || 'string');
+  } else if (kind === 'json') {
+    try {
+      nextValue = JSON.parse(String(target.value || '[]'));
+    } catch (err) {
+      if (statusSetter) statusSetter(`Invalid JSON value for ${target.dataset.policyFormPath}: ${err.message}`);
+      return;
+    }
+  } else {
+    nextValue = String(target.value || '');
+  }
+  policyPathWrite(policyJson, path, nextValue);
+  policyApplyDisplayName(policyJson, nameEl ? nameEl.value : '');
+  editorEl.value = JSON.stringify(policyJson, null, 2);
 }
 
 function routinePolicyDraftValidate(policyJson) {
@@ -5258,6 +5554,109 @@ function routinePolicyDraftStatusSummary(validation, loaded) {
   return lines.join('\n');
 }
 
+function policyChecklistHtml(items) {
+  const rows = (items || []).map((item) => {
+    const ok = !!item.ok;
+    return `<li style="color:${ok ? '#10B981' : '#F87171'};">${ok ? 'PASS' : 'FAIL'}: ${routineEscapeHtml(item.label || '')}</li>`;
+  }).join('');
+  return `<ul style="margin:0; padding-left:18px;">${rows || '<li style="color:var(--muted);">No checks.</li>'}</ul>`;
+}
+
+function policyDiffHtml(lines, emptyLabel) {
+  if (!Array.isArray(lines) || !lines.length) {
+    return `<div class="helper">${routineEscapeHtml(emptyLabel || 'No differences detected.')}</div>`;
+  }
+  const capped = lines.slice(0, 60);
+  const more = lines.length > capped.length ? `<div class="helper" style="margin-top:6px;">+${lines.length - capped.length} more</div>` : '';
+  return `<pre style="margin:0; max-height:160px; overflow:auto; font-size:0.72rem;">${routineEscapeHtml(capped.join('\n'))}</pre>${more}`;
+}
+
+function routinePolicyModalRefreshInsights(policyJson = null, loaded = null) {
+  const sourceEl = document.getElementById('dash-routine-policy-source');
+  const diffEl = document.getElementById('dash-routine-policy-diff');
+  const checklistEl = document.getElementById('dash-routine-policy-checklist');
+  const parsed = policyJson || (() => {
+    try {
+      return JSON.parse(document.getElementById('dash-routine-policy-editor')?.value || '{}');
+    } catch (_) {
+      return null;
+    }
+  })();
+  const activeLoaded = loaded || dashRoutineWorkspaceState.loaded || null;
+  if (sourceEl) {
+    const source = activeLoaded?.source || 'Unknown';
+    const status = activeLoaded?.status || 'unknown';
+    const version = activeLoaded?.version ?? 0;
+    const scope = dashRoutineWorkspaceState.scope?.id || dashRoutineWorkspaceState.active?.id || 'unknown';
+    const sourceClass = policySourceClass(source, source.toLowerCase().includes('override'));
+    sourceEl.innerHTML = `
+      <div class="inheritance-trace">
+        Source: <span class="source-pill ${sourceClass}">${routineEscapeHtml(source)}</span>
+        <div style="font-size:0.7rem; margin-top:4px;">Version: ${routineEscapeHtml(String(version))} | Status: ${routineEscapeHtml(String(status))}</div>
+        <div style="font-size:0.7rem; margin-top:4px;">Scope: ${routineEscapeHtml(String(scope))} | Kind: operator_routine</div>
+      </div>
+    `;
+  }
+  const validation = parsed ? routinePolicyDraftValidate(parsed) : { ok: false, errors: ['Invalid JSON draft.'] };
+  const normalized = validation.ok ? validation.normalizedPolicy : null;
+  const baseline = activeLoaded?.policy_json || {};
+  const lines = normalized ? policyDiffLines(baseline, normalized) : [];
+  if (diffEl) diffEl.innerHTML = policyDiffHtml(lines, 'Draft matches loaded policy.');
+  if (checklistEl) {
+    const draftFingerprint = normalized ? policyFingerprint(normalized) : '';
+    const checklist = [
+      { label: 'Draft JSON is valid for operator_routine', ok: !!validation.ok },
+      { label: 'Simulation evidence is present', ok: !!dashRoutinePolicySimulationId },
+      { label: 'Draft unchanged since last simulation', ok: !!dashRoutinePolicySimulationId && !!dashRoutinePolicySimulationFingerprint && draftFingerprint === dashRoutinePolicySimulationFingerprint },
+      { label: 'Draft differs from loaded policy', ok: lines.length > 0 }
+    ];
+    checklistEl.innerHTML = policyChecklistHtml(checklist);
+  }
+}
+
+function settingsPolicyRefreshInsights(policyJson = null) {
+  const contextEl = document.getElementById('settings-policy-context');
+  const diffEl = document.getElementById('settings-policy-diff');
+  const checklistEl = document.getElementById('settings-policy-checklist');
+  const kind = document.getElementById('settings-policy-kind')?.value || 'branch';
+  const target = settingsTargetValue();
+  const parsed = policyJson || (() => {
+    try {
+      return JSON.parse(settingsPolicyEditorEl()?.value || '{}');
+    } catch (_) {
+      return null;
+    }
+  })();
+  const meta = settingsLoadedPolicyMeta || {};
+  if (contextEl) {
+    const source = meta.source || 'Unknown';
+    const version = meta.version ?? '?';
+    const status = meta.status || 'unknown';
+    const sourceClass = policySourceClass(source, !!meta.is_override);
+    contextEl.innerHTML = `
+      <div class="inheritance-trace">
+        Source: <span class="source-pill ${sourceClass}">${routineEscapeHtml(source)}</span>
+        ${meta.is_override ? '<span class="override-tag">AGO Override</span>' : ''}
+        <div style="font-size:0.7rem; margin-top:4px;">Version: ${routineEscapeHtml(String(version))} | Status: ${routineEscapeHtml(String(status))}</div>
+        <div style="font-size:0.7rem; margin-top:4px;">Kind: ${routineEscapeHtml(kind)} | Target: ${routineEscapeHtml(target || 'AGOrg')}</div>
+      </div>
+    `;
+  }
+  const baseline = settingsLoadedPolicyJson || {};
+  const lines = parsed ? policyDiffLines(baseline, parsed) : [];
+  if (diffEl) diffEl.innerHTML = policyDiffHtml(lines, 'Draft matches loaded policy.');
+  if (checklistEl) {
+    const fp = parsed ? policyFingerprint(parsed) : '';
+    const checklist = [
+      { label: 'Draft JSON parses successfully', ok: !!parsed },
+      { label: 'Simulation evidence is present', ok: !!settingsActiveSimulationId },
+      { label: 'Draft unchanged since last simulation', ok: !!settingsActiveSimulationId && !!settingsLastSimulatedFingerprint && fp === settingsLastSimulatedFingerprint },
+      { label: 'Draft differs from loaded policy', ok: lines.length > 0 }
+    ];
+    checklistEl.innerHTML = policyChecklistHtml(checklist);
+  }
+}
+
 function routinePolicyModalOpen() {
   if (!dashRoutinePolicyModal) return;
   dashRoutinePolicyModal.classList.add('active');
@@ -5271,20 +5670,122 @@ function routinePolicyModalClose() {
   dashRoutinePolicyModal.setAttribute('aria-hidden', 'true');
 }
 
+function routinePolicyModalViewRaw(showRaw) {
+  const editor = document.getElementById('dash-routine-policy-editor');
+  const form = document.getElementById('dash-routine-policy-form');
+  if (editor) editor.style.display = showRaw ? 'block' : 'none';
+  if (form) form.style.display = showRaw ? 'none' : 'block';
+}
+
+function routinePolicyModalSyncNameToEditor() {
+  const editor = document.getElementById('dash-routine-policy-editor');
+  const nameEl = document.getElementById('dash-routine-policy-name');
+  if (!editor || !nameEl) return;
+  try {
+    const parsed = JSON.parse(editor.value || '{}');
+    policyApplyDisplayName(parsed, nameEl.value);
+    editor.value = JSON.stringify(parsed, null, 2);
+  } catch (_) {}
+}
+
+function routinePolicyModalRenderForm() {
+  const editor = document.getElementById('dash-routine-policy-editor');
+  const form = document.getElementById('dash-routine-policy-form');
+  const nameEl = document.getElementById('dash-routine-policy-name');
+  if (!editor || !form) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(editor.value || '{}');
+  } catch (err) {
+    routinePolicyModalSetStatus(`Invalid JSON: ${err.message}`);
+    return;
+  }
+  if (nameEl) nameEl.value = policyGetDisplayName(parsed, 'Operator Routine');
+  policyRenderFormInto(form, parsed);
+  routinePolicyModalRefreshInsights(parsed);
+}
+
+function routinePolicyModalOnFormInput(event) {
+  policySyncFormChangeToEditor(
+    event,
+    document.getElementById('dash-routine-policy-editor'),
+    document.getElementById('dash-routine-policy-name'),
+    routinePolicyModalSetStatus
+  );
+  routinePolicyModalRenderForm();
+}
+
 async function routinePolicyModalLoad() {
   const loaded = await loadRoutinePolicyProfile();
-  if (dashRoutinePolicyEditor) {
-    dashRoutinePolicyEditor.value = JSON.stringify({
-      post_commit_profile: loaded.profile
-    }, null, 2);
+  const editor = document.getElementById('dash-routine-policy-editor');
+  const nameEl = document.getElementById('dash-routine-policy-name');
+  const form = document.getElementById('dash-routine-policy-form');
+  if (editor) editor.value = JSON.stringify(loaded.policy_json || { post_commit_profile: loaded.profile }, null, 2);
+  if (nameEl) nameEl.value = policyGetDisplayName(loaded.policy_json || {}, 'Operator Routine');
+  if (form && !form.dataset.bound) {
+    form.addEventListener('input', routinePolicyModalOnFormInput);
+    form.addEventListener('change', routinePolicyModalOnFormInput);
+    form.dataset.bound = '1';
   }
+  if (editor && !editor.dataset.boundPolicy) {
+    editor.addEventListener('input', () => routinePolicyModalRefreshInsights());
+    editor.dataset.boundPolicy = '1';
+  }
+  routinePolicyModalRenderForm();
+  routinePolicyModalViewRaw(false);
   dashRoutinePolicySimulationId = '';
   dashRoutinePolicySimulationFingerprint = '';
+  routinePolicyModalRefreshInsights(loaded.policy_json || null, loaded);
   routinePolicyModalSetStatus(`Loaded operator_routine policy (${loaded.source} v${loaded.version} [${loaded.status}])`);
+}
+
+async function routinePolicyModalLoadLatestActive() {
+  const versionsRes = await fetchJsonSafe('/api/settings/policy/operator_routine/versions?limit=50');
+  if (isErrorResponse(versionsRes)) {
+    routinePolicyModalSetStatus(`Failed to list versions:\n${JSON.stringify(versionsRes, null, 2)}`);
+    return;
+  }
+  const activeItem = (Array.isArray(versionsRes.items) ? versionsRes.items : []).find((item) => {
+    return String(item.status || '').toLowerCase() === 'active';
+  });
+  if (!activeItem || !Number.isFinite(activeItem.version)) {
+    routinePolicyModalSetStatus('No active operator_routine version found.');
+    return;
+  }
+  const res = await fetchJsonSafe('/api/settings/policy/operator_routine/load_version', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ago_path: null, version: activeItem.version })
+  });
+  if (isErrorResponse(res)) {
+    routinePolicyModalSetStatus(`Failed to load active version:\n${JSON.stringify(res, null, 2)}`);
+    return;
+  }
+  const editor = document.getElementById('dash-routine-policy-editor');
+  const nameEl = document.getElementById('dash-routine-policy-name');
+  const loadedPolicy = res.policy_json || {};
+  if (editor) editor.value = JSON.stringify(loadedPolicy, null, 2);
+  if (nameEl) nameEl.value = policyGetDisplayName(res.policy_json || {}, 'Operator Routine');
+  const loadedProfile = normalizeRoutineProfile((loadedPolicy.post_commit_profile || {}));
+  dashRoutineWorkspaceState.loaded = {
+    ok: true,
+    source: String(res.source || 'AGOrg'),
+    version: Number.isFinite(res.version) ? res.version : Number(activeItem.version || 0),
+    status: String(res.status || 'active'),
+    profile: loadedProfile,
+    policy_json: { ...loadedPolicy, post_commit_profile: loadedProfile },
+    diff: routineProfileDiff(loadedProfile)
+  };
+  dashRoutinePolicySimulationId = '';
+  dashRoutinePolicySimulationFingerprint = '';
+  routinePolicyModalRenderForm();
+  routinePolicyModalViewRaw(false);
+  routinePolicyModalSetStatus(`Loaded latest active operator_routine v${activeItem.version}.`);
 }
 
 async function routinePolicyModalSimulate() {
   if (!dashRoutinePolicyEditor) return;
+  routinePolicyModalSyncNameToEditor();
   let policyJson;
   try {
     policyJson = JSON.parse(dashRoutinePolicyEditor.value);
@@ -5306,10 +5807,12 @@ async function routinePolicyModalSimulate() {
   });
   if (isErrorResponse(res)) {
     routinePolicyModalSetStatus(`${draftSummary}\n\nSimulation failed:\n${JSON.stringify(res, null, 2)}`);
+    routinePolicyModalRefreshInsights(validation.normalizedPolicy, loaded);
     return;
   }
   dashRoutinePolicySimulationId = res.evidence_id || '';
-  dashRoutinePolicySimulationFingerprint = routinePolicyDraftFingerprint(validation.profile);
+  dashRoutinePolicySimulationFingerprint = policyFingerprint(validation.normalizedPolicy);
+  routinePolicyModalRefreshInsights(validation.normalizedPolicy, loaded);
   routinePolicyModalSetStatus(`${draftSummary}\n\nSimulation evidence: ${dashRoutinePolicySimulationId || 'missing'}`);
 }
 
@@ -5319,6 +5822,7 @@ async function routinePolicyModalActivate() {
     return;
   }
   if (!dashRoutinePolicyEditor) return;
+  routinePolicyModalSyncNameToEditor();
   let policyJson;
   try {
     policyJson = JSON.parse(dashRoutinePolicyEditor.value);
@@ -5332,11 +5836,12 @@ async function routinePolicyModalActivate() {
     routinePolicyModalSetStatus(routinePolicyDraftStatusSummary(validation, loaded));
     return;
   }
-  const currentFingerprint = routinePolicyDraftFingerprint(validation.profile);
-  if (!dashRoutinePolicySimulationFingerprint || currentFingerprint !== dashRoutinePolicySimulationFingerprint) {
+  const currentPolicyFingerprint = policyFingerprint(validation.normalizedPolicy);
+  if (!dashRoutinePolicySimulationFingerprint || currentPolicyFingerprint !== dashRoutinePolicySimulationFingerprint) {
     routinePolicyModalSetStatus(
       `${routinePolicyDraftStatusSummary(validation, loaded)}\n\nDraft changed since last simulation. Re-run Simulate before Activate.`
     );
+    routinePolicyModalRefreshInsights(validation.normalizedPolicy, loaded);
     return;
   }
   const res = await fetchJsonSafe('/api/settings/policy/operator_routine/activate', {
@@ -5346,10 +5851,12 @@ async function routinePolicyModalActivate() {
   });
   if (isErrorResponse(res)) {
     routinePolicyModalSetStatus(res);
+    routinePolicyModalRefreshInsights(validation.normalizedPolicy, loaded);
     return;
   }
   dashRoutinePolicySimulationId = '';
   dashRoutinePolicySimulationFingerprint = '';
+  routinePolicyModalRefreshInsights(validation.normalizedPolicy, loaded);
   routinePolicyModalSetStatus(`Activation succeeded:\n${JSON.stringify(res, null, 2)}`);
   await dashLoadRoutine();
 }
@@ -5539,6 +6046,29 @@ async function dashLoadRoutine() {
     if (btn) {
       btn.disabled = false;
       btn.textContent = 'Load Routine';
+    }
+  }
+}
+
+async function dashRefreshRoutinePolicy() {
+  const btn = document.querySelector('button[onclick="dashRefreshRoutinePolicy()"]');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Refreshing...';
+  }
+  try {
+    const loaded = await loadRoutinePolicyProfile();
+    routineApplyPolicyProfile(loaded);
+    const view = document.getElementById('dash-routine-policy-view');
+    const detail = document.getElementById('dash-routine-policy-detail');
+    if (detail && view && view.style.display !== 'none') {
+      detail.textContent = JSON.stringify(loaded.profile, null, 2);
+    }
+    routineAnnounceStatus('Operator routine policy refreshed (' + loaded.source + ' v ' + loaded.version + ' [' + loaded.status + ']).');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Refresh Policy';
     }
   }
 }
@@ -7990,6 +8520,9 @@ async function bootUi() {
  * ========================================================================== */
 
 let settingsActiveSimulationId = "";
+let settingsLastSimulatedFingerprint = "";
+let settingsLoadedPolicyJson = null;
+let settingsLoadedPolicyMeta = null;
 
 function settingsSetStatus(data, level = 'info') {
   if (!settingsStatusOut) return;
@@ -8098,6 +8631,68 @@ function settingsTargetValue() {
   return el ? (el.value || '').trim() : '';
 }
 
+function settingsPolicyEditorEl() {
+  return document.getElementById('settings-policy-editor');
+}
+
+function settingsPolicyNameEl() {
+  return document.getElementById('settings-policy-name');
+}
+
+function settingsPolicyFormEl() {
+  return document.getElementById('settings-policy-form');
+}
+
+function settingsPolicyViewRaw(showRaw) {
+  const editor = settingsPolicyEditorEl();
+  const form = settingsPolicyFormEl();
+  if (editor) editor.style.display = showRaw ? 'block' : 'none';
+  if (form) form.style.display = showRaw ? 'none' : 'block';
+}
+
+function settingsPolicySyncNameToEditor() {
+  const editor = settingsPolicyEditorEl();
+  const nameEl = settingsPolicyNameEl();
+  if (!editor || !nameEl) return;
+  try {
+    const parsed = JSON.parse(editor.value || '{}');
+    policyApplyDisplayName(parsed, nameEl.value);
+    editor.value = JSON.stringify(parsed, null, 2);
+  } catch (_) {}
+}
+
+function settingsPolicyRenderForm() {
+  const editor = settingsPolicyEditorEl();
+  const nameEl = settingsPolicyNameEl();
+  const form = settingsPolicyFormEl();
+  if (!editor || !form) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(editor.value || '{}');
+  } catch (err) {
+    settingsShowError(`Invalid JSON: ${err.message}`);
+    return;
+  }
+  if (nameEl) nameEl.value = policyGetDisplayName(parsed, 'Policy');
+  policyRenderFormInto(form, parsed);
+  settingsPolicyRefreshInsights(parsed);
+}
+
+function settingsPolicyOnFormInput(event) {
+  policySyncFormChangeToEditor(
+    event,
+    settingsPolicyEditorEl(),
+    settingsPolicyNameEl(),
+    (msg) => settingsSetStatus(msg, 'warn')
+  );
+  settingsPolicyRenderForm();
+}
+
+function settingsPolicyApplyName() {
+  settingsPolicySyncNameToEditor();
+  settingsPolicyRenderForm();
+}
+
 async function settingsRefreshTargetOptions() {
   const targetEl = document.getElementById('settings-policy-target');
   if (!targetEl) return;
@@ -8179,6 +8774,7 @@ async function settingsLoadPolicyVersions() {
   items.forEach(item => {
     const opt = document.createElement('option');
     opt.value = String(item.version);
+    opt.dataset.status = String(item.status || '');
     const updatedBy = item.updated_by || 'unknown';
     const status = item.status || 'unknown';
     opt.textContent = `v${item.version} [${status}] by ${updatedBy}`;
@@ -8216,7 +8812,31 @@ async function settingsLoadSelectedPolicyVersion() {
     return;
   }
   const editor = document.getElementById('settings-policy-editor');
-  editor.value = JSON.stringify(res.policy_json || {}, null, 2);
+  const loadedJson = res.policy_json || {};
+  editor.value = JSON.stringify(loadedJson, null, 2);
+  settingsLoadedPolicyJson = JSON.parse(JSON.stringify(loadedJson));
+  settingsLoadedPolicyMeta = {
+    source: res.source || 'Unknown',
+    version: res.version ?? '?',
+    status: res.status || 'unknown',
+    is_override: !!res.is_override
+  };
+  settingsActiveSimulationId = "";
+  settingsLastSimulatedFingerprint = "";
+  const nameEl = settingsPolicyNameEl();
+  if (nameEl) nameEl.value = policyGetDisplayName(res.policy_json || {}, `${kind} policy`);
+  const form = settingsPolicyFormEl();
+  if (form && !form.dataset.bound) {
+    form.addEventListener('input', settingsPolicyOnFormInput);
+    form.addEventListener('change', settingsPolicyOnFormInput);
+    form.dataset.bound = '1';
+  }
+  if (editor && !editor.dataset.boundPolicy) {
+    editor.addEventListener('input', () => settingsPolicyRefreshInsights());
+    editor.dataset.boundPolicy = '1';
+  }
+  settingsPolicyRenderForm();
+  settingsPolicyViewRaw(false);
   settingsSetStatus(`Loaded ${kind} v${resolvedVersion} into editor`, 'success');
 }
 
@@ -8260,7 +8880,18 @@ async function settingsLoadPolicy() {
   const res = await fetchJsonSafe(url);
   if (isErrorResponse(res)) {
     if (res.error === "Policy not found") {
-       editor.value = "{\n  // No policy specific to this scope. Will fallback/inherit.\n}";
+       const fallbackJson = { note: "No policy specific to this scope. Draft here to create one." };
+       editor.value = JSON.stringify(fallbackJson, null, 2);
+       settingsLoadedPolicyJson = {};
+       settingsLoadedPolicyMeta = {
+         source: 'Fallback/Inherited',
+         version: 0,
+         status: 'missing',
+         is_override: false
+       };
+       settingsActiveSimulationId = "";
+       settingsLastSimulatedFingerprint = "";
+       settingsPolicyRefreshInsights(fallbackJson);
        settingsSetStatus("No policy found for this target. Editor is in fallback/inherit mode.", 'warn');
     } else {
        settingsShowError('Error loading policy: ' + (res.error || 'unknown error'), res);
@@ -8272,12 +8903,35 @@ async function settingsLoadPolicy() {
     return;
   }
   editor.value = JSON.stringify(res.policy_json, null, 2);
+  settingsLoadedPolicyJson = JSON.parse(JSON.stringify(res.policy_json || {}));
+  settingsLoadedPolicyMeta = {
+    source: res.source || 'Unknown',
+    version: Object.prototype.hasOwnProperty.call(res, 'version') ? res.version : '?',
+    status: res.status || 'unknown',
+    is_override: !!res.is_override
+  };
+  settingsActiveSimulationId = "";
+  settingsLastSimulatedFingerprint = "";
+  const nameEl = settingsPolicyNameEl();
+  if (nameEl) nameEl.value = policyGetDisplayName(res.policy_json || {}, `${kind} policy`);
+  const form = settingsPolicyFormEl();
+  if (form && !form.dataset.bound) {
+    form.addEventListener('input', settingsPolicyOnFormInput);
+    form.addEventListener('change', settingsPolicyOnFormInput);
+    form.dataset.bound = '1';
+  }
+  if (editor && !editor.dataset.boundPolicy) {
+    editor.addEventListener('input', () => settingsPolicyRefreshInsights());
+    editor.dataset.boundPolicy = '1';
+  }
+  settingsPolicyRenderForm();
+  settingsPolicyViewRaw(false);
   const source = res.source || 'Unknown';
   const version = Object.prototype.hasOwnProperty.call(res, 'version') ? res.version : '?';
   const status = res.status || 'unknown';
   settingsSetStatus(`Loaded ${kind} policy (${source}) v${version} [${status}]`, 'success');
   logActivity('Loaded Policy', `Kind: ${kind}\nID: ${res.id}\nStatus: ${res.status}`);
-  settingsActiveSimulationId = "";
+  settingsPolicyRefreshInsights(res.policy_json || {});
 }
 
 async function settingsDraftPolicy() {
@@ -8285,6 +8939,7 @@ async function settingsDraftPolicy() {
   const target = settingsTargetValue() || "";
   const editor = document.getElementById('settings-policy-editor');
   
+  settingsPolicySyncNameToEditor();
   let policyJson;
   try {
     policyJson = JSON.parse(editor.value);
@@ -8308,6 +8963,7 @@ async function settingsDraftPolicy() {
   }
   settingsSetStatus(res, 'success');
   settingsActiveSimulationId = "";
+  settingsLastSimulatedFingerprint = "";
   settingsReloadPolicyControls();
 }
 
@@ -8316,6 +8972,7 @@ async function settingsSimulatePolicy() {
   const target = settingsTargetValue() || "";
   const editor = document.getElementById('settings-policy-editor');
   
+  settingsPolicySyncNameToEditor();
   let policyJson;
   try {
     policyJson = JSON.parse(editor.value);
@@ -8340,7 +8997,9 @@ async function settingsSimulatePolicy() {
   }
   
   settingsActiveSimulationId = res.evidence_id;
+  settingsLastSimulatedFingerprint = policyFingerprint(policyJson);
   settingsSetStatus(res, 'success');
+  settingsPolicyRefreshInsights(policyJson);
   logActivity('Policy Simulation', JSON.stringify(res, null, 2));
 }
 
@@ -8350,6 +9009,19 @@ async function settingsActivatePolicy() {
   
   if (!settingsActiveSimulationId) {
     settingsShowError("Must successfully simulate policy first!");
+    return;
+  }
+  let policyJson;
+  try {
+    policyJson = JSON.parse(settingsPolicyEditorEl()?.value || '{}');
+  } catch(e) {
+    settingsShowError("Invalid JSON in editor");
+    return;
+  }
+  const fingerprint = policyFingerprint(policyJson);
+  if (!settingsLastSimulatedFingerprint || fingerprint !== settingsLastSimulatedFingerprint) {
+    settingsShowError("Draft changed since last simulation. Re-run Simulate before Activate.");
+    settingsPolicyRefreshInsights(policyJson);
     return;
   }
 
@@ -8369,7 +9041,29 @@ async function settingsActivatePolicy() {
   
   settingsSetStatus(res, 'success');
   settingsActiveSimulationId = "";
+  settingsLastSimulatedFingerprint = "";
   settingsReloadPolicyControls();
+}
+
+async function settingsLoadLatestActiveVersion() {
+  const list = document.getElementById('settings-policy-versions');
+  if (!list || !list.options.length) {
+    settingsShowError('No policy versions available.');
+    return;
+  }
+  let selectedIndex = -1;
+  for (let i = 0; i < list.options.length; i += 1) {
+    if ((list.options[i].dataset.status || '').toLowerCase() === 'active') {
+      selectedIndex = i;
+      break;
+    }
+  }
+  if (selectedIndex < 0) {
+    settingsShowError('No active policy version found in list.');
+    return;
+  }
+  list.selectedIndex = selectedIndex;
+  await settingsLoadSelectedPolicyVersion();
 }
 
 async function settingsLoadExceptions() {
